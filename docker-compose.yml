@@ -1,0 +1,53 @@
+services:
+  api:
+    build:
+      context: .
+    container_name: prepyo-api
+    ports:
+      - "8080:8080"
+    environment:
+      APP_ENV: development
+      PORT: 8080
+      ALLOWED_ORIGINS: http://localhost:3000
+      DATABASE_URL: postgres://prepyo:prepyo_pass@postgres:5432/prepyo_db?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      # Development default. Production requires a real value; see backend/.env.example.
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      # Without a key the AI endpoints return 503 rather than inventing scores.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: prepyo-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: prepyo
+      POSTGRES_PASSWORD: prepyo_pass
+      POSTGRES_DB: prepyo_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # The schema is not mounted here: the API applies its own embedded
+    # migrations at startup, so dev and production use the same path.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U prepyo -d prepyo_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: prepyo-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
