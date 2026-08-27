@@ -57,7 +57,7 @@ func run() error {
 	go app.cleanExpiredSessions(ctx)
 
 	server := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              "0.0.0.0:" + cfg.Port,
 		Handler:           app.router(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
