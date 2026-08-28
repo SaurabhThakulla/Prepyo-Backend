@@ -449,7 +449,13 @@ type Evaluation struct {
 	Weaknesses        []string              `json:"weaknesses"`
 	SentenceFeedback  []SentenceFeedback    `json:"sentenceFeedback"`
 	ModelRewrite      string                `json:"modelRewrite,omitempty"`
-	CreatedAt         time.Time             `json:"createdAt"`
+
+	// Transcript is what the learner was heard to say. Speaking only: it is the
+	// evidence every other field here rests on, so it is stored and shown with
+	// them rather than thrown away after scoring.
+	Transcript string `json:"transcript,omitempty"`
+
+	CreatedAt time.Time `json:"createdAt"`
 
 	// Usage is recorded for cost tracking and shown only to admins.
 	Usage EvaluationUsage `json:"usage,omitempty"`

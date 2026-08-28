@@ -29,7 +29,23 @@ var (
 	// ErrBadOutput means the model replied with something that failed
 	// validation. The caller must not persist anything.
 	ErrBadOutput = errors.New("ai response failed validation")
+
+	// errPermanent marks a rejection a retry cannot fix: a bad key, no credit,
+	// a model this account cannot reach. Retrying those makes the learner wait
+	// twice as long for the same failure, and on a billed call it pays twice.
+	errPermanent = errors.New("provider rejected the request")
 )
+
+// retryable reports whether another attempt could plausibly succeed. Anything
+// the provider refuses outright is a configuration problem, not a blip.
+func retryable(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+		return true
+	default:
+		return status >= 500
+	}
+}
 
 const (
 	openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
@@ -79,9 +95,26 @@ type chatRequest struct {
 	MaxTokens      int           `json:"max_tokens,omitempty"`
 }
 
+// chatMessage is one turn sent upstream. Content is `any` because a turn is
+// either plain text or a list of parts (text alongside a recording); it is
+// never read back off a response, which is always text — see chatResponse.
 type chatMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
+}
+
+// contentPart is one element of a multimodal turn.
+type contentPart struct {
+	Type  string      `json:"type"`
+	Text  string      `json:"text,omitempty"`
+	Audio *audioInput `json:"input_audio,omitempty"`
+}
+
+// audioInput carries a recording inline. OpenRouter accepts base64 audio in
+// "wav" or "mp3" only, so callers convert before they get here.
+type audioInput struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
 }
 
 type responseFmt struct {
@@ -90,8 +123,10 @@ type responseFmt struct {
 
 type chatResponse struct {
 	Choices []struct {
-		Message      chatMessage `json:"message"`
-		FinishReason string      `json:"finish_reason"`
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -139,6 +174,9 @@ func (g *Gateway) complete(ctx context.Context, model, promptVersion string, mes
 		if ctx.Err() != nil {
 			return "", Usage{}, ErrUnavailable
 		}
+		if errors.Is(err, errPermanent) {
+			break
+		}
 		if attempt < maxAttempts {
 			g.log.Warn("ai request failed, retrying", "model", model, "attempt", attempt, "error", err)
 			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
@@ -168,13 +206,27 @@ func (g *Gateway) send(ctx context.Context, body []byte, model, promptVersion st
 	if err != nil {
 		return "", Usage{}, err
 	}
+	var parsed chatResponse
+	// Decoding before the status check on purpose: a rejection carries the only
+	// explanation there is — an exhausted balance, a model that cannot take
+	// audio — and a bare status number sends whoever reads the log guessing.
+	// It goes no further than the log; the learner still gets the generic line.
+	decodeErr := json.Unmarshal(raw, &parsed)
+
 	if res.StatusCode != http.StatusOK {
-		return "", Usage{}, fmt.Errorf("provider returned %d", res.StatusCode)
+		detail := "no detail"
+		if decodeErr == nil && parsed.Error != nil && parsed.Error.Message != "" {
+			detail = parsed.Error.Message
+		}
+		err := fmt.Errorf("provider returned %d: %s", res.StatusCode, detail)
+		if !retryable(res.StatusCode) {
+			return "", Usage{}, fmt.Errorf("%w: %w", errPermanent, err)
+		}
+		return "", Usage{}, err
 	}
 
-	var parsed chatResponse
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return "", Usage{}, fmt.Errorf("decode provider response: %w", err)
+	if decodeErr != nil {
+		return "", Usage{}, fmt.Errorf("decode provider response: %w", decodeErr)
 	}
 	if parsed.Error != nil {
 		return "", Usage{}, fmt.Errorf("provider error: %s", parsed.Error.Message)

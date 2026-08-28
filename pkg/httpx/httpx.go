@@ -30,9 +30,15 @@ const (
 	CodeTooManyRequest = "too_many_requests"
 )
 
-// maxBodyBytes caps request bodies. Speaking uploads go to object storage
-// through their own path, so no JSON body needs to be larger than this.
+// maxBodyBytes caps request bodies. Everything an ordinary endpoint accepts is
+// text a person typed, which never comes near this.
 const maxBodyBytes = 1 << 20 // 1 MiB
+
+// MaxAudioBodyBytes is the cap for the one kind of body that is not typed text:
+// a base64 recording. Two minutes of 16 kHz mono PCM is about 3.8 MB, and
+// base64 adds a third, so this leaves room for the longest task plus the JSON
+// around it without letting an upload run away.
+const MaxAudioBodyBytes = 12 << 20 // 12 MiB
 
 type errorBody struct {
 	Code    string            `json:"code"`
@@ -99,7 +105,13 @@ func RateLimited(w http.ResponseWriter, r *http.Request) {
 // into a way to enumerate the request schema, so they go to the log instead,
 // where a developer can read them and a stranger cannot.
 func Decode(w http.ResponseWriter, r *http.Request, dst any, log *slog.Logger, op string) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return DecodeLimit(w, r, dst, log, op, maxBodyBytes)
+}
+
+// DecodeLimit is Decode with the body cap named at the call site, for the
+// endpoints that carry a recording rather than typed text.
+func DecodeLimit(w http.ResponseWriter, r *http.Request, dst any, log *slog.Logger, op string, maxBytes int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()

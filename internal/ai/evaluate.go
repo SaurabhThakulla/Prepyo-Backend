@@ -131,11 +131,33 @@ func (u *Usage) add(other Usage) {
 	u.LatencyMS += other.LatencyMS
 }
 
-// validateWriting checks the model's reply before any of it is stored.
+func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation, error) {
+	return validateFeedback(p, feedbackSpec{
+		Exam:     req.Exam,
+		Skill:    models.SkillWriting,
+		MinScore: req.MinScore,
+		MaxScore: req.MaxScore,
+		Quotable: req.LearnerText,
+	})
+}
+
+// feedbackSpec is what a reply is judged against. Both skills produce the same
+// evaluation shape, so they share one validator and differ only in this.
+type feedbackSpec struct {
+	Exam     models.ExamType
+	Skill    models.SkillType
+	MinScore float64
+	MaxScore float64
+	// Quotable is the learner's own words — typed for writing, transcribed for
+	// speaking. sentenceFeedback may only quote from it.
+	Quotable string
+}
+
+// validateFeedback checks the model's reply before any of it is stored.
 //
 // Anything out of range is rejected outright rather than clamped: a score the
 // model could not produce correctly is not one to guess at.
-func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation, error) {
+func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation, error) {
 	if strings.TrimSpace(p.Summary) == "" {
 		return models.Evaluation{}, fmt.Errorf("summary is empty")
 	}
@@ -156,8 +178,8 @@ func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation
 	// EvaluateWriting asks for a corrected score instead.
 	score := p.EstimatedScore.Value
 	if score != nil {
-		if *score < req.MinScore || *score > req.MaxScore {
-			return models.Evaluation{}, fmt.Errorf("score %.2f outside %.1f-%.1f for %s", *score, req.MinScore, req.MaxScore, req.Exam)
+		if *score < spec.MinScore || *score > spec.MaxScore {
+			return models.Evaluation{}, fmt.Errorf("score %.2f outside %.1f-%.1f for %s", *score, spec.MinScore, spec.MaxScore, spec.Exam)
 		}
 	}
 
@@ -177,10 +199,10 @@ func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation
 		})
 	}
 
-	// Sentence feedback must quote text the learner actually wrote. Dropping
+	// Sentence feedback must quote text the learner actually produced. Dropping
 	// unmatched entries stops the model from "correcting" invented sentences,
 	// which is confusing and makes the whole report look untrustworthy.
-	haystack := normaliseSpace(req.LearnerText)
+	haystack := normaliseSpace(spec.Quotable)
 	sentences := make([]models.SentenceFeedback, 0, len(p.SentenceFeedback))
 	for _, s := range p.SentenceFeedback {
 		quoted := normaliseSpace(s.Original)
@@ -196,8 +218,8 @@ func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation
 	}
 
 	return models.Evaluation{
-		Exam:              req.Exam,
-		Skill:             models.SkillWriting,
+		Exam:              spec.Exam,
+		Skill:             spec.Skill,
 		EvaluationVersion: EvaluationVersion,
 		EstimatedScore:    score,
 		ScoreConfidence:   confidence,

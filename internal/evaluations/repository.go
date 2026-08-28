@@ -1,4 +1,5 @@
-// Package evaluations turns a learner's writing into stored AI feedback.
+// Package evaluations turns a learner's writing or speaking into stored AI
+// feedback.
 //
 // It sits between the product and internal/ai and owns the three things the
 // gateway should not: checking the learner's plan allowance before spending a
@@ -29,7 +30,7 @@ func NewRepository(db database.DB) *Repository {
 const selectFields = `
 	id, COALESCE(question_id, ''), exam, skill, evaluation_version, estimated_score,
 	score_confidence, summary, criteria, strengths, weaknesses, sentence_feedback,
-	COALESCE(model_rewrite, ''), created_at`
+	COALESCE(model_rewrite, ''), transcript, created_at`
 
 type SaveParams struct {
 	UserID      string
@@ -53,17 +54,17 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 		INSERT INTO ai_evaluations (
 			user_id, question_id, exam, skill, evaluation_version, request_fingerprint,
 			estimated_score, score_confidence, summary, criteria, strengths, weaknesses,
-			sentence_feedback, model_rewrite, provider, model, prompt_version,
+			sentence_feedback, model_rewrite, transcript, provider, model, prompt_version,
 			prompt_tokens, completion_tokens, latency_ms)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		RETURNING `+selectFields,
 		p.UserID, questionID, e.Exam, e.Skill, e.EvaluationVersion, p.Fingerprint,
 		e.EstimatedScore, e.ScoreConfidence, e.Summary, e.Criteria, e.Strengths, e.Weaknesses,
-		e.SentenceFeedback, e.ModelRewrite, p.Usage.Provider, p.Usage.Model, p.Usage.PromptVersion,
+		e.SentenceFeedback, e.ModelRewrite, e.Transcript, p.Usage.Provider, p.Usage.Model, p.Usage.PromptVersion,
 		p.Usage.PromptTokens, p.Usage.CompletionTokens, p.Usage.LatencyMS,
 	).Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion, &e.EstimatedScore,
 		&e.ScoreConfidence, &e.Summary, &e.Criteria, &e.Strengths, &e.Weaknesses,
-		&e.SentenceFeedback, &e.ModelRewrite, &e.CreatedAt)
+		&e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.CreatedAt)
 	if err != nil {
 		return models.Evaluation{}, fmt.Errorf("save evaluation: %w", err)
 	}
@@ -125,6 +126,6 @@ func scan(row pgx.Row) (models.Evaluation, error) {
 	var e models.Evaluation
 	err := row.Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion,
 		&e.EstimatedScore, &e.ScoreConfidence, &e.Summary, &e.Criteria, &e.Strengths,
-		&e.Weaknesses, &e.SentenceFeedback, &e.ModelRewrite, &e.CreatedAt)
+		&e.Weaknesses, &e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.CreatedAt)
 	return e, err
 }

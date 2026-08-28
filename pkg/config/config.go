@@ -69,8 +69,12 @@ func Load() (*Config, error) {
 		RedisURL:         os.Getenv("REDIS_URL"),
 		OpenRouterAPIKey: os.Getenv("OPENROUTER_API_KEY"),
 		AIModels: AIModels{
-			Writing:  stringOr("AI_MODEL_WRITING", "deepseek/deepseek-chat"),
-			Speaking: stringOr("AI_MODEL_SPEAKING", "deepseek/deepseek-chat"),
+			Writing: stringOr("AI_MODEL_WRITING", "deepseek/deepseek-chat"),
+			// Speaking sends a recording, so this one must be a model that
+			// accepts audio input. A text-only model here does not degrade
+			// gracefully: it rejects the request and every speaking submission
+			// comes back as "evaluation unavailable".
+			Speaking: stringOr("AI_MODEL_SPEAKING", "google/gemini-2.5-flash"),
 			Tutoring: stringOr("AI_MODEL_TUTORING", "deepseek/deepseek-chat"),
 		},
 		SecureCookies: boolOr("SECURE_COOKIES", isProd),
