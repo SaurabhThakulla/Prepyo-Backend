@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +33,23 @@ type Config struct {
 	OpenRouterAPIKey string
 	AIModels         AIModels
 	AIRequestTimeout time.Duration
+
+	// Issue reporting. SMTPUser doubles as the From address.
+	SMTPUser      string
+	SMTPPassword  string
+	ReportEmailTo string
+
+	// WebDistDir is the frontend's build output. Set it and this binary serves
+	// the app and the API from one origin; leave it empty and it is API-only,
+	// which is what you want when running against `vite dev`.
+	WebDistDir string
 }
+
+// ReportingEnabled reports whether /report has credentials to send with. When
+// false the endpoint says so outright rather than accepting a report and
+// dropping it: a learner who has typed out a bug deserves to know it went
+// nowhere.
+func (c Config) ReportingEnabled() bool { return c.SMTPUser != "" && c.SMTPPassword != "" }
 
 // AIModels is the routing table the AI gateway uses. Model names are
 // configuration, never constants in the calling code, so a model can be
@@ -78,6 +95,23 @@ func Load() (*Config, error) {
 			Tutoring: stringOr("AI_MODEL_TUTORING", "deepseek/deepseek-chat"),
 		},
 		SecureCookies: boolOr("SECURE_COOKIES", isProd),
+
+		// Not required anywhere, including production: reporting is a
+		// convenience, and a missing app password should not stop the API from
+		// booting and serving lessons.
+		SMTPUser:      os.Getenv("GMAIL_USER"),
+		SMTPPassword:  os.Getenv("GMAIL_APP_PASSWORD"),
+		ReportEmailTo: stringOr("REPORT_EMAIL_TO", "sauravthakulla683@gmail.com"),
+
+		WebDistDir: os.Getenv("WEB_DIST_DIR"),
+	}
+
+	// A path that is set but wrong is worth stopping the boot for: the
+	// alternative is an API that looks healthy while every page request 404s.
+	if cfg.WebDistDir != "" {
+		if _, err := os.Stat(filepath.Join(cfg.WebDistDir, "index.html")); err != nil {
+			problems = append(problems, "WEB_DIST_DIR is set but has no index.html in it: "+cfg.WebDistDir)
+		}
 	}
 
 	// DATABASE_URL is required everywhere: there is no in-memory fallback, by

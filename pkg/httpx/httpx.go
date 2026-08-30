@@ -28,6 +28,12 @@ const (
 	CodeAIUnavailable  = "ai_unavailable"
 	CodeInternal       = "internal_error"
 	CodeTooManyRequest = "too_many_requests"
+	// The two below belong to issue reporting, which is the one feature that
+	// can be switched off by configuration and the one that talks to a mail
+	// server. Both need wording a reporter can act on, so neither collapses
+	// into CodeInternal.
+	CodeNotConfigured = "not_configured"
+	CodeSendFailed    = "send_failed"
 )
 
 // maxBodyBytes caps request bodies. Everything an ordinary endpoint accepts is

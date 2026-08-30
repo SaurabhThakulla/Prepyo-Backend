@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,7 +28,9 @@ import (
 	"github.com/prepyo/backend/internal/progress"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/referrals"
+	"github.com/prepyo/backend/internal/report"
 	"github.com/prepyo/backend/internal/users"
+	"github.com/prepyo/backend/internal/web"
 	"github.com/prepyo/backend/pkg/config"
 	"github.com/prepyo/backend/pkg/httpx"
 )
@@ -56,6 +59,7 @@ type app struct {
 	notificationHandler *notifications.Handler
 	billingHandler      *billing.Handler
 	referralHandler     *referrals.Handler
+	reportHandler       *report.Handler
 	adminHandler        *admin.Handler
 }
 
@@ -103,6 +107,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		notificationHandler: notifications.NewHandler(notificationRepo, log),
 		billingHandler:      billing.NewHandler(pool, planRepo, billingService, log),
 		referralHandler:     referrals.NewHandler(referralService, log),
+		reportHandler:       report.NewHandler(cfg.SMTPUser, cfg.SMTPPassword, cfg.ReportEmailTo, log),
 		adminHandler:        admin.NewHandler(pool, log),
 	}
 }
@@ -155,6 +160,11 @@ func (a *app) router() http.Handler {
 			private.Mount("/leaderboards", a.leaderboardHandler.Routes())
 			private.Mount("/notifications", a.notificationHandler.Routes())
 
+			// Reporting sends mail, so it gets a much tighter limit than
+			// ordinary reads: room for a frustrated learner, not for a spammer.
+			private.With(rateLimit(5, 10*time.Minute)).
+				Mount("/report", a.reportHandler.Routes())
+
 			// AI endpoints cost money per call, so they are limited harder
 			// than ordinary reads. Plan allowances are enforced separately in
 			// the evaluations service.
@@ -171,8 +181,23 @@ func (a *app) router() http.Handler {
 		})
 	})
 
+	// Anything that is not a known route is either a page of the single-page
+	// frontend or a call to an endpoint that does not exist. Only the frontend
+	// handler can tell the difference, and only when it is switched on.
+	var serveWeb http.Handler
+	if a.cfg.WebDistDir != "" {
+		serveWeb = web.Handler(a.cfg.WebDistDir)
+	}
+
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "No such endpoint.")
+		// /api/* always answers in the API's own envelope. A missing endpoint
+		// is a bug in the caller, and handing it an HTML page would turn a
+		// clear 404 into "unexpected token < in JSON".
+		if serveWeb == nil || strings.HasPrefix(r.URL.Path, "/api/") {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "No such endpoint.")
+			return
+		}
+		serveWeb.ServeHTTP(w, r)
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusMethodNotAllowed, httpx.CodeBadRequest, "That method is not allowed here.")
