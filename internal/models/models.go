@@ -62,6 +62,12 @@ type User struct {
 	BonusMockTests       int
 	BonusProDays         int
 	CreatedAt            time.Time
+
+	// Set when a profile image exists. The bytes themselves are not loaded
+	// here: the user row is read on every authenticated request and must stay
+	// cheap. See users.Repository.Image.
+	AvatarUpdatedAt *time.Time
+	CoverUpdatedAt  *time.Time
 }
 
 const RoleAdmin = "admin"
@@ -90,6 +96,12 @@ type UserProfile struct {
 	// Derived.
 	Level         int `json:"level"`
 	XPToNextLevel int `json:"xpToNextLevel"`
+
+	// When a profile image was last set, or absent when there is none. The
+	// client uses it both to decide whether to render an image and to bust its
+	// own cache when one changes.
+	AvatarUpdatedAt *time.Time `json:"avatarUpdatedAt,omitempty"`
+	CoverUpdatedAt  *time.Time `json:"coverUpdatedAt,omitempty"`
 
 	// Filled from other tables by the caller. Nil when not requested, so a
 	// cheap endpoint does not pay for an estimate it will not use.
@@ -121,6 +133,9 @@ func NewUserProfile(u User) UserProfile {
 		CreatedAt:      u.CreatedAt,
 		Level:          level,
 		XPToNextLevel:  level*XPPerLevel - u.XP,
+
+		AvatarUpdatedAt: u.AvatarUpdatedAt,
+		CoverUpdatedAt:  u.CoverUpdatedAt,
 	}
 	if u.ExamDate != nil {
 		profile.ExamDate = u.ExamDate.Format(time.DateOnly)

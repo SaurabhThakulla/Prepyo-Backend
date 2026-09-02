@@ -184,3 +184,144 @@ func statusFor(accuracy float64) string {
 		return "needs_work"
 	}
 }
+
+// ActivityDay is one day of practice, bucketed in the learner's own timezone.
+//
+// Only days with attempts are returned. A year of empty squares is the client's
+// job to draw, not ours to send.
+type ActivityDay struct {
+	Date    string                   `json:"date"` // YYYY-MM-DD
+	Count   int                      `json:"count"`
+	Minutes int                      `json:"minutes"`
+	Skills  map[models.SkillType]int `json:"skills"`
+}
+
+// ActivitySummary backs the practice heatmap and the counters above it.
+type ActivitySummary struct {
+	From          string        `json:"from"`
+	To            string        `json:"to"`
+	Days          []ActivityDay `json:"days"`
+	TotalSessions int           `json:"totalSessions"`
+	TotalMinutes  int           `json:"totalMinutes"`
+	CurrentStreak int           `json:"currentStreak"`
+	LongestStreak int           `json:"longestStreak"`
+}
+
+// maxActivityDays caps the window at roughly two years. The heatmap asks for
+// one; anything past that is someone probing the query.
+const maxActivityDays = 750
+
+// Activity returns per-day practice counts for the last `days` days.
+//
+// Days are bucketed in the learner's timezone, not UTC: a 9pm session in
+// Kathmandu belongs to that evening's square, not to the next morning's.
+func (s *Service) Activity(ctx context.Context, db database.DB, user models.User, days int) (ActivitySummary, error) {
+	if days <= 0 {
+		days = 365
+	}
+	days = min(days, maxActivityDays)
+
+	// An unknown zone must not take the whole page down, and Postgres would
+	// reject it too, so fall back to UTC and carry on.
+	loc, err := time.LoadLocation(user.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+
+	today := time.Now().In(loc)
+	end := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
+	start := end.AddDate(0, 0, -(days - 1))
+
+	// The extra created_at bound is what lets the query use
+	// idx_practice_attempts_user; the date cast alone would not. A day of slack
+	// covers every UTC offset either side of the local midnight.
+	rows, err := db.Query(ctx, `
+		SELECT (a.created_at AT TIME ZONE $2)::date AS day,
+		       q.skill,
+		       count(*),
+		       COALESCE(sum(a.time_spent_seconds), 0)
+		FROM practice_attempts a
+		JOIN questions q ON q.id = a.question_id
+		WHERE a.user_id = $1
+		  AND a.created_at >= $3
+		  AND (a.created_at AT TIME ZONE $2)::date >= $4::date
+		GROUP BY day, q.skill
+		ORDER BY day`,
+		user.ID, user.Timezone, start.AddDate(0, 0, -1), start.Format(time.DateOnly))
+	if err != nil {
+		return ActivitySummary{}, fmt.Errorf("read practice activity: %w", err)
+	}
+	defer rows.Close()
+
+	byDate := map[string]*ActivityDay{}
+	order := []string{}
+	totalSeconds := 0
+
+	for rows.Next() {
+		var day time.Time
+		var skill models.SkillType
+		var count, seconds int
+		if err := rows.Scan(&day, &skill, &count, &seconds); err != nil {
+			return ActivitySummary{}, fmt.Errorf("scan practice activity: %w", err)
+		}
+
+		key := day.Format(time.DateOnly)
+		entry, ok := byDate[key]
+		if !ok {
+			entry = &ActivityDay{Date: key, Skills: map[models.SkillType]int{}}
+			byDate[key] = entry
+			order = append(order, key)
+		}
+		entry.Count += count
+		entry.Skills[skill] += count
+		entry.Minutes += seconds / 60
+		totalSeconds += seconds
+	}
+	if err := rows.Err(); err != nil {
+		return ActivitySummary{}, err
+	}
+
+	summary := ActivitySummary{
+		From:         start.Format(time.DateOnly),
+		To:           end.Format(time.DateOnly),
+		Days:         make([]ActivityDay, 0, len(order)),
+		TotalMinutes: totalSeconds / 60,
+	}
+	for _, key := range order {
+		summary.Days = append(summary.Days, *byDate[key])
+		summary.TotalSessions += byDate[key].Count
+	}
+
+	summary.CurrentStreak = currentStreak(byDate, end)
+	summary.LongestStreak = longestStreak(byDate, start, end)
+	return summary, nil
+}
+
+// currentStreak counts back from today. Today not being practised yet does not
+// break a streak — it is still early — so the walk starts at yesterday then.
+func currentStreak(byDate map[string]*ActivityDay, end time.Time) int {
+	cursor := end
+	if byDate[cursor.Format(time.DateOnly)] == nil {
+		cursor = cursor.AddDate(0, 0, -1)
+	}
+
+	streak := 0
+	for byDate[cursor.Format(time.DateOnly)] != nil {
+		streak++
+		cursor = cursor.AddDate(0, 0, -1)
+	}
+	return streak
+}
+
+func longestStreak(byDate map[string]*ActivityDay, start, end time.Time) int {
+	best, run := 0, 0
+	for cursor := start; !cursor.After(end); cursor = cursor.AddDate(0, 0, 1) {
+		if byDate[cursor.Format(time.DateOnly)] != nil {
+			run++
+			best = max(best, run)
+			continue
+		}
+		run = 0
+	}
+	return best
+}

@@ -23,7 +23,8 @@ var (
 	selectUserFields = `
 		id, email, password_hash, name, role, target_exam, target_score, exam_date,
 		nepal_region, xp, streak_days, streak_last_active_date, timezone,
-		plan_id, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at`
+		plan_id, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at,
+		avatar_updated_at, cover_updated_at`
 )
 
 type Repository struct {
@@ -146,7 +147,93 @@ func scanUser(row pgx.Row) (models.User, error) {
 		&u.TargetScore, &u.ExamDate, &u.NepalRegion, &u.XP, &u.StreakDays,
 		&u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanValidUntil,
 		&u.ReferralCode, &u.BonusMockTests, &u.BonusProDays,
-		&u.CreatedAt,
+		&u.CreatedAt, &u.AvatarUpdatedAt, &u.CoverUpdatedAt,
 	)
 	return u, err
+}
+
+// ImageKind names one of the two pictures on a profile.
+type ImageKind string
+
+const (
+	ImageAvatar ImageKind = "avatar"
+	ImageCover  ImageKind = "cover"
+)
+
+// Valid reports whether the kind names a real column pair. Anything else came
+// off the URL and must not reach a query.
+func (k ImageKind) Valid() bool { return k == ImageAvatar || k == ImageCover }
+
+// ProfileImage is one stored picture.
+type ProfileImage struct {
+	Bytes       []byte
+	ContentType string
+	UpdatedAt   time.Time
+}
+
+// Image reads one profile picture. ErrNotFound means the learner has not set
+// one, which callers answer with a 404 rather than an error page.
+//
+// The column names are chosen by ImageKind, never interpolated from input.
+func (r *Repository) Image(ctx context.Context, userID string, kind ImageKind) (ProfileImage, error) {
+	query := `SELECT avatar_image, avatar_content_type, avatar_updated_at FROM users WHERE id = $1`
+	if kind == ImageCover {
+		query = `SELECT cover_image, cover_content_type, cover_updated_at FROM users WHERE id = $1`
+	}
+
+	var img ProfileImage
+	var contentType *string
+	var updatedAt *time.Time
+	if err := r.db.QueryRow(ctx, query, userID).Scan(&img.Bytes, &contentType, &updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ProfileImage{}, ErrNotFound
+		}
+		return ProfileImage{}, fmt.Errorf("read %s: %w", kind, err)
+	}
+	if img.Bytes == nil || contentType == nil || updatedAt == nil {
+		return ProfileImage{}, ErrNotFound
+	}
+
+	img.ContentType = *contentType
+	img.UpdatedAt = *updatedAt
+	return img, nil
+}
+
+// SetImage replaces one profile picture and returns when it was stored.
+func (r *Repository) SetImage(ctx context.Context, userID string, kind ImageKind, data []byte, contentType string) (time.Time, error) {
+	query := `UPDATE users SET avatar_image = $2, avatar_content_type = $3, avatar_updated_at = now(), updated_at = now()
+	          WHERE id = $1 RETURNING avatar_updated_at`
+	if kind == ImageCover {
+		query = `UPDATE users SET cover_image = $2, cover_content_type = $3, cover_updated_at = now(), updated_at = now()
+		         WHERE id = $1 RETURNING cover_updated_at`
+	}
+
+	var updatedAt time.Time
+	if err := r.db.QueryRow(ctx, query, userID, data, contentType).Scan(&updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, ErrNotFound
+		}
+		return time.Time{}, fmt.Errorf("store %s: %w", kind, err)
+	}
+	return updatedAt, nil
+}
+
+// ClearImage removes one profile picture. Clearing an absent image is not an
+// error: the learner asked for no picture and there is no picture.
+func (r *Repository) ClearImage(ctx context.Context, userID string, kind ImageKind) error {
+	query := `UPDATE users SET avatar_image = NULL, avatar_content_type = NULL, avatar_updated_at = NULL, updated_at = now()
+	          WHERE id = $1`
+	if kind == ImageCover {
+		query = `UPDATE users SET cover_image = NULL, cover_content_type = NULL, cover_updated_at = NULL, updated_at = now()
+		         WHERE id = $1`
+	}
+
+	tag, err := r.db.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("clear %s: %w", kind, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
