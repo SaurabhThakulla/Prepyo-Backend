@@ -43,6 +43,7 @@ internal/
   questions/      the shared question bank
   scoring/        deterministic grading - the only place a score is decided
   practice/       single-question attempts
+  reading/        passages, passage-driven practice, generated reading mocks
   mocks/          full mock exams
   mistakes/       the mistake bank
   evaluations/    AI writing feedback: allowance, dedupe, persistence
@@ -92,6 +93,12 @@ is dropped unless it quotes text the learner actually wrote.
 WHERE clause, so another learner's id matches no rows instead of relying on a
 check that someone can forget to write.
 
+**A reading passage is spent when it is dealt, not when it is finished.**
+`internal/reading` records the exposure at the moment a paper is handed over, so
+a learner who opens a mock and closes the tab does not get the same three
+passages next time. A generated paper stores the exact question ids it dealt and
+grades only those, which is why extra answers in a submission cannot widen it.
+
 ## Not built yet
 
 These are known gaps, not oversights:
@@ -105,3 +112,10 @@ These are known gaps, not oversights:
   waits. Redis is in compose for this but is not used yet.
 - **Rate limiting is per-instance.** In-memory, so it does not hold across
   replicas. Redis would fix that.
+- **The reading bank holds three passages.** A generated mock needs three, so
+  the first one a learner sits uses all of them and the second has to repeat.
+  The response says so (`reusedPassages`) rather than hiding it, but the real
+  fix is more passages: see `migrations/000008_reading_seed.up.sql` for the
+  shape one has to have to be eligible.
+- **Reading mocks are IELTS only.** The code is exam-agnostic; what is missing
+  is a PTE blueprint row and PTE passages.
