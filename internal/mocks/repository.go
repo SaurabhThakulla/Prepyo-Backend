@@ -28,7 +28,8 @@ func NewRepository(db database.DB) *Repository {
 // List returns blueprints with their sections.
 func (r *Repository) List(ctx context.Context, exam models.ExamType) ([]models.Mock, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT id, exam_version_id, exam, title, description, total_duration_minutes, is_diagnostic
+		SELECT id, exam_version_id, exam, title, description, total_duration_minutes,
+		       is_diagnostic, is_generated
 		FROM mocks
 		WHERE ($1 = '' OR exam = $1)
 		ORDER BY is_diagnostic DESC, id`, exam)
@@ -42,7 +43,7 @@ func (r *Repository) List(ctx context.Context, exam models.ExamType) ([]models.M
 	for rows.Next() {
 		var m models.Mock
 		if err := rows.Scan(&m.ID, &m.ExamVersionID, &m.Exam, &m.Title, &m.Description,
-			&m.TotalDurationMinutes, &m.IsDiagnostic); err != nil {
+			&m.TotalDurationMinutes, &m.IsDiagnostic, &m.IsGenerated); err != nil {
 			return nil, fmt.Errorf("scan mock: %w", err)
 		}
 		list = append(list, m)
@@ -68,10 +69,11 @@ func (r *Repository) List(ctx context.Context, exam models.ExamType) ([]models.M
 func (r *Repository) ByID(ctx context.Context, id string) (models.Mock, error) {
 	var m models.Mock
 	err := r.db.QueryRow(ctx, `
-		SELECT id, exam_version_id, exam, title, description, total_duration_minutes, is_diagnostic
+		SELECT id, exam_version_id, exam, title, description, total_duration_minutes,
+		       is_diagnostic, is_generated
 		FROM mocks WHERE id = $1`, id).
 		Scan(&m.ID, &m.ExamVersionID, &m.Exam, &m.Title, &m.Description,
-			&m.TotalDurationMinutes, &m.IsDiagnostic)
+			&m.TotalDurationMinutes, &m.IsDiagnostic, &m.IsGenerated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return models.Mock{}, ErrNotFound
 	}

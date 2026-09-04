@@ -27,6 +27,7 @@ import (
 	"github.com/prepyo/backend/internal/practice"
 	"github.com/prepyo/backend/internal/progress"
 	"github.com/prepyo/backend/internal/questions"
+	"github.com/prepyo/backend/internal/reading"
 	"github.com/prepyo/backend/internal/referrals"
 	"github.com/prepyo/backend/internal/report"
 	"github.com/prepyo/backend/internal/users"
@@ -48,6 +49,7 @@ type app struct {
 	userHandler         *users.Handler
 	examHandler         *exams.Handler
 	questionHandler     *questions.Handler
+	readingHandler      *reading.Handler
 	practiceHandler     *practice.Handler
 	mockHandler         *mocks.Handler
 	mistakeHandler      *mistakes.Handler
@@ -70,6 +72,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	questionRepo := questions.NewRepository(pool)
 	practiceRepo := practice.NewRepository(pool)
 	mockRepo := mocks.NewRepository(pool)
+	readingRepo := reading.NewRepository(pool)
 	mistakeRepo := mistakes.NewRepository(pool)
 	evaluationRepo := evaluations.NewRepository(pool)
 	notificationRepo := notifications.NewRepository(pool)
@@ -85,6 +88,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	progressService := progress.NewService(examRepo)
 	gateway := ai.NewGateway(cfg, log)
 	evaluationService := evaluations.NewService(pool, evaluationRepo, questionRepo, examRepo, billingService, gateway, xpService)
+	readingService := reading.NewService(pool, readingRepo, questionRepo, mockRepo, examRepo, xpService, billingService)
 
 	return &app{
 		cfg:         cfg,
@@ -96,6 +100,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		userHandler:         users.NewHandler(pool, userRepo, progressService, billingService, log),
 		examHandler:         exams.NewHandler(examRepo, log),
 		questionHandler:     questions.NewHandler(questionRepo, log),
+		readingHandler:      reading.NewHandler(readingService, readingRepo, log),
 		practiceHandler:     practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, xpService, referralService, log),
 		mockHandler:         mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, referralService, log),
 		mistakeHandler:      mistakes.NewHandler(pool, mistakeRepo, xpService, log),
@@ -152,6 +157,7 @@ func (a *app) router() http.Handler {
 
 			private.Mount("/profile", a.userHandler.Routes())
 			private.Mount("/questions", a.questionHandler.Routes())
+			private.Mount("/reading", a.readingHandler.Routes())
 			private.Mount("/practice", a.practiceHandler.Routes())
 			private.Mount("/mocks", a.mockHandler.Routes())
 			private.Mount("/mistakes", a.mistakeHandler.Routes())

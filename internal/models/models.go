@@ -361,15 +361,111 @@ type MockSection struct {
 }
 
 type Mock struct {
-	ID                   string        `json:"id"`
-	ExamVersionID        string        `json:"examVersionId"`
-	Exam                 ExamType      `json:"exam"`
-	Title                string        `json:"title"`
-	Description          string        `json:"description"`
-	TotalDurationMinutes int           `json:"totalDurationMinutes"`
-	TotalQuestions       int           `json:"totalQuestions"`
-	IsDiagnostic         bool          `json:"isDiagnostic"`
-	Sections             []MockSection `json:"sections"`
+	ID                   string   `json:"id"`
+	ExamVersionID        string   `json:"examVersionId"`
+	Exam                 ExamType `json:"exam"`
+	Title                string   `json:"title"`
+	Description          string   `json:"description"`
+	TotalDurationMinutes int      `json:"totalDurationMinutes"`
+	TotalQuestions       int      `json:"totalQuestions"`
+	IsDiagnostic         bool     `json:"isDiagnostic"`
+
+	// IsGenerated marks a blueprint whose paper is composed per learner when
+	// they start it. Sections and TotalQuestions stay empty for these, because
+	// there is no fixed question list to report: the client sends the learner
+	// to the reading mock endpoints instead of reading questions from here.
+	IsGenerated bool `json:"isGenerated"`
+
+	Sections []MockSection `json:"sections"`
+}
+
+// ---------------------------------------------------------------------------
+// Reading passages
+// ---------------------------------------------------------------------------
+
+// ReadingParagraph is one labelled block of a passage. The label is not
+// decoration: a Matching Information answer is a paragraph label.
+type ReadingParagraph struct {
+	Label string `json:"label"`
+	Text  string `json:"text"`
+}
+
+// ReadingPassage is the text a set of reading questions is written about.
+type ReadingPassage struct {
+	ID            string             `json:"id"`
+	ExamVersionID string             `json:"examVersionId"`
+	Exam          ExamType           `json:"exam"`
+	Title         string             `json:"title"`
+	Subtitle      string             `json:"subtitle,omitempty"`
+	Paragraphs    []ReadingParagraph `json:"paragraphs"`
+
+	// Sources carries attributed excerpts for passages written in several
+	// voices, which is what Find the Writer questions match against. Empty for
+	// single-author passages.
+	Sources []ReadingParagraph `json:"sources,omitempty"`
+
+	WordCount  int      `json:"wordCount"`
+	Difficulty string   `json:"difficulty"`
+	Topic      string   `json:"topic,omitempty"`
+	Tags       []string `json:"tags"`
+}
+
+// ReadingGroup is one task set on a passage: a type, the instruction line above
+// it, and the questions in it.
+type ReadingGroup struct {
+	ID           string `json:"id"`
+	PassageID    string `json:"passageId"`
+	Position     int    `json:"position"`
+	TypeID       string `json:"typeId"`
+	TypeName     string `json:"typeName"`
+	Instructions string `json:"instructions"`
+
+	// Resources is material belonging to the task rather than to the passage:
+	// the boxes of an ordering task, a summary with gaps in it.
+	Resources []ReadingParagraph `json:"resources,omitempty"`
+
+	TimeLimitSeconds int        `json:"timeLimitSeconds,omitempty"`
+	Questions        []Question `json:"questions"`
+}
+
+// ReadingSet is a passage with some of its groups attached. Practice returns
+// one group; a mock returns every group on the passage.
+type ReadingSet struct {
+	Passage        ReadingPassage `json:"passage"`
+	Groups         []ReadingGroup `json:"groups"`
+	TotalQuestions int            `json:"totalQuestions"`
+}
+
+// ReadingTaskType is one entry in the "what can I practise?" menu, carrying the
+// size of the bank behind it so the client can grey out an empty choice.
+type ReadingTaskType struct {
+	TypeID        string `json:"typeId"`
+	TypeName      string `json:"typeName"`
+	PassageCount  int    `json:"passageCount"`
+	QuestionCount int    `json:"questionCount"`
+}
+
+// ReadingMockSession is one generated reading paper. Sets are filled only when
+// the paper itself is served, not when a session is listed.
+type ReadingMockSession struct {
+	ID              string     `json:"id"`
+	MockID          string     `json:"mockId"`
+	MockTitle       string     `json:"mockTitle,omitempty"`
+	Exam            ExamType   `json:"exam"`
+	ExamVersionID   string     `json:"examVersionId"`
+	Status          string     `json:"status"`
+	DurationMinutes int        `json:"durationMinutes"`
+	TotalQuestions  int        `json:"totalQuestions"`
+	PassageIDs      []string   `json:"passageIds"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	SubmittedAt     *time.Time `json:"submittedAt,omitempty"`
+
+	// ReusedPassages is true when the bank held fewer unseen passages than the
+	// paper needed and one had to be repeated. It is reported rather than
+	// hidden, so a repeat does not read as a bug.
+	ReusedPassages bool `json:"reusedPassages"`
+
+	Sets []ReadingSet `json:"sets,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

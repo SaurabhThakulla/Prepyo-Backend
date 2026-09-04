@@ -119,17 +119,66 @@ func (r *Repository) ByIDs(ctx context.Context, ids []string) (map[string]models
 	return found, rows.Err()
 }
 
+// ByGroupIDs returns the questions belonging to several reading groups in one
+// round trip, keyed by group id and in their authored order within each group.
+//
+// It lives here rather than in internal/reading so that there stays exactly one
+// piece of code that knows how a question row is shaped. Answer keys come back
+// attached: the caller decides whether it is grading (keep them) or serving
+// (strip them with PublicQuestion).
+func (r *Repository) ByGroupIDs(ctx context.Context, groupIDs []string) (map[string][]models.Question, error) {
+	byGroup := map[string][]models.Question{}
+	if len(groupIDs) == 0 {
+		return byGroup, nil
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT group_id, `+selectFields+`
+		FROM questions
+		WHERE group_id = ANY($1) AND is_published
+		ORDER BY group_id, group_position, id`, groupIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list group questions: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var groupID string
+		q, err := scanWithPrefix(rows, &groupID)
+		if err != nil {
+			return nil, err
+		}
+		byGroup[groupID] = append(byGroup[groupID], q)
+	}
+	return byGroup, rows.Err()
+}
+
 func scan(row pgx.Row) (models.Question, error) {
 	var q models.Question
-	err := row.Scan(
+	err := row.Scan(fieldsOf(&q)...)
+	if err != nil {
+		return models.Question{}, err
+	}
+	return q, nil
+}
+
+// scanWithPrefix scans a row that selects one extra column before selectFields.
+func scanWithPrefix(row pgx.Row, prefix any) (models.Question, error) {
+	var q models.Question
+	if err := row.Scan(append([]any{prefix}, fieldsOf(&q)...)...); err != nil {
+		return models.Question{}, err
+	}
+	return q, nil
+}
+
+// fieldsOf lists scan targets in the order of selectFields. The two are a pair:
+// change one and change the other.
+func fieldsOf(q *models.Question) []any {
+	return []any{
 		&q.ID, &q.ExamVersionID, &q.Exam, &q.Skill, &q.TypeID, &q.TypeName,
 		&q.Title, &q.Prompt, &q.ContextPassage, &q.AudioURL, &q.AudioTranscript,
 		&q.ImageURL, &q.PrepTimeSeconds, &q.TimeLimitSeconds,
 		&q.Options, &q.CorrectAnswers, &q.Blanks, &q.ModelAnswer, &q.Explanation,
 		&q.Difficulty, &q.Tags, &q.Points,
-	)
-	if err != nil {
-		return models.Question{}, err
 	}
-	return q, nil
 }
