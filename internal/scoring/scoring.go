@@ -48,6 +48,8 @@ func Grade(q models.Question, sub models.AnswerSubmission) (Result, bool) {
 		return gradeReorder(q, sub), true
 	case q.TypeID == "write-from-dictation":
 		return gradeDictation(q, sub), true
+	case shortAnswerTypes[q.TypeID]:
+		return gradeShortAnswer(q, sub), true
 	case len(q.CorrectAnswers) > 0 && len(q.Options) > 0:
 		return gradeChoice(q, sub), true
 	case len(q.CorrectAnswers) > 0:
@@ -130,6 +132,53 @@ func gradeDictation(q models.Question, sub models.AnswerSubmission) Result {
 	return proportional(q, matched, len(target),
 		fmt.Sprintf("You matched %d of %d words.", matched, len(target)),
 		q.CorrectAnswers[0], orPlaceholder(sub.TextResponse), "Dictation accuracy")
+}
+
+// shortAnswerTypes are the reading tasks answered by typing a word or a short
+// phrase lifted from the passage.
+//
+// They need naming because CorrectAnswers means something different here than
+// it does elsewhere. In a True/False set it is a sequence — one answer per
+// statement, compared in order. In a gap-fill it is a set of spellings that are
+// all accepted for the one gap: "flavour" and "flavor", "Nestle" and "Nestlé".
+// Without this case gradeOrderedAnswers would read the alternatives as extra
+// gaps and mark a right answer one-third correct.
+var shortAnswerTypes = map[string]bool{
+	"reading-sentence-completion": true,
+	"reading-summary-completion":  true,
+	"reading-short-answer":        true,
+}
+
+// gradeShortAnswer marks a typed gap right when it matches any accepted
+// spelling. Case, surrounding punctuation and stray spacing are ignored, so
+// "Gods." earns the mark that "gods" does; nothing else is forgiven, because
+// the task is to lift the word out of the passage exactly.
+func gradeShortAnswer(q models.Question, sub models.AnswerSubmission) Result {
+	given := sub.TextResponse
+	// A client may render a gap with a word bank rather than a text field. One
+	// selected option is the same answer arriving by a different route.
+	if strings.TrimSpace(given) == "" && len(sub.SelectedOptions) == 1 {
+		given = sub.SelectedOptions[0]
+	}
+
+	wanted := phrase(given)
+	correct := 0
+	if wanted != "" {
+		for _, accepted := range q.CorrectAnswers {
+			if phrase(accepted) == wanted {
+				correct = 1
+				break
+			}
+		}
+	}
+
+	feedback := "That is not the word the passage uses."
+	if correct == 1 {
+		feedback = "Correct."
+	}
+
+	return proportional(q, correct, 1, feedback,
+		strings.Join(q.CorrectAnswers, " / "), orPlaceholder(given), "Detail")
 }
 
 // gradeChoice handles single and multiple answer questions. Extra selections
@@ -219,6 +268,12 @@ func normalise(s string) string {
 func words(s string) []string {
 	cleaned := nonWord.ReplaceAllString(strings.ToLower(s), " ")
 	return strings.Fields(cleaned)
+}
+
+// phrase reduces an answer to comparable words: lowercase, punctuation
+// stripped, spacing collapsed. "  Nestlé. " and "nestlé" become the same thing.
+func phrase(s string) string {
+	return strings.Join(words(s), " ")
 }
 
 func orPlaceholder(s string) string {
