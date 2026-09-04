@@ -41,9 +41,13 @@ const (
 const maxBodyBytes = 1 << 20 // 1 MiB
 
 // MaxAudioBodyBytes is the cap for the one kind of body that is not typed text:
-// a base64 recording. Two minutes of 16 kHz mono PCM is about 3.8 MB, and
-// base64 adds a third, so this leaves room for the longest task plus the JSON
-// around it without letting an upload run away.
+// a base64 recording.
+//
+// The browser sends MP3, where the longest allowed answer — two minutes — is
+// about 1.2 MB after base64. The cap is set for the WAV fallback instead, which
+// is still accepted and is four times larger: two minutes of 16 kHz mono PCM is
+// about 3.8 MB, and base64 adds a third. That leaves room for the longest task
+// plus the JSON around it without letting an upload run away.
 const MaxAudioBodyBytes = 12 << 20 // 12 MiB
 
 type errorBody struct {
