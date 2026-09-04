@@ -39,32 +39,40 @@ type ListParams struct {
 	TypeID string
 	Limit  int
 	Offset int
+
+	// IncludePassageQuestions brings reading questions that belong to a passage
+	// into the results. Off by default: see List.
+	IncludePassageQuestions bool
 }
 
 // List returns published questions matching the filters. Empty filter fields
 // mean "any".
+//
+// Questions attached to a reading passage are left out unless asked for. They
+// are not standalone tasks — the text they are about lives in
+// reading_passages, not in the question row — so serving one here would hand a
+// learner a question with nothing to read. They are served with their passage
+// by /api/v1/reading instead.
 func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question, int, error) {
-	var total int
-	err := r.db.QueryRow(ctx, `
-		SELECT count(*) FROM questions
+	const where = `
 		WHERE is_published
 		  AND ($1 = '' OR exam = $1)
 		  AND ($2 = '' OR skill = $2)
-		  AND ($3 = '' OR type_id = $3)`,
-		p.Exam, p.Skill, p.TypeID).Scan(&total)
+		  AND ($3 = '' OR type_id = $3)
+		  AND ($4 OR passage_id IS NULL)`
+
+	var total int
+	err := r.db.QueryRow(ctx, `SELECT count(*) FROM questions`+where,
+		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions).Scan(&total)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count questions: %w", err)
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT `+selectFields+` FROM questions
-		WHERE is_published
-		  AND ($1 = '' OR exam = $1)
-		  AND ($2 = '' OR skill = $2)
-		  AND ($3 = '' OR type_id = $3)
+		SELECT `+selectFields+` FROM questions`+where+`
 		ORDER BY id
-		LIMIT $4 OFFSET $5`,
-		p.Exam, p.Skill, p.TypeID, p.Limit, p.Offset)
+		LIMIT $5 OFFSET $6`,
+		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, p.Limit, p.Offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list questions: %w", err)
 	}

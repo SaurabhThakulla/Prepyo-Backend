@@ -47,6 +47,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		TypeID: query.Get("typeId"),
 		Limit:  page.Limit,
 		Offset: page.Offset,
+		// Opt-in, for tooling that wants to see the whole bank. A learner-facing
+		// caller wants /api/v1/reading, which serves these with their passage.
+		IncludePassageQuestions: query.Get("includePassageQuestions") == "true",
 	})
 	if err != nil {
 		httpx.Internal(w, h.log, "questions.list", err)
