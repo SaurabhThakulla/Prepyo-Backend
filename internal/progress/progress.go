@@ -39,6 +39,15 @@ type SkillBreakdown struct {
 	Accuracy int              `json:"accuracy"`
 	Estimate *float64         `json:"estimate"`
 	Status   string           `json:"status"` // strong, steady, needs_work, no_data
+
+	// Available is how many published questions exist for this skill and exam,
+	// and Completed how many distinct ones this learner has answered.
+	//
+	// Both are all-time, unlike Attempts and Accuracy above, which look at a
+	// recent window. "You have done 12 of 133 reading questions" is a statement
+	// about the bank, and a question answered two months ago is still done.
+	Available int `json:"available"`
+	Completed int `json:"completed"`
 }
 
 // Estimate computes the learner's current standing for their target exam.
@@ -155,12 +164,23 @@ func (s *Service) Skills(ctx context.Context, db database.DB, user models.User) 
 		return nil, err
 	}
 
+	available, completed, err := s.bankCoverage(ctx, db, user)
+	if err != nil {
+		return nil, err
+	}
+
 	// Always return all four skills in a stable order so the UI does not have
 	// rows appearing and disappearing between refreshes.
 	breakdown := make([]SkillBreakdown, 0, len(models.AllSkills))
 	for _, skill := range models.AllSkills {
 		t := bySkill[skill]
-		row := SkillBreakdown{Skill: skill, Attempts: t.attempts, Status: "no_data"}
+		row := SkillBreakdown{
+			Skill:     skill,
+			Attempts:  t.attempts,
+			Status:    "no_data",
+			Available: available[skill],
+			Completed: completed[skill],
+		}
 
 		if t.max > 0 {
 			accuracy := t.earned / t.max
@@ -172,6 +192,65 @@ func (s *Service) Skills(ctx context.Context, db database.DB, user models.User) 
 		breakdown = append(breakdown, row)
 	}
 	return breakdown, nil
+}
+
+// bankCoverage counts what exists and what this learner has done, per skill.
+//
+// The available count is every published question for the exam, deliberately
+// including passage-backed reading questions and re-order items. Those are
+// excluded from the generic /questions listing because they cannot be dealt
+// standalone, but they are absolutely part of the bank a learner works through,
+// and leaving them out would report a reading bank of 3 against a real 133.
+//
+// Completed unions the two places an answer can land: reading and listening
+// write practice_attempts, writing and speaking write ai_evaluations. Counting
+// only the first would leave those two skills permanently at zero.
+func (s *Service) bankCoverage(ctx context.Context, db database.DB, user models.User) (map[models.SkillType]int, map[models.SkillType]int, error) {
+	available := map[models.SkillType]int{}
+	completed := map[models.SkillType]int{}
+
+	rows, err := db.Query(ctx, `
+		SELECT skill, count(*) FROM questions
+		 WHERE is_published AND exam = $1
+		 GROUP BY skill`, user.TargetExam)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read bank size: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var skill models.SkillType
+		var n int
+		if err := rows.Scan(&skill, &n); err != nil {
+			return nil, nil, fmt.Errorf("scan bank size: %w", err)
+		}
+		available[skill] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	done, err := db.Query(ctx, `
+		SELECT q.skill, count(DISTINCT q.id)
+		  FROM questions q
+		 WHERE q.exam = $2
+		   AND (EXISTS (SELECT 1 FROM practice_attempts a
+		                 WHERE a.question_id = q.id AND a.user_id = $1)
+		     OR EXISTS (SELECT 1 FROM ai_evaluations e
+		                 WHERE e.question_id = q.id AND e.user_id = $1))
+		 GROUP BY q.skill`, user.ID, user.TargetExam)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read completed questions: %w", err)
+	}
+	defer done.Close()
+	for done.Next() {
+		var skill models.SkillType
+		var n int
+		if err := done.Scan(&skill, &n); err != nil {
+			return nil, nil, fmt.Errorf("scan completed questions: %w", err)
+		}
+		completed[skill] = n
+	}
+	return available, completed, done.Err()
 }
 
 func statusFor(accuracy float64) string {
