@@ -157,12 +157,22 @@ type ScoreEstimate struct {
 }
 
 type SubscriptionState struct {
-	PlanID                string `json:"planId"`
-	PlanName              string `json:"planName"`
+	PlanID   string `json:"planId"`
+	PlanName string `json:"planName"`
+
+	// DailySubTestsUsed counts task sets attempted in the learner's own day,
+	// across every skill. See billing.Service.State.
+	DailySubTestsUsed  int `json:"dailySubTestsUsed"`
+	DailySubTestsLimit int `json:"dailySubTestsLimit"`
+
+	// Deprecated: duplicates of DailySubTests* for app builds < 1.1.0, which
+	// read the old names and would render an undefined quota without them.
+	// Remove once 1.1.0 is live on Vercel.
+	DailyEvaluationsUsed  int `json:"dailyEvaluationsUsed"`
+	DailyEvaluationsLimit int `json:"dailyEvaluationsLimit"`
+
 	ValidUntil            string `json:"validUntil,omitempty"`
 	IsActive              bool   `json:"isActive"`
-	DailyEvaluationsUsed  int    `json:"dailyEvaluationsUsed"`
-	DailyEvaluationsLimit int    `json:"dailyEvaluationsLimit"`
 	MockTestsIncluded     int    `json:"mockTestsIncluded"`
 	BonusMockTests        int    `json:"bonusMockTests"`
 	TotalMockTestsAllowed int    `json:"totalMockTestsAllowed"`
@@ -171,16 +181,23 @@ type SubscriptionState struct {
 }
 
 type Plan struct {
-	ID                  string   `json:"id"`
-	Name                string   `json:"name"`
-	PriceNPR            int      `json:"priceNPR"`
-	DurationMonths      int      `json:"durationMonths"`
-	DurationDays        int      `json:"durationDays"`
-	BonusDays           int      `json:"bonusDays"`
-	Features            []string `json:"features"`
-	AIEvaluationsPerDay int      `json:"aiEvaluationsPerDay"`
-	MockTestsIncluded   int      `json:"mockTestsIncluded"`
-	IsPopular           bool     `json:"isPopular"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	PriceNPR       int      `json:"priceNPR"`
+	DurationMonths int      `json:"durationMonths"`
+	DurationDays   int      `json:"durationDays"`
+	BonusDays      int      `json:"bonusDays"`
+	Features       []string `json:"features"`
+
+	// SubTestsPerDay is the daily allowance of task sets, in any skill.
+	SubTestsPerDay int `json:"subTestsPerDay"`
+
+	// Deprecated: duplicate of SubTestsPerDay for app builds < 1.1.0.
+	// Remove once 1.1.0 is live on Vercel.
+	AIEvaluationsPerDay int `json:"aiEvaluationsPerDay"`
+
+	MockTestsIncluded int  `json:"mockTestsIncluded"`
+	IsPopular         bool `json:"isPopular"`
 }
 
 // ---------------------------------------------------------------------------

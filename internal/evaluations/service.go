@@ -103,7 +103,10 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 		return Outcome{}, err
 	}
 
-	state, err := s.billing.CheckEvaluationAllowance(ctx, s.db, req.User)
+	// Cheap pre-check, deliberately unlocked and deliberately before the model
+	// call: an over-quota learner should never cost a provider call. The check
+	// that actually enforces the quota runs under a lock in persist().
+	state, err := s.billing.CheckSubTestAllowance(ctx, s.db, req.User, "")
 	if err != nil {
 		return Outcome{Subscription: state}, err
 	}
@@ -180,7 +183,10 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		return Outcome{}, err
 	}
 
-	state, err := s.billing.CheckEvaluationAllowance(ctx, s.db, req.User)
+	// Cheap pre-check, deliberately unlocked and deliberately before the model
+	// call: an over-quota learner should never cost a provider call. The check
+	// that actually enforces the quota runs under a lock in persist().
+	state, err := s.billing.CheckSubTestAllowance(ctx, s.db, req.User, "")
 	if err != nil {
 		return Outcome{Subscription: state}, err
 	}
@@ -235,6 +241,22 @@ func (s *Service) persist(ctx context.Context, p persistParams) (Outcome, error)
 		return Outcome{}, fmt.Errorf("begin evaluation: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// The authoritative quota check. It runs here rather than beside the
+	// pre-check because this is the first point at which the model call is
+	// already done — the lock must never be held across provider inference, or
+	// one submission would block every other submission by the same learner for
+	// the several seconds the model takes.
+	//
+	// Two requests can therefore both clear the unlocked pre-check and both call
+	// the model. Only one gets past this check, so the quota is never exceeded;
+	// the cost of that race is one wasted provider call.
+	if err := billing.LockUserForQuota(ctx, tx, p.User.ID); err != nil {
+		return Outcome{}, err
+	}
+	if _, err := s.billing.CheckSubTestAllowance(ctx, tx, p.User, ""); err != nil {
+		return Outcome{}, err
+	}
 
 	saved, err := s.repo.Save(ctx, tx, SaveParams{
 		UserID:      p.User.ID,

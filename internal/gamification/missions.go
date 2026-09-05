@@ -133,3 +133,22 @@ func localDay(user models.User) time.Time {
 	}
 	return truncateToDay(time.Now().In(location))
 }
+
+// LocalDayStart and LocalDayEnd bound the learner's own day as absolute
+// timestamps, for queries that count "today".
+//
+// They exist so a caller does not have to reimplement the timezone fallback
+// that localDay already owns: the learner's zone, or Nepal when that zone will
+// not parse.
+//
+// The pair is half-open — [start, end) — so a row landing exactly on the
+// boundary belongs to one day and not both. The end is one calendar day on in
+// the learner's location rather than start+24h, so it stays correct in a zone
+// that observes DST. Nepal does not, but the fallback should not encode that.
+func LocalDayStart(user models.User) time.Time {
+	return localDay(user)
+}
+
+func LocalDayEnd(user models.User) time.Time {
+	return localDay(user).AddDate(0, 0, 1)
+}

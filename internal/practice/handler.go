@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prepyo/backend/internal/billing"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/mistakes"
 	"github.com/prepyo/backend/internal/models"
@@ -28,6 +29,7 @@ type Handler struct {
 	questions *questions.Repository
 	mistakes  *mistakes.Repository
 	xp        *gamification.Service
+	billing   *billing.Service
 	referrals ReferralsService
 	log       *slog.Logger
 }
@@ -38,6 +40,7 @@ func NewHandler(
 	questionRepo *questions.Repository,
 	mistakeRepo *mistakes.Repository,
 	xp *gamification.Service,
+	billingService *billing.Service,
 	referrals ReferralsService,
 	log *slog.Logger,
 ) *Handler {
@@ -47,6 +50,7 @@ func NewHandler(
 		questions: questionRepo,
 		mistakes:  mistakeRepo,
 		xp:        xp,
+		billing:   billingService,
 		referrals: referrals,
 		log:       log,
 	}
@@ -125,6 +129,27 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
+
+	// Quota, under the same user-row lock the evaluation path takes, so the two
+	// serialise and a concurrent pair cannot both spend the last sub-test.
+	// Grading above is pure and already done, so nothing external is inside it.
+	//
+	// The key is the question's task set: continuing a set already started today
+	// is free, so a learner who spends their last sub-test on question 1 of six
+	// can still answer the other five. Only a new set can be refused.
+	if err := billing.LockUserForQuota(ctx, tx, user.ID); err != nil {
+		httpx.Internal(w, h.log, "practice.submit.lock", err)
+		return
+	}
+	if _, err := h.billing.CheckSubTestAllowance(ctx, tx, user, billing.SubTestKeyForQuestion(question)); err != nil {
+		if errors.Is(err, billing.ErrLimitReached) {
+			httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached,
+				"You have used all of today's practice sub-tests. They reset at midnight.")
+			return
+		}
+		httpx.Internal(w, h.log, "practice.submit.allowance", err)
+		return
+	}
 
 	attempt, err := h.repo.Save(ctx, tx, SaveParams{
 		UserID:             user.ID,

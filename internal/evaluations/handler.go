@@ -180,7 +180,7 @@ func (h *Handler) writeError(w http.ResponseWriter, err error, op string, tooSho
 
 	case errors.Is(err, ErrLimitReached):
 		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached,
-			"You have used all of today's AI evaluations. They reset at midnight.")
+			"You have used all of today's practice sub-tests. They reset at midnight.")
 
 	case errors.Is(err, ai.ErrUnavailable), errors.Is(err, ai.ErrBadOutput):
 		// Nothing was stored and no score was invented. The learner's work is

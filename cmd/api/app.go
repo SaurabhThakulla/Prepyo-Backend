@@ -101,7 +101,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		examHandler:         exams.NewHandler(examRepo, log),
 		questionHandler:     questions.NewHandler(questionRepo, log),
 		readingHandler:      reading.NewHandler(readingService, readingRepo, log),
-		practiceHandler:     practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, xpService, referralService, log),
+		practiceHandler:     practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, xpService, billingService, referralService, log),
 		mockHandler:         mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, referralService, log),
 		mistakeHandler:      mistakes.NewHandler(pool, mistakeRepo, xpService, log),
 		evaluationHandler:   evaluations.NewHandler(evaluationService, evaluationRepo, log),
