@@ -160,7 +160,7 @@ func scanPassage(row pgx.Row) (models.ReadingPassage, error) {
 
 const groupFields = `
 	id, passage_id, position, type_id, type_name, instructions, resources,
-	shuffle_questions, time_limit_seconds`
+	paper_slot, passage_display, shuffle_questions, time_limit_seconds`
 
 // Group is a stored group. It carries shuffleQuestions, which the service needs
 // and the client does not: whether a set may be dealt out of order is a
@@ -190,7 +190,8 @@ func (r *Repository) GroupsForPassages(ctx context.Context, passageIDs []string,
 	for rows.Next() {
 		var g Group
 		if err := rows.Scan(&g.ID, &g.PassageID, &g.Position, &g.TypeID, &g.TypeName,
-			&g.Instructions, &g.Resources, &g.ShuffleQuestions, &g.TimeLimitSeconds); err != nil {
+			&g.Instructions, &g.Resources, &g.PaperSlot, &g.PassageDisplay,
+			&g.ShuffleQuestions, &g.TimeLimitSeconds); err != nil {
 			return nil, fmt.Errorf("scan group: %w", err)
 		}
 		list = append(list, g)
@@ -204,7 +205,8 @@ func (r *Repository) GroupByID(ctx context.Context, id string) (Group, error) {
 	err := r.db.QueryRow(ctx, `SELECT `+groupFields+`
 		FROM reading_question_groups WHERE id = $1`, id).
 		Scan(&g.ID, &g.PassageID, &g.Position, &g.TypeID, &g.TypeName,
-			&g.Instructions, &g.Resources, &g.ShuffleQuestions, &g.TimeLimitSeconds)
+			&g.Instructions, &g.Resources, &g.PaperSlot, &g.PassageDisplay,
+			&g.ShuffleQuestions, &g.TimeLimitSeconds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Group{}, ErrNoPassage
 	}
@@ -221,16 +223,32 @@ func (r *Repository) GroupByID(ctx context.Context, id string) (Group, error) {
 // unavailable rather than offered and then failing to deal a set.
 func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]models.ReadingTaskType, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT g.type_id,
-		       min(g.type_name),
-		       count(DISTINCT g.passage_id),
-		       count(q.id)
-		FROM reading_question_groups g
-		JOIN reading_passages p ON p.id = g.passage_id AND p.is_published
-		JOIN questions q ON q.group_id = g.id AND q.is_published
-		WHERE ($1 = '' OR p.exam = $1)
-		GROUP BY g.type_id
-		ORDER BY min(g.type_name)`, exam)
+		SELECT type_id, type_name, passage_count, question_count FROM (
+			SELECT g.type_id                      AS type_id,
+			       min(g.type_name)               AS type_name,
+			       count(DISTINCT g.passage_id)   AS passage_count,
+			       count(q.id)                    AS question_count
+			FROM reading_question_groups g
+			JOIN reading_passages p ON p.id = g.passage_id AND p.is_published
+			JOIN questions q ON q.group_id = g.id AND q.is_published
+			WHERE ($1 = '' OR p.exam = $1)
+			GROUP BY g.type_id
+
+			UNION ALL
+
+			-- Re-order Paragraphs has no passages, so an item counts as one.
+			-- The menu is asking "how much is there to work through", and for
+			-- this task an item is the unit a learner is dealt.
+			SELECT 'reorder-paragraphs',
+			       'Re-order Paragraphs',
+			       count(DISTINCT i.id),
+			       count(q.id)
+			FROM reading_reorder_items i
+			JOIN questions q ON q.reorder_item_id = i.id AND q.is_published
+			WHERE i.is_published AND ($1 = '' OR i.exam = $1)
+			HAVING count(q.id) > 0
+		) menu
+		ORDER BY type_name`, exam)
 	if err != nil {
 		return nil, fmt.Errorf("list reading types: %w", err)
 	}
@@ -288,10 +306,12 @@ type MockCandidate struct {
 
 // PickMockPassages chooses the passages for one generated mock.
 //
-// Only passages carrying every required task type are eligible, because a
-// generated paper promises the full spread. Among those, ones the learner has
-// never sat in a mock come first — that is the no-repeat rule — then ones they
-// have not met in practice either, then the ones sat longest ago.
+// Only passages carrying all three paper slots are eligible. A paper deals three
+// passages and takes one section from each, but which passage lands in which
+// slot is decided after they are picked — so every candidate has to be able to
+// fill any of the three. Among those, ones the learner has never sat in a mock
+// come first — that is the no-repeat rule — then ones they have not met in
+// practice either, then the ones sat longest ago.
 //
 // It returns fewer than `count` when the bank cannot fill the paper. Deciding
 // what to do about that is the service's job, not a silent truncation here.
@@ -299,7 +319,6 @@ func (r *Repository) PickMockPassages(
 	ctx context.Context,
 	userID string,
 	exam models.ExamType,
-	requiredTypes []string,
 	count int,
 ) ([]MockCandidate, error) {
 	rows, err := r.db.Query(ctx, `
@@ -312,17 +331,17 @@ func (r *Repository) PickMockPassages(
 		WHERE p.is_published
 		  AND p.exam = $2
 		  AND (
-			  SELECT count(DISTINCT g.type_id)
+			  SELECT count(DISTINCT g.paper_slot)
 			  FROM reading_question_groups g
 			  WHERE g.passage_id = p.id
-			    AND g.type_id = ANY($3)
+			    AND g.paper_slot > 0
 			    AND EXISTS (SELECT 1 FROM questions q WHERE q.group_id = g.id AND q.is_published)
-		  ) = cardinality($3)
+		  ) = 3
 		ORDER BY (seen.passage_id IS NOT NULL),
 		         (practised.passage_id IS NOT NULL),
 		         seen.last_seen_at ASC NULLS FIRST,
 		         random()
-		LIMIT $4`, userID, exam, requiredTypes, count)
+		LIMIT $3`, userID, exam, count)
 	if err != nil {
 		return nil, fmt.Errorf("pick mock passages: %w", err)
 	}
@@ -337,6 +356,79 @@ func (r *Repository) PickMockPassages(
 		picked = append(picked, c)
 	}
 	return picked, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Re-order Paragraphs
+// ---------------------------------------------------------------------------
+
+// ErrNoReorderItem means the bank holds no item this learner can be dealt.
+var ErrNoReorderItem = errors.New("no re-order item available")
+
+// PickReorderItem chooses one item for this learner, with its backing question.
+//
+// Two rules, in order. An item derived from a passage the learner has already
+// read is skipped outright: they have seen those sentences in the right order,
+// so re-ordering them is not a task any more. Among what is left, unseen items
+// come first and otherwise the one met longest ago, which is the same rule
+// PickPracticeGroup applies to passages.
+func (r *Repository) PickReorderItem(ctx context.Context, userID string, exam models.ExamType) (models.ReadingReorderItem, string, error) {
+	var item models.ReadingReorderItem
+	var questionID string
+	var sourcePassageID *string
+
+	err := r.db.QueryRow(ctx, `
+		SELECT i.id, i.exam_version_id, i.exam, i.title, i.paragraphs,
+		       i.source_passage_id, i.topic, i.word_count, i.difficulty, i.tags,
+		       q.id
+		FROM reading_reorder_items i
+		JOIN questions q ON q.reorder_item_id = i.id AND q.is_published
+		LEFT JOIN user_reorder_exposures e
+		       ON e.user_id = $1 AND e.item_id = i.id AND e.context = 'practice'
+		WHERE i.is_published
+		  AND ($2 = '' OR i.exam = $2)
+		  AND (
+			  i.source_passage_id IS NULL
+			  OR NOT EXISTS (
+				  SELECT 1 FROM user_passage_exposures seen
+				  WHERE seen.user_id = $1 AND seen.passage_id = i.source_passage_id
+			  )
+		  )
+		ORDER BY e.last_seen_at ASC NULLS FIRST, random()
+		LIMIT 1`, userID, exam).
+		Scan(&item.ID, &item.ExamVersionID, &item.Exam, &item.Title, &item.Paragraphs,
+			&sourcePassageID, &item.Topic, &item.WordCount, &item.Difficulty, &item.Tags,
+			&questionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.ReadingReorderItem{}, "", ErrNoReorderItem
+	}
+	if err != nil {
+		return models.ReadingReorderItem{}, "", fmt.Errorf("pick re-order item: %w", err)
+	}
+	if sourcePassageID != nil {
+		item.SourcePassageID = *sourcePassageID
+	}
+	return item, questionID, nil
+}
+
+// RecordReorderExposure marks items as dealt to this learner. The mirror of
+// RecordExposure, and called at the same point: when the content is handed over,
+// not when it is finished with.
+func (r *Repository) RecordReorderExposure(ctx context.Context, db database.DB, userID string, itemIDs []string, exposureContext string) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+
+	_, err := db.Exec(ctx, `
+		INSERT INTO user_reorder_exposures (user_id, item_id, context)
+		SELECT $1, unnest($2::text[]), $3
+		ON CONFLICT (user_id, item_id, context) DO UPDATE
+		SET seen_count   = user_reorder_exposures.seen_count + 1,
+		    last_seen_at = now()`, userID, itemIDs, exposureContext)
+	if err != nil {
+		return fmt.Errorf("record re-order exposure: %w", err)
+	}
+	return nil
 }
 
 // RecordExposure marks passages as met by this learner.

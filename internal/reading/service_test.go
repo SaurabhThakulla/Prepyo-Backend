@@ -148,17 +148,65 @@ func TestReviewOfFollowsTheDealtOrderAndRestoresAnswers(t *testing.T) {
 	}
 }
 
-// The list a mock is built from and the types the seed writes have to agree,
-// or every passage silently becomes ineligible.
+// The list reported to the client and the types the seed writes have to agree,
+// or the practice menu promises a task the paper never asks.
 func TestMockRequiredTypesAreDistinct(t *testing.T) {
 	seen := map[string]bool{}
 	for _, typeID := range MockRequiredTypes {
 		if seen[typeID] {
-			t.Errorf("%s listed twice; cardinality() in the picker would then never match", typeID)
+			t.Errorf("%s listed twice", typeID)
 		}
 		seen[typeID] = true
 	}
 	if len(MockRequiredTypes) != 6 {
 		t.Errorf("required types = %d, want the 6 the seed writes", len(MockRequiredTypes))
+	}
+}
+
+// An IELTS Academic Reading paper is 40 questions in three sections. This is the
+// arithmetic that was wrong before slots existed: three passages carrying every
+// group came to 120 questions inside a 60 minute blueprint.
+func TestPaperSlotsMakeAFortyQuestionPaper(t *testing.T) {
+	if len(PaperSlots) != MockPassageCount {
+		t.Fatalf("slots = %d, want one per dealt passage (%d)", len(PaperSlots), MockPassageCount)
+	}
+
+	total := 0
+	for i, slot := range PaperSlots {
+		if slot.Slot != i+1 {
+			t.Errorf("slot at index %d is numbered %d; the nth passage fills the nth slot", i, slot.Slot)
+		}
+		if len(slot.Types) == 0 {
+			t.Errorf("slot %d carries no task types", slot.Slot)
+		}
+		total += slot.Questions
+	}
+	if total != 40 {
+		t.Errorf("paper = %d questions, want 40", total)
+	}
+}
+
+// Every type the menu promises has to appear in some section, and no section may
+// ask for a type the seed never writes.
+func TestPaperSlotsCoverExactlyTheAdvertisedTypes(t *testing.T) {
+	advertised := map[string]bool{}
+	for _, typeID := range MockRequiredTypes {
+		advertised[typeID] = true
+	}
+
+	used := map[string]bool{}
+	for _, slot := range PaperSlots {
+		for _, typeID := range slot.Types {
+			if !advertised[typeID] {
+				t.Errorf("slot %d uses %s, which is not advertised to the client", slot.Slot, typeID)
+			}
+			used[typeID] = true
+		}
+	}
+
+	for typeID := range advertised {
+		if !used[typeID] {
+			t.Errorf("%s is advertised but appears in no section, so a paper never tests it", typeID)
+		}
 	}
 }

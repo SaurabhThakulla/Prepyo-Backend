@@ -33,10 +33,24 @@ const (
 	TypeMatchingInformation = "reading-matching-information"
 )
 
-// MockRequiredTypes is the spread a passage must carry to appear in a generated
-// mock. A generated paper promises every task type on every passage, so a
-// passage missing one is not eligible — it is not "mostly fine", it would leave
-// a learner who sat that paper untested on that type.
+// PTE reading task types.
+//
+// The two fill-in-the-blanks ids are the ones the standalone seed has always
+// used, promoted from string literals so the grader, the seed and this package
+// cannot drift apart. Both gap-fills reach scoring.gradeBlanks and both MCQ
+// types reach scoring.gradeChoice, so none of them needed a grader written.
+const (
+	TypeFillBlanksRW      = "fill-in-blanks-rw"
+	TypeFillBlanksR       = "fill-in-blanks-r"
+	TypeMCQSingle         = "reading-mcq-single"
+	TypeMCQMultiple       = "reading-mcq-multiple"
+	TypeReorderParagraphs = "reorder-paragraphs"
+)
+
+// MockRequiredTypes is every task type a generated paper covers, which is the
+// union of the three slots. It is reported to the client so the practice menu
+// can say which tasks a mock will test; eligibility is decided by PaperSlots,
+// not by this list.
 var MockRequiredTypes = []string{
 	TypeSentenceCompletion,
 	TypeTrueFalse,
@@ -48,6 +62,36 @@ var MockRequiredTypes = []string{
 
 // MockPassageCount is how many passages one generated reading paper carries.
 const MockPassageCount = 3
+
+// PaperSlot is a section of a generated paper: which task types it carries and
+// how many questions that comes to.
+type PaperSlot struct {
+	Slot      int
+	Types     []string
+	Questions int
+}
+
+// PaperSlots is the shape of an IELTS Academic Reading paper: three sections,
+// forty questions, and a different mix of task types in each.
+//
+// This is what stops a paper being three passages' worth of everything. A
+// passage is authored with all eight groups so practice can reach any type on
+// it, but a paper takes one slot from each of three passages: 13 + 13 + 14.
+var PaperSlots = []PaperSlot{
+	{Slot: 1, Types: []string{TypeSentenceCompletion, TypeTrueFalse}, Questions: 13},
+	{Slot: 2, Types: []string{TypeFindTheWriter, TypeArrangePassage, TypeYesNoNotGiven}, Questions: 13},
+	{Slot: 3, Types: []string{TypeSentenceCompletion, TypeMatchingInformation, TypeYesNoNotGiven}, Questions: 14},
+}
+
+// paperSlotOrder is the slot each dealt passage fills, by its position in the
+// paper. Passage one carries section one, and so on.
+func paperSlotOrder() []int {
+	order := make([]int, len(PaperSlots))
+	for i, s := range PaperSlots {
+		order[i] = s.Slot
+	}
+	return order
+}
 
 var (
 	// ErrBankTooSmall means the passage bank cannot fill a paper at all. It is
@@ -114,6 +158,13 @@ type PracticeParams struct {
 // questions again once the rest of the bank has been through — so nothing here
 // tracks questions, only passages.
 func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeParams) (models.ReadingSet, error) {
+	// Re-order Paragraphs is not a task on a passage, so it is not dealt like
+	// one. Its content lives in its own table and its set comes back without a
+	// passage at all.
+	if p.TypeID == TypeReorderParagraphs {
+		return s.practiceReorder(ctx, user, p.Exam)
+	}
+
 	group, err := s.repo.PickPracticeGroup(ctx, user.ID, p.Exam, p.TypeID)
 	if err != nil {
 		return models.ReadingSet{}, err
@@ -141,9 +192,57 @@ func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeP
 	}
 
 	return models.ReadingSet{
-		Passage:        passage,
+		Passage:        &passage,
 		Groups:         []models.ReadingGroup{built},
 		TotalQuestions: len(built.Questions),
+	}, nil
+}
+
+// practiceReorder deals one Re-order Paragraphs item as a set with no passage.
+//
+// The boxes are shuffled here rather than stored shuffled, so the same item
+// comes back arranged differently every time. The stored order is the answer
+// key: it has to be written down once, and this is the only place that reads it
+// without handing it over.
+func (s *Service) practiceReorder(ctx context.Context, user models.User, exam models.ExamType) (models.ReadingSet, error) {
+	item, questionID, err := s.repo.PickReorderItem(ctx, user.ID, exam)
+	if err != nil {
+		if errors.Is(err, ErrNoReorderItem) {
+			return models.ReadingSet{}, ErrNoPassage
+		}
+		return models.ReadingSet{}, err
+	}
+
+	question, err := s.questions.ByID(ctx, questionID)
+	if err != nil {
+		return models.ReadingSet{}, err
+	}
+
+	safe := question.PublicQuestion()
+	rand.Shuffle(len(safe.Options), func(i, j int) {
+		safe.Options[i], safe.Options[j] = safe.Options[j], safe.Options[i]
+	})
+
+	group := models.ReadingGroup{
+		ID:               "rg-" + item.ID,
+		Position:         1,
+		TypeID:           TypeReorderParagraphs,
+		TypeName:         "Re-order Paragraphs",
+		Instructions:     "The text boxes below have been placed in a random order. Restore the original order.",
+		PassageDisplay:   "hidden",
+		TimeLimitSeconds: question.TimeLimitSeconds,
+		Questions:        []models.Question{safe},
+	}
+
+	// Recorded after the set is built, so an item is never marked as dealt
+	// because of a request that failed before the learner saw anything.
+	if err := s.repo.RecordReorderExposure(ctx, s.db, user.ID, []string{item.ID}, ContextPractice); err != nil {
+		return models.ReadingSet{}, err
+	}
+
+	return models.ReadingSet{
+		Groups:         []models.ReadingGroup{group},
+		TotalQuestions: 1,
 	}, nil
 }
 
@@ -178,7 +277,7 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		}
 	}
 
-	candidates, err := s.repo.PickMockPassages(ctx, user.ID, exam, MockRequiredTypes, MockPassageCount)
+	candidates, err := s.repo.PickMockPassages(ctx, user.ID, exam, MockPassageCount)
 	if err != nil {
 		return models.ReadingMockSession{}, err
 	}
@@ -196,7 +295,7 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		reused = reused || c.SeenInMock
 	}
 
-	sets, err := s.buildSets(ctx, passageIDs, "")
+	sets, err := s.buildSets(ctx, passageIDs, "", paperSlotOrder())
 	if err != nil {
 		return models.ReadingMockSession{}, err
 	}
@@ -406,7 +505,7 @@ func (s *Service) SubmitMock(
 // they were dealt. The stored question list is the authority: a paper reopened
 // tomorrow is the same paper, not a freshly shuffled one.
 func (s *Service) hydrate(ctx context.Context, session Session) (models.ReadingMockSession, error) {
-	sets, err := s.buildSets(ctx, session.PassageIDs, "")
+	sets, err := s.buildSets(ctx, session.PassageIDs, "", paperSlotOrder())
 	if err != nil {
 		return models.ReadingMockSession{}, err
 	}
@@ -437,7 +536,11 @@ func (s *Service) hydrate(ctx context.Context, session Session) (models.ReadingM
 
 // buildSets loads passages and their groups and assembles them, shuffling each
 // group that allows it. An empty typeID takes every group on the passage.
-func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID string) ([]models.ReadingSet, error) {
+//
+// slots, when given, is the paper section each passage fills — slots[i] applies
+// to passageIDs[i] — and only that section's groups are built. A nil slots takes
+// every group, which is what practice and a single-passage read want.
+func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID string, slots []int) ([]models.ReadingSet, error) {
 	passages, err := s.repo.PassagesByIDs(ctx, passageIDs)
 	if err != nil {
 		return nil, err
@@ -457,8 +560,18 @@ func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID str
 		return nil, err
 	}
 
+	wantSlot := make(map[string]int, len(slots))
+	for i, slot := range slots {
+		if i < len(passageIDs) {
+			wantSlot[passageIDs[i]] = slot
+		}
+	}
+
 	built := make(map[string][]models.ReadingGroup, len(passages))
 	for _, g := range groups {
+		if slot, ok := wantSlot[g.PassageID]; ok && g.PaperSlot != slot {
+			continue
+		}
 		built[g.PassageID] = append(built[g.PassageID], buildGroup(g, byGroup[g.ID]))
 	}
 
@@ -470,7 +583,7 @@ func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID str
 		if !ok {
 			continue
 		}
-		set := models.ReadingSet{Passage: passage, Groups: built[id]}
+		set := models.ReadingSet{Passage: &passage, Groups: built[id]}
 		for _, g := range set.Groups {
 			set.TotalQuestions += len(g.Questions)
 		}

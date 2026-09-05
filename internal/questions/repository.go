@@ -23,7 +23,7 @@ const selectFields = `
 	COALESCE(image_url, ''), prep_time_seconds, time_limit_seconds,
 	COALESCE(options, '[]'::jsonb), COALESCE(correct_answers, '[]'::jsonb),
 	COALESCE(blanks, '[]'::jsonb), COALESCE(model_answer, ''), COALESCE(explanation, ''),
-	difficulty, tags, points`
+	difficulty, tags, points, COALESCE(group_id, '')`
 
 type Repository struct {
 	db database.DB
@@ -54,12 +54,16 @@ type ListParams struct {
 // learner a question with nothing to read. They are served with their passage
 // by /api/v1/reading instead.
 func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question, int, error) {
+	// A question belonging to a passage or to a re-order item is dealt by the
+	// reading module, which knows what has to be rendered alongside it. Handing
+	// one out here would strand it: a gap-fill with no text, or an ordering task
+	// with no boxes.
 	const where = `
 		WHERE is_published
 		  AND ($1 = '' OR exam = $1)
 		  AND ($2 = '' OR skill = $2)
 		  AND ($3 = '' OR type_id = $3)
-		  AND ($4 OR passage_id IS NULL)`
+		  AND ($4 OR (passage_id IS NULL AND reorder_item_id IS NULL))`
 
 	var total int
 	err := r.db.QueryRow(ctx, `SELECT count(*) FROM questions`+where,
@@ -187,6 +191,6 @@ func fieldsOf(q *models.Question) []any {
 		&q.Title, &q.Prompt, &q.ContextPassage, &q.AudioURL, &q.AudioTranscript,
 		&q.ImageURL, &q.PrepTimeSeconds, &q.TimeLimitSeconds,
 		&q.Options, &q.CorrectAnswers, &q.Blanks, &q.ModelAnswer, &q.Explanation,
-		&q.Difficulty, &q.Tags, &q.Points,
+		&q.Difficulty, &q.Tags, &q.Points, &q.GroupID,
 	}
 }

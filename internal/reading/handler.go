@@ -122,7 +122,7 @@ func (h *Handler) listPassages(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getPassage(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "passageID")
 
-	sets, err := h.svc.buildSets(r.Context(), []string{id}, r.URL.Query().Get("typeId"))
+	sets, err := h.svc.buildSets(r.Context(), []string{id}, r.URL.Query().Get("typeId"), nil)
 	if err != nil {
 		httpx.Internal(w, h.log, "reading.getPassage", err)
 		return

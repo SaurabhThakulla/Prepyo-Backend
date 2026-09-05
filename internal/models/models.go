@@ -308,9 +308,14 @@ type Question struct {
 	TimeLimitSeconds int              `json:"timeLimitSeconds"`
 	Options          []QuestionOption `json:"options,omitempty"`
 	Blanks           []Blank          `json:"blanks,omitempty"`
-	Difficulty       string           `json:"difficulty"`
-	Tags             []string         `json:"tags"`
-	Points           int              `json:"points"`
+	// GroupID is the task set this question belongs to, empty when it stands
+	// alone. Not sent to the client — it is the server's unit for metering, see
+	// billing.SubTestKeyForQuestion.
+	GroupID string `json:"-"`
+
+	Difficulty string   `json:"difficulty"`
+	Tags       []string `json:"tags"`
+	Points     int      `json:"points"`
 
 	// Answer key. Never serialised: PublicQuestion drops these before the
 	// question reaches a learner, so the browser cannot read the answers.
@@ -424,16 +429,49 @@ type ReadingGroup struct {
 	// the boxes of an ordering task, a summary with gaps in it.
 	Resources []ReadingParagraph `json:"resources,omitempty"`
 
+	// PaperSlot is which section of a generated paper this group belongs to,
+	// or 0 for a group that is not part of one.
+	PaperSlot int `json:"paperSlot,omitempty"`
+
+	// PassageDisplay tells the client whether to render the passage this group
+	// hangs from. "hidden" is for tasks whose text is a gapped rewrite of it:
+	// showing the clean original would hand over every answer.
+	PassageDisplay string `json:"passageDisplay"`
+
 	TimeLimitSeconds int        `json:"timeLimitSeconds,omitempty"`
 	Questions        []Question `json:"questions"`
 }
 
 // ReadingSet is a passage with some of its groups attached. Practice returns
-// one group; a mock returns every group on the passage.
+// one group; a mock returns the groups making up one section of the paper.
+//
+// Passage is a pointer because a set does not always have one. A task whose
+// content is the item itself rather than a view onto a text — PTE's Re-order
+// Paragraphs — is dealt as a set with groups and no passage.
 type ReadingSet struct {
-	Passage        ReadingPassage `json:"passage"`
-	Groups         []ReadingGroup `json:"groups"`
-	TotalQuestions int            `json:"totalQuestions"`
+	Passage        *ReadingPassage `json:"passage,omitempty"`
+	Groups         []ReadingGroup  `json:"groups"`
+	TotalQuestions int             `json:"totalQuestions"`
+}
+
+// ReadingReorderItem is a Re-order Paragraphs task: a set of boxes whose correct
+// sequence is the answer.
+//
+// It is not a passage and does not belong to one. The boxes are the whole of the
+// content, and there is no text to read alongside them — which is exactly why it
+// cannot be a group on a passage that would be rendered in the correct order
+// next to it.
+type ReadingReorderItem struct {
+	ID              string             `json:"id"`
+	ExamVersionID   string             `json:"examVersionId"`
+	Exam            ExamType           `json:"exam"`
+	Title           string             `json:"title"`
+	Paragraphs      []ReadingParagraph `json:"paragraphs"`
+	SourcePassageID string             `json:"sourcePassageId,omitempty"`
+	Topic           string             `json:"topic,omitempty"`
+	WordCount       int                `json:"wordCount"`
+	Difficulty      string             `json:"difficulty"`
+	Tags            []string           `json:"tags"`
 }
 
 // ReadingTaskType is one entry in the "what can I practise?" menu, carrying the
