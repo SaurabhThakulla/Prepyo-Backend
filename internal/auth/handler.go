@@ -6,7 +6,6 @@ import (
 	"net/mail"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/models"
@@ -32,8 +31,8 @@ func NewHandler(s *Service, secureCookies bool, sessionTTL time.Duration) *Handl
 // a session and are mounted behind RequireUser by the caller.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Post("/register", h.register)
-	r.Post("/login", h.login)
+	r.Post("/otp/request", h.requestOTP)
+	r.Post("/otp/verify", h.verifyOTP)
 	r.Post("/logout", h.logout)
 
 	r.Group(func(private chi.Router) {
@@ -43,84 +42,6 @@ func (h *Handler) Routes() chi.Router {
 		private.Delete("/account", h.deleteAccount)
 	})
 	return r
-}
-
-type registerRequest struct {
-	Email        string `json:"email"`
-	Password     string `json:"password"`
-	Name         string `json:"name"`
-	NepalRegion  string `json:"nepalRegion"`
-	Timezone     string `json:"timezone"`
-	ReferralCode string `json:"referralCode"`
-}
-
-func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
-	var req registerRequest
-	if !httpx.Decode(w, r, &req, h.service.log, "auth.register") {
-		return
-	}
-
-	problems := map[string]string{}
-	if !validEmail(req.Email) {
-		problems["email"] = "Enter a valid email address."
-	}
-	if utf8.RuneCountInString(req.Password) < minPasswordLength {
-		problems["password"] = "Use at least 10 characters."
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		problems["name"] = "Enter your name."
-	}
-	if len(problems) > 0 {
-		httpx.ValidationError(w, problems)
-		return
-	}
-
-	user, token, err := h.service.Register(r.Context(), RegisterParams{
-		Email:        req.Email,
-		Password:     req.Password,
-		Name:         req.Name,
-		NepalRegion:  req.NepalRegion,
-		Timezone:     req.Timezone,
-		ReferralCode: req.ReferralCode,
-	})
-	if err != nil {
-		if errors.Is(err, ErrEmailTaken) {
-			httpx.Error(w, http.StatusConflict, httpx.CodeConflict, "That email is already registered. Try signing in.")
-			return
-		}
-		httpx.Internal(w, h.service.log, "auth.register", err)
-		return
-	}
-
-	h.setSessionCookie(w, token)
-	httpx.JSON(w, http.StatusCreated, map[string]any{"user": models.NewUserProfile(user)})
-}
-
-type loginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
-	var req loginRequest
-	if !httpx.Decode(w, r, &req, h.service.log, "auth.login") {
-		return
-	}
-
-	user, token, err := h.service.Login(r.Context(), req.Email, req.Password)
-	if err != nil {
-		if errors.Is(err, ErrInvalidCredentials) {
-			// One message for both a wrong password and an unknown address, so
-			// this endpoint cannot be used to discover who has an account.
-			httpx.Error(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "Incorrect email or password.")
-			return
-		}
-		httpx.Internal(w, h.service.log, "auth.login", err)
-		return
-	}
-
-	h.setSessionCookie(w, token)
-	httpx.JSON(w, http.StatusOK, map[string]any{"user": models.NewUserProfile(user)})
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -154,13 +75,14 @@ func (h *Handler) session(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`
+		Code     string `json:"code"`
 	}
 	if !httpx.Decode(w, r, &req, h.service.log, "auth.deleteAccount") {
 		return
 	}
 
 	user := reqctx.MustUser(r.Context())
-	if err := h.service.DeleteAccount(r.Context(), user.ID, req.Password); err != nil {
+	if err := h.service.DeleteAccount(r.Context(), user.ID, req.Password, req.Code); err != nil {
 		if errors.Is(err, ErrInvalidCredentials) {
 			httpx.Error(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "Incorrect password.")
 			return
@@ -212,4 +134,84 @@ func validEmail(input string) bool {
 	// ParseAddress accepts `Name <a@b.c>`; for a signup field we want the bare
 	// address only.
 	return err == nil && parsed.Address == address
+}
+
+type otpRequest struct {
+	Phone string `json:"phone"`
+}
+
+func (h *Handler) requestOTP(w http.ResponseWriter, r *http.Request) {
+	var req otpRequest
+	if !httpx.Decode(w, r, &req, h.service.log, "auth.requestOTP") {
+		return
+	}
+
+	registered, err := h.service.RequestOTP(r.Context(), req.Phone)
+	switch {
+	case errors.Is(err, ErrInvalidPhone):
+		httpx.ValidationError(w, map[string]string{"phone": "Enter a Nepali mobile number, for example 9801234567."})
+		return
+	case errors.Is(err, ErrOTPRateLimited):
+		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached,
+			"Too many codes requested. Wait a minute and try again.")
+		return
+	case err != nil:
+		httpx.Internal(w, h.service.log, "auth.requestOTP", err)
+		return
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{"registered": registered})
+}
+
+type otpVerifyRequest struct {
+	Phone        string `json:"phone"`
+	Code         string `json:"code"`
+	Name         string `json:"name"`
+	Email        string `json:"email"`
+	ReferralCode string `json:"referralCode"`
+}
+
+func (h *Handler) verifyOTP(w http.ResponseWriter, r *http.Request) {
+	var req otpVerifyRequest
+	if !httpx.Decode(w, r, &req, h.service.log, "auth.verifyOTP") {
+		return
+	}
+
+	user, token, err := h.service.VerifyOTP(r.Context(), req.Phone, req.Code, req.Name, req.Email, req.ReferralCode)
+	switch {
+	case errors.Is(err, ErrInvalidPhone):
+		httpx.ValidationError(w, map[string]string{"phone": "Enter a Nepali mobile number, for example 9801234567."})
+		return
+	case errors.Is(err, ErrNameRequired):
+		httpx.ValidationError(w, map[string]string{"name": "Enter your name to finish creating your account."})
+		return
+	case errors.Is(err, ErrEmailRequired):
+		httpx.ValidationError(w, map[string]string{"email": "Enter your email address."})
+		return
+	case errors.Is(err, ErrEmailInvalid):
+		httpx.ValidationError(w, map[string]string{"email": "Enter a valid email address."})
+		return
+	case errors.Is(err, ErrEmailTaken):
+		httpx.ValidationError(w, map[string]string{"email": "That email is already used by another account."})
+		return
+	case errors.Is(err, ErrPhoneTaken):
+		httpx.ValidationError(w, map[string]string{"phone": "That number already has an account. Sign in instead."})
+		return
+	case errors.Is(err, ErrOTPExpired):
+		httpx.ValidationError(w, map[string]string{"code": "That code has expired. Ask for a new one."})
+		return
+	case errors.Is(err, ErrOTPInvalid):
+		httpx.ValidationError(w, map[string]string{"code": "That code is not right."})
+		return
+	case errors.Is(err, ErrOTPRateLimited):
+		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached,
+			"Too many attempts on that code. Ask for a new one.")
+		return
+	case err != nil:
+		httpx.Internal(w, h.service.log, "auth.verifyOTP", err)
+		return
+	}
+
+	h.setSessionCookie(w, token)
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": models.NewUserProfile(user)})
 }

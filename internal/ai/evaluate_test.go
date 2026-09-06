@@ -100,3 +100,31 @@ func TestParseWritingDropsInventedSentences(t *testing.T) {
 		t.Errorf("invented sentence should have been dropped, got %d entries", len(evaluation.SentenceFeedback))
 	}
 }
+
+func TestWritingUserPromptCarriesFigureData(t *testing.T) {
+	req := WritingRequest{
+		TaskName:    "Describe the figure",
+		Prompt:      "Summarise the information.",
+		FigureData:  "Line graph. Canada 2000 = 51%, 2020 = 94%.",
+		LearnerText: "The chart shows internet use rising.",
+	}
+
+	got := writingUserPrompt(req)
+	for _, want := range []string{req.Prompt, req.FigureData, req.LearnerText} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestWritingUserPromptOmitsAbsentFigureData(t *testing.T) {
+	req := WritingRequest{
+		TaskName:    "Write Essay",
+		Prompt:      "Do you agree?",
+		LearnerText: "I disagree because...",
+	}
+
+	if got := writingUserPrompt(req); strings.Contains(got, "figure") {
+		t.Errorf("essay prompt mentions a figure it does not have:\n%s", got)
+	}
+}

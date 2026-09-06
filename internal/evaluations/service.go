@@ -120,6 +120,7 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 		Exam:        question.Exam,
 		TaskName:    question.TypeName,
 		Prompt:      question.Prompt,
+		FigureData:  question.FigureData,
 		LearnerText: text,
 		MinScore:    version.MinScore,
 		MaxScore:    version.MaxScore,

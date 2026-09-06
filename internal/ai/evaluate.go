@@ -24,6 +24,10 @@ type WritingRequest struct {
 	TaskName    string
 	Prompt      string
 	LearnerText string
+	// FigureData is the data behind a chart the learner was shown as an
+	// image. Empty for every task that has no figure. Without it the model
+	// cannot tell an accurate description from an invented one.
+	FigureData string
 	// MinScore and MaxScore come from the exam version, so PTE is validated
 	// against 10-90 and IELTS against 0-9.
 	MinScore float64
@@ -279,8 +283,15 @@ func exampleScore(min, max float64) float64 {
 }
 
 func writingUserPrompt(req WritingRequest) string {
-	return fmt.Sprintf("Task: %s\n\nPrompt:\n%s\n\nLearner's response:\n%s",
-		req.TaskName, req.Prompt, req.LearnerText)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Task: %s\n\nPrompt:\n%s\n", req.TaskName, req.Prompt)
+	if figure := strings.TrimSpace(req.FigureData); figure != "" {
+		fmt.Fprintf(&b, "\nThe learner was shown this figure as an image. They could not read "+
+			"these numbers as text, so do not penalise wording that differs from it. Use it only "+
+			"to judge whether what they report is accurate:\n%s\n", figure)
+	}
+	fmt.Fprintf(&b, "\nLearner's response:\n%s", req.LearnerText)
+	return b.String()
 }
 
 // normaliseSpace collapses runs of whitespace so a quote that differs only in

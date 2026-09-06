@@ -45,6 +45,7 @@ var AllSkills = []SkillType{SkillSpeaking, SkillWriting, SkillReading, SkillList
 type User struct {
 	ID                   string
 	Email                string
+	Phone                string
 	PasswordHash         string
 	Name                 string
 	Role                 string
@@ -339,6 +340,10 @@ type Question struct {
 	CorrectAnswers []string `json:"-"`
 	ModelAnswer    string   `json:"-"`
 	Explanation    string   `json:"-"`
+
+	// FigureData describes the chart behind an image in words, for the
+	// evaluator only. The learner is shown ImageURL and never this.
+	FigureData string `json:"-"`
 }
 
 // PublicQuestion is the question as a learner sees it while answering: no
@@ -348,6 +353,7 @@ func (q Question) PublicQuestion() Question {
 	safe.CorrectAnswers = nil
 	safe.ModelAnswer = ""
 	safe.Explanation = ""
+	safe.FigureData = ""
 
 	safe.Blanks = make([]Blank, len(q.Blanks))
 	for i, b := range q.Blanks {

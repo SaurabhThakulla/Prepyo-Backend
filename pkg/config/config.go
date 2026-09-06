@@ -34,6 +34,14 @@ type Config struct {
 	AIModels         AIModels
 	AIRequestTimeout time.Duration
 
+	// Sparrow SMS delivers the login one-time codes. With no token the auth
+	// endpoints refuse to issue codes in production rather than logging them.
+	SparrowToken string
+	SparrowFrom  string
+	// AuthTestCodes maps a phone number to a fixed login code, for numbers that
+	// cannot receive an SMS. Format: "+9779800088888:123456,+9779800099999:654321".
+	AuthTestCodes map[string]string
+
 	// Issue reporting. SMTPUser doubles as the From address.
 	SMTPUser      string
 	SMTPPassword  string
@@ -99,6 +107,9 @@ func Load() (*Config, error) {
 		// Not required anywhere, including production: reporting is a
 		// convenience, and a missing app password should not stop the API from
 		// booting and serving lessons.
+		SparrowToken:  os.Getenv("SPARROW_SMS_TOKEN"),
+		SparrowFrom:   stringOr("SPARROW_SMS_FROM", "Prepyo"),
+		AuthTestCodes: parseTestCodes(os.Getenv("AUTH_TEST_CODES")),
 		SMTPUser:      os.Getenv("GMAIL_USER"),
 		SMTPPassword:  os.Getenv("GMAIL_APP_PASSWORD"),
 		ReportEmailTo: stringOr("REPORT_EMAIL_TO", "sauravthakulla683@gmail.com"),
@@ -246,4 +257,20 @@ func loadDotEnv() {
 	}
 }
 
+// SMSEnabled reports whether one-time codes can actually be delivered.
+func (c Config) SMSEnabled() bool { return c.SparrowToken != "" }
 
+// parseTestCodes reads "phone:code,phone:code". A malformed entry is skipped
+// rather than failing startup: a typo here must never widen access.
+func parseTestCodes(raw string) map[string]string {
+	out := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		phone, code, ok := strings.Cut(strings.TrimSpace(pair), ":")
+		phone, code = strings.TrimSpace(phone), strings.TrimSpace(code)
+		if !ok || phone == "" || code == "" {
+			continue
+		}
+		out[phone] = code
+	}
+	return out
+}

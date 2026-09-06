@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/referrals"
+	"github.com/prepyo/backend/internal/sms"
 	"github.com/prepyo/backend/internal/users"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -28,6 +30,9 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrEmailTaken         = users.ErrEmailTaken
+	ErrPhoneTaken         = users.ErrPhoneTaken
+	ErrEmailRequired      = errors.New("email is required for a new account")
+	ErrEmailInvalid       = errors.New("email is not valid")
 )
 
 // bcryptCost of 12 is roughly 250ms on current hardware: slow enough to make
@@ -45,9 +50,15 @@ type Service struct {
 	sessions  *sessionRepository
 	ttl       time.Duration
 	log       *slog.Logger
+
+	sms sms.Sender
+	// testCodes maps a phone number to a fixed code, for numbers that cannot
+	// receive an SMS. It comes from configuration and is empty unless set, so
+	// nothing is bypassed by default.
+	testCodes map[string]string
 }
 
-func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals ReferralsService, ttl time.Duration, log *slog.Logger) *Service {
+func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals ReferralsService, ttl time.Duration, log *slog.Logger, sender sms.Sender, testCodes map[string]string) *Service {
 	return &Service{
 		db:        db,
 		users:     userRepo,
@@ -55,103 +66,9 @@ func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals Referral
 		sessions:  &sessionRepository{db: db},
 		ttl:       ttl,
 		log:       log,
+		sms:       sender,
+		testCodes: testCodes,
 	}
-}
-
-type RegisterParams struct {
-	Email        string
-	Password     string
-	Name         string
-	NepalRegion  string
-	Timezone     string
-	ReferralCode string
-}
-
-// Register creates an account and returns it with a fresh session token.
-func (s *Service) Register(ctx context.Context, p RegisterParams) (models.User, string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(p.Password), bcryptCost)
-	if err != nil {
-		return models.User{}, "", fmt.Errorf("hash password: %w", err)
-	}
-
-	region := strings.TrimSpace(p.NepalRegion)
-	if region == "" {
-		region = "Kathmandu"
-	}
-	zone := strings.TrimSpace(p.Timezone)
-	if zone == "" {
-		zone = "Asia/Kathmandu"
-	}
-
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return models.User{}, "", fmt.Errorf("begin register tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	// Generate a unique referral code for this new user
-	myReferralCode, err := referrals.GenerateCode()
-	if err != nil {
-		return models.User{}, "", fmt.Errorf("generate referral code: %w", err)
-	}
-
-	user, err := s.users.CreateTx(ctx, tx, users.CreateParams{
-		Email:        strings.ToLower(strings.TrimSpace(p.Email)),
-		PasswordHash: string(hash),
-		Name:         strings.TrimSpace(p.Name),
-		NepalRegion:  region,
-		Timezone:     zone,
-		ReferralCode: myReferralCode,
-	})
-	if err != nil {
-		return models.User{}, "", err
-	}
-
-	// If a referral code was provided, link the pending referral
-	if s.referrals != nil && strings.TrimSpace(p.ReferralCode) != "" {
-		if _, err := s.referrals.LinkReferralOnRegister(ctx, tx, user.ID, p.ReferralCode); err != nil {
-			// If self referral or invalid code, fail registration or log
-			s.log.Warn("referral linking notice during registration", "error", err, "code", p.ReferralCode)
-			if errors.Is(err, users.ErrNotFound) || errors.Is(err, errors.New("cannot refer yourself")) {
-				return models.User{}, "", err
-			}
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return models.User{}, "", fmt.Errorf("commit register tx: %w", err)
-	}
-
-	token, err := s.startSession(ctx, user.ID)
-	if err != nil {
-		return models.User{}, "", err
-	}
-	return user, token, nil
-}
-
-// Login verifies a password and starts a session.
-func (s *Service) Login(ctx context.Context, email, password string) (models.User, string, error) {
-	user, err := s.users.ByEmail(ctx, strings.TrimSpace(email))
-	if err != nil {
-		if errors.Is(err, users.ErrNotFound) {
-			// Hash anyway so a missing account and a wrong password take about
-			// the same time. Otherwise response timing reveals which emails
-			// are registered.
-			_, _ = bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
-			return models.User{}, "", ErrInvalidCredentials
-		}
-		return models.User{}, "", err
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return models.User{}, "", ErrInvalidCredentials
-	}
-
-	token, err := s.startSession(ctx, user.ID)
-	if err != nil {
-		return models.User{}, "", err
-	}
-	return user, token, nil
 }
 
 // Authenticate resolves a session token to its user.
@@ -184,15 +101,48 @@ func (s *Service) LogoutEverywhere(ctx context.Context, userID string) error {
 }
 
 // DeleteAccount removes the user and, by cascade, all of their data.
-func (s *Service) DeleteAccount(ctx context.Context, userID, password string) error {
+// DeleteAccount confirms the request before destroying anything. An account
+// created by phone has no password to check, so it confirms with a fresh code
+// sent to that number instead.
+func (s *Service) DeleteAccount(ctx context.Context, userID, password, code string) error {
 	user, err := s.users.ByID(ctx, userID)
 	if err != nil {
 		return err
 	}
+
+	if user.PasswordHash == "" {
+		if user.Phone == "" {
+			return ErrInvalidCredentials
+		}
+		if err := s.checkOTP(ctx, user.Phone, code); err != nil {
+			return err
+		}
+		return s.users.Delete(ctx, userID)
+	}
+
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return ErrInvalidCredentials
 	}
 	return s.users.Delete(ctx, userID)
+}
+
+// checkOTP validates and burns the newest unconsumed code for a number.
+func (s *Service) checkOTP(ctx context.Context, phone, code string) error {
+	pending, err := s.latestOTP(ctx, phone)
+	if err != nil {
+		return ErrOTPInvalid
+	}
+	if pending.attempts >= otpMaxAttempts {
+		return ErrOTPRateLimited
+	}
+	if time.Now().After(pending.expiresAt) {
+		return ErrOTPExpired
+	}
+	if !constantTimeEqual(pending.codeHash, hashOTP(phone, strings.TrimSpace(code))) {
+		s.recordOTPAttempt(ctx, pending.id)
+		return ErrOTPInvalid
+	}
+	return s.consumeOTP(ctx, pending.id)
 }
 
 // PurgeExpiredSessions is run periodically by the background cleaner in main.
@@ -235,4 +185,138 @@ func newToken() (string, error) {
 func hashToken(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]
+}
+
+// RequestOTP issues a code for a phone number and sends it.
+//
+// It reports whether the number already has an account, which is what lets the
+// sign-in screen ask a first-time user for their name without a second round
+// trip.
+func (s *Service) RequestOTP(ctx context.Context, rawPhone string) (bool, error) {
+	phone, err := NormalisePhone(rawPhone)
+	if err != nil {
+		return false, err
+	}
+
+	count, sinceLast, err := s.recentOTPCount(ctx, phone)
+	if err != nil {
+		return false, err
+	}
+	if count >= otpMaxPerHour || sinceLast < otpMinInterval {
+		return false, ErrOTPRateLimited
+	}
+
+	registered := true
+	if _, err := s.users.ByPhone(ctx, phone); err != nil {
+		if !errors.Is(err, users.ErrNotFound) {
+			return false, err
+		}
+		registered = false
+	}
+
+	code, ok := s.testCodes[phone]
+	if !ok {
+		code, err = newOTPCode()
+		if err != nil {
+			return false, err
+		}
+	}
+
+	if err := s.storeOTP(ctx, phone, hashOTP(phone, code), time.Now().Add(otpTTL)); err != nil {
+		return false, err
+	}
+
+	// A test number has a code the holder already knows, so there is nothing to
+	// deliver and no reason to spend a message on it.
+	if ok {
+		return registered, nil
+	}
+
+	if err := s.sms.Send(ctx, phone, otpMessage(code)); err != nil {
+		return false, fmt.Errorf("send otp: %w", err)
+	}
+	return registered, nil
+}
+
+// VerifyOTP checks a code and returns the account it belongs to, creating one
+// on first use. Name is required only when the number is new.
+func (s *Service) VerifyOTP(ctx context.Context, rawPhone, code, name, email, referralCode string) (models.User, string, error) {
+	phone, err := NormalisePhone(rawPhone)
+	if err != nil {
+		return models.User{}, "", err
+	}
+
+	// Whether the account exists decides whether a name is required, and that
+	// has to be settled before the code is checked: checkOTP burns the code, so
+	// asking for a name afterwards would cost the learner a fresh SMS.
+	user, lookupErr := s.users.ByPhone(ctx, phone)
+	if lookupErr != nil && !errors.Is(lookupErr, users.ErrNotFound) {
+		return models.User{}, "", lookupErr
+	}
+	isNew := errors.Is(lookupErr, users.ErrNotFound)
+	if isNew {
+		if strings.TrimSpace(name) == "" {
+			return models.User{}, "", ErrNameRequired
+		}
+		if strings.TrimSpace(email) == "" {
+			return models.User{}, "", ErrEmailRequired
+		}
+		if _, err := mail.ParseAddress(strings.TrimSpace(email)); err != nil {
+			return models.User{}, "", ErrEmailInvalid
+		}
+	}
+
+	if err := s.checkOTP(ctx, phone, code); err != nil {
+		return models.User{}, "", err
+	}
+
+	if !isNew {
+		token, err := s.startSession(ctx, user.ID)
+		if err != nil {
+			return models.User{}, "", err
+		}
+		return user, token, nil
+	}
+	return s.registerByPhone(ctx, phone, strings.TrimSpace(name), strings.TrimSpace(email), referralCode)
+}
+
+func (s *Service) registerByPhone(ctx context.Context, phone, name, email, referralCode string) (models.User, string, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return models.User{}, "", fmt.Errorf("begin phone register tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	myReferralCode, err := referrals.GenerateCode()
+	if err != nil {
+		return models.User{}, "", fmt.Errorf("generate referral code: %w", err)
+	}
+
+	user, err := s.users.CreateTx(ctx, tx, users.CreateParams{
+		Phone:        phone,
+		Email:        strings.ToLower(email),
+		Name:         name,
+		NepalRegion:  "Kathmandu",
+		Timezone:     "Asia/Kathmandu",
+		ReferralCode: myReferralCode,
+	})
+	if err != nil {
+		return models.User{}, "", err
+	}
+
+	if s.referrals != nil && strings.TrimSpace(referralCode) != "" {
+		if _, err := s.referrals.LinkReferralOnRegister(ctx, tx, user.ID, referralCode); err != nil {
+			s.log.Warn("referral linking notice during phone registration", "error", err, "code", referralCode)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.User{}, "", fmt.Errorf("commit phone register tx: %w", err)
+	}
+
+	token, err := s.startSession(ctx, user.ID)
+	if err != nil {
+		return models.User{}, "", err
+	}
+	return user, token, nil
 }

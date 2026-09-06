@@ -30,6 +30,7 @@ import (
 	"github.com/prepyo/backend/internal/reading"
 	"github.com/prepyo/backend/internal/referrals"
 	"github.com/prepyo/backend/internal/report"
+	"github.com/prepyo/backend/internal/sms"
 	"github.com/prepyo/backend/internal/users"
 	"github.com/prepyo/backend/internal/web"
 	"github.com/prepyo/backend/pkg/config"
@@ -83,7 +84,8 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	// Services.
 	xpService := gamification.NewService()
 	referralService := referrals.NewService(pool, referralRepo, xpService, notificationRepo, cfg.WebAppURL, log)
-	authService := auth.NewService(pool, userRepo, referralService, cfg.SessionTTL, log)
+	authService := auth.NewService(pool, userRepo, referralService, cfg.SessionTTL, log,
+		newSMSSender(cfg, log), cfg.AuthTestCodes)
 	billingService := billing.NewService(planRepo, notificationRepo)
 	progressService := progress.NewService(examRepo)
 	gateway := ai.NewGateway(cfg, log)
@@ -272,12 +274,28 @@ func (a *app) cleanExpiredSessions(ctx context.Context) {
 	defer ticker.Stop()
 
 	a.authService.PurgeExpiredSessions(ctx)
+	a.authService.PurgeExpiredOTPs(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			a.authService.PurgeExpiredSessions(ctx)
+			a.authService.PurgeExpiredOTPs(ctx)
 		}
 	}
+}
+
+// newSMSSender picks the delivery route for login codes. Outside production a
+// missing Sparrow token falls back to logging the code, so the flow can be run
+// locally; in production it does not, because a code written to a log reaches
+// nobody and would lock every learner out silently.
+func newSMSSender(cfg *config.Config, log *slog.Logger) sms.Sender {
+	if cfg.SMSEnabled() {
+		return sms.NewSparrow(cfg.SparrowToken, cfg.SparrowFrom)
+	}
+	if cfg.Env == "production" {
+		log.Error("SPARROW_SMS_TOKEN is not set: login codes cannot be delivered")
+	}
+	return sms.LogSender{Log: log}
 }
