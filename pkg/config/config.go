@@ -47,9 +47,11 @@ type Config struct {
 
 	GoogleClientID string
 
-	// AdminEmail / AdminPassword back the one password login the product has:
-	// POST /auth/admin-login for the operations account. Learner accounts are
-	// Google-only and no password is ever stored for them.
+	// AdminEmail / AdminPassword override the operations account's built-in
+	// credentials for POST /auth/admin-login, the one password login the
+	// product has. Both may be empty: the binary carries a default so a fresh
+	// deploy can reach the admin area with no configuration. Learner accounts
+	// are Google-only and no password is ever stored for them.
 	AdminEmail    string
 	AdminPassword string
 
@@ -70,10 +72,11 @@ type Config struct {
 // nowhere.
 func (c Config) ReportingEnabled() bool { return c.SMTPUser != "" && c.SMTPPassword != "" }
 
-// AdminLoginEnabled reports whether the admin password endpoint has a
-// credential to check against. When false it returns 503 rather than comparing
-// against an empty password and letting anyone in.
-func (c Config) AdminLoginEnabled() bool { return c.AdminEmail != "" && c.AdminPassword != "" }
+// AdminPasswordOverridden reports whether ADMIN_PASSWORD replaces the password
+// built into the binary. When false the admin login still works — the built-in
+// credential is used — but that password is readable by anyone with the source,
+// so production is expected to override it.
+func (c Config) AdminPasswordOverridden() bool { return c.AdminPassword != "" }
 
 // AIModels is the routing table the AI gateway uses. Model names are
 // configuration, never constants in the calling code, so a model can be

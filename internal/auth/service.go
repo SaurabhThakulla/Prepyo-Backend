@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -42,10 +41,10 @@ type Service struct {
 	log       *slog.Logger
 	google    *GoogleVerifier
 
-	// The operations account's credential, held in memory from the
-	// environment. No password is stored in the database for anyone.
-	adminEmail    string
-	adminPassword string
+	// The operations account's credential: an environment override when one is
+	// set, otherwise the credentials built into the binary. No password is
+	// stored in the database for anyone.
+	admin adminCredentials
 }
 
 func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals ReferralsService, ttl time.Duration, log *slog.Logger, google *GoogleVerifier, adminEmail, adminPassword string) *Service {
@@ -57,15 +56,20 @@ func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals Referral
 		ttl:           ttl,
 		log:           log,
 		google:        google,
-		adminEmail:    strings.ToLower(strings.TrimSpace(adminEmail)),
-		adminPassword: adminPassword,
+		admin:         newAdminCredentials(adminEmail, adminPassword),
 	}
 }
 
 // AdminLoginConfigured reports whether SignInAsAdmin has a credential to check.
-func (s *Service) AdminLoginConfigured() bool {
-	return s.adminEmail != "" && s.adminPassword != ""
-}
+// It is always true in practice: the binary carries a built-in credential so a
+// fresh deploy can reach the admin area with no configuration.
+func (s *Service) AdminLoginConfigured() bool { return s.admin.configured() }
+
+// AdminUsesBuiltInPassword reports whether the login is running on the password
+// compiled into the binary rather than an ADMIN_PASSWORD override. cmd/api
+// warns about this at boot in production, where the built-in one is readable by
+// anyone with the source.
+func (s *Service) AdminUsesBuiltInPassword() bool { return s.admin.usesBuiltIn() }
 
 // SignInAsAdmin exchanges the operations account's email and password for a
 // session. It is the only password login in the product: every learner account
@@ -76,23 +80,17 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 		return models.User{}, "", ErrAdminLoginNotConfigured
 	}
 
-	email = strings.ToLower(strings.TrimSpace(email))
-
-	// Both halves are compared in constant time and combined without a short
-	// circuit, so response timing does not leak which one matched.
-	emailOK := subtle.ConstantTimeCompare([]byte(email), []byte(s.adminEmail))
-	passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(s.adminPassword))
-	if emailOK&passwordOK != 1 {
+	if !s.admin.matches(email, password) {
 		return models.User{}, "", ErrAdminCredentials
 	}
 
-	user, err := s.users.ByEmail(ctx, s.adminEmail)
+	user, err := s.users.ByEmail(ctx, s.admin.email)
 	if err != nil {
 		if errors.Is(err, users.ErrNotFound) {
 			// The credential is right but the seeded row is gone, so this is a
 			// deployment problem rather than a bad guess. The caller still gets
 			// the generic error.
-			s.log.Error("admin login: no user row for the configured admin email", "email", s.adminEmail)
+			s.log.Error("admin login: no user row for the configured admin email", "email", s.admin.email)
 			return models.User{}, "", ErrAdminCredentials
 		}
 		return models.User{}, "", err
@@ -101,7 +99,7 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 	// The role lives in the database, so revoking admin there revokes this
 	// login too, whatever the environment still says.
 	if !user.IsAdmin() {
-		s.log.Error("admin login: configured admin account does not have the admin role", "email", s.adminEmail)
+		s.log.Error("admin login: configured admin account does not have the admin role", "email", s.admin.email)
 		return models.User{}, "", ErrAdminCredentials
 	}
 
