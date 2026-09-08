@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -20,6 +21,12 @@ import (
 
 var (
 	ErrEmailTaken = users.ErrEmailTaken
+
+	ErrAdminLoginNotConfigured = errors.New("admin password login is not configured")
+	// ErrAdminCredentials covers a wrong email, a wrong password and an account
+	// that is not an admin. They are one error on purpose: the response must not
+	// tell a guesser which half they got right.
+	ErrAdminCredentials = errors.New("admin credentials are not valid")
 )
 
 type ReferralsService interface {
@@ -34,18 +41,75 @@ type Service struct {
 	ttl       time.Duration
 	log       *slog.Logger
 	google    *GoogleVerifier
+
+	// The operations account's credential, held in memory from the
+	// environment. No password is stored in the database for anyone.
+	adminEmail    string
+	adminPassword string
 }
 
-func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals ReferralsService, ttl time.Duration, log *slog.Logger, google *GoogleVerifier) *Service {
+func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals ReferralsService, ttl time.Duration, log *slog.Logger, google *GoogleVerifier, adminEmail, adminPassword string) *Service {
 	return &Service{
-		db:        db,
-		users:     userRepo,
-		referrals: referrals,
-		sessions:  &sessionRepository{db: db},
-		ttl:       ttl,
-		log:       log,
-		google:    google,
+		db:            db,
+		users:         userRepo,
+		referrals:     referrals,
+		sessions:      &sessionRepository{db: db},
+		ttl:           ttl,
+		log:           log,
+		google:        google,
+		adminEmail:    strings.ToLower(strings.TrimSpace(adminEmail)),
+		adminPassword: adminPassword,
 	}
+}
+
+// AdminLoginConfigured reports whether SignInAsAdmin has a credential to check.
+func (s *Service) AdminLoginConfigured() bool {
+	return s.adminEmail != "" && s.adminPassword != ""
+}
+
+// SignInAsAdmin exchanges the operations account's email and password for a
+// session. It is the only password login in the product: every learner account
+// signs in with Google, and this one exists because admin@prepyo.online has no
+// Google account behind it.
+func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (models.User, string, error) {
+	if !s.AdminLoginConfigured() {
+		return models.User{}, "", ErrAdminLoginNotConfigured
+	}
+
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	// Both halves are compared in constant time and combined without a short
+	// circuit, so response timing does not leak which one matched.
+	emailOK := subtle.ConstantTimeCompare([]byte(email), []byte(s.adminEmail))
+	passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(s.adminPassword))
+	if emailOK&passwordOK != 1 {
+		return models.User{}, "", ErrAdminCredentials
+	}
+
+	user, err := s.users.ByEmail(ctx, s.adminEmail)
+	if err != nil {
+		if errors.Is(err, users.ErrNotFound) {
+			// The credential is right but the seeded row is gone, so this is a
+			// deployment problem rather than a bad guess. The caller still gets
+			// the generic error.
+			s.log.Error("admin login: no user row for the configured admin email", "email", s.adminEmail)
+			return models.User{}, "", ErrAdminCredentials
+		}
+		return models.User{}, "", err
+	}
+
+	// The role lives in the database, so revoking admin there revokes this
+	// login too, whatever the environment still says.
+	if !user.IsAdmin() {
+		s.log.Error("admin login: configured admin account does not have the admin role", "email", s.adminEmail)
+		return models.User{}, "", ErrAdminCredentials
+	}
+
+	token, err := s.startSession(ctx, user.ID)
+	if err != nil {
+		return models.User{}, "", err
+	}
+	return user, token, nil
 }
 
 // Authenticate resolves a session token to its user.

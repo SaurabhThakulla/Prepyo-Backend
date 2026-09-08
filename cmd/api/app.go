@@ -84,7 +84,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	xpService := gamification.NewService()
 	referralService := referrals.NewService(pool, referralRepo, xpService, notificationRepo, cfg.WebAppURL, log)
 	authService := auth.NewService(pool, userRepo, referralService, cfg.SessionTTL, log,
-		auth.NewGoogleVerifier(cfg.GoogleClientID))
+		auth.NewGoogleVerifier(cfg.GoogleClientID), cfg.AdminEmail, cfg.AdminPassword)
 	billingService := billing.NewService(planRepo, notificationRepo)
 	progressService := progress.NewService(examRepo)
 	gateway := ai.NewGateway(cfg, log)

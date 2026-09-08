@@ -34,14 +34,26 @@ func run() error {
 		return err
 	}
 	log := logger.New(cfg.Env)
-	log.Info("starting prepyo api", "env", cfg.Env, "port", cfg.Port, "aiEnabled", cfg.AIEnabled())
+	log.Info("starting prepyo api", "env", cfg.Env, "port", cfg.Port,
+		"aiEnabled", cfg.AIEnabled(), "aiBaseURL", cfg.AIBaseURL,
+		"writingModel", cfg.AIModels.Writing, "speakingModel", cfg.AIModels.Speaking)
 
 	if !cfg.AIEnabled() {
-		log.Warn("OPENROUTER_API_KEY is not set: evaluation and tutor endpoints will return 503")
+		log.Warn("AI_API_KEY is not set: evaluation and tutor endpoints will return 503")
+	}
+
+	// Speaking runs on its own provider because the text one has no model that
+	// accepts audio, so it can be missing while everything else works.
+	if !cfg.SpeakingEnabled() {
+		log.Warn("AI_AUDIO_API_KEY is not set: speaking evaluation will return 503, other AI endpoints are unaffected")
 	}
 
 	if !cfg.GoogleSignInEnabled() {
 		log.Warn("GOOGLE_CLIENT_ID is not set: POST /auth/google returns 503 and nobody can sign in")
+	}
+
+	if !cfg.AdminLoginEnabled() {
+		log.Warn("ADMIN_PASSWORD is not set: POST /auth/admin-login returns 503 and the admin area is unreachable")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

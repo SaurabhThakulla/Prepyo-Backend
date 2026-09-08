@@ -66,7 +66,7 @@ func (g *Gateway) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (mo
 	var usage Usage
 
 	for attempt := 1; attempt <= maxValidationAttempts; attempt++ {
-		raw, attemptUsage, err := g.complete(ctx, g.models.Speaking, SpeakingPromptVersion, messages, true)
+		raw, attemptUsage, err := g.complete(ctx, g.audio, g.models.Speaking, SpeakingPromptVersion, messages, true)
 		usage.add(attemptUsage)
 		if err != nil {
 			return models.Evaluation{}, Usage{}, err

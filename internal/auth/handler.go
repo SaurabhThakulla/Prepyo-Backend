@@ -26,6 +26,7 @@ func NewHandler(s *Service, secureCookies bool, sessionTTL time.Duration) *Handl
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/google", h.googleSignIn)
+	r.Post("/admin-login", h.adminSignIn)
 	r.Post("/logout", h.logout)
 
 	r.Group(func(private chi.Router) {
@@ -104,6 +105,39 @@ func (h *Handler) clearSessionCookie(w http.ResponseWriter) {
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 	})
+}
+
+type adminSignInRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// adminSignIn is the product's only password login, for the operations account
+// that has no Google account behind it. It sits in the public group alongside
+// /google and inherits its 10-per-minute rate limit.
+func (h *Handler) adminSignIn(w http.ResponseWriter, r *http.Request) {
+	var req adminSignInRequest
+	if !httpx.Decode(w, r, &req, h.service.log, "auth.adminSignIn") {
+		return
+	}
+
+	user, token, err := h.service.SignInAsAdmin(r.Context(), req.Email, req.Password)
+	switch {
+	case errors.Is(err, ErrAdminLoginNotConfigured):
+		httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeNotConfigured,
+			"Admin sign-in is not available on this deployment.")
+		return
+	case errors.Is(err, ErrAdminCredentials):
+		httpx.Error(w, http.StatusUnauthorized, httpx.CodeUnauthorized,
+			"That email and password do not match an admin account.")
+		return
+	case err != nil:
+		httpx.Internal(w, h.service.log, "auth.adminSignIn", err)
+		return
+	}
+
+	h.setSessionCookie(w, token)
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": models.NewUserProfile(user)})
 }
 
 type googleSignInRequest struct {

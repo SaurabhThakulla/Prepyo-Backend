@@ -18,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/prepyo/backend/pkg/config"
@@ -47,32 +48,59 @@ func retryable(status int) bool {
 	}
 }
 
-const (
-	openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
-	// maxAttempts covers one retry. Evaluations run while a learner waits, so
-	// a long retry chain is worse than failing quickly.
-	maxAttempts = 2
-)
+// maxAttempts covers one retry. Evaluations run while a learner waits, so a
+// long retry chain is worse than failing quickly.
+const maxAttempts = 2
+
+// provider is one OpenAI-compatible endpoint. The product uses two: a primary
+// one for text, and an audio-capable one for speaking, because no single
+// provider currently serves both.
+type provider struct {
+	name    string
+	baseURL string
+	apiKey  string
+}
+
+func (p provider) configured() bool { return p.apiKey != "" && p.baseURL != "" }
+
+func (p provider) completionsURL() string { return p.baseURL + "/chat/completions" }
+
+// newProvider names a provider by its host, which is what usage rows are
+// grouped by when reporting spend.
+func newProvider(baseURL, apiKey string) provider {
+	name := baseURL
+	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
+		name = u.Host
+	}
+	return provider{name: name, baseURL: baseURL, apiKey: apiKey}
+}
 
 type Gateway struct {
-	client  *http.Client
-	apiKey  string
-	models  config.AIModels
-	enabled bool
-	log     *slog.Logger
+	client    *http.Client
+	text      provider
+	audio     provider
+	models    config.AIModels
+	maxTokens int
+	log       *slog.Logger
 }
 
 func NewGateway(cfg *config.Config, log *slog.Logger) *Gateway {
 	return &Gateway{
-		client:  &http.Client{Timeout: cfg.AIRequestTimeout},
-		apiKey:  cfg.OpenRouterAPIKey,
-		models:  cfg.AIModels,
-		enabled: cfg.AIEnabled(),
-		log:     log,
+		client: &http.Client{Timeout: cfg.AIRequestTimeout},
+		text:   newProvider(cfg.AIBaseURL, cfg.AIAPIKey),
+		audio:  newProvider(cfg.AIAudioBaseURL, cfg.AIAudioAPIKey),
+		models:    cfg.AIModels,
+		maxTokens: cfg.AIMaxTokens,
+		log:       log,
 	}
 }
 
-func (g *Gateway) Available() bool { return g.enabled }
+// Available reports whether text evaluation and tutoring can run.
+func (g *Gateway) Available() bool { return g.text.configured() }
+
+// SpeakingAvailable reports whether the audio provider is configured. Speaking
+// can be unavailable while everything else works.
+func (g *Gateway) SpeakingAvailable() bool { return g.audio.configured() }
 
 // Usage is what one provider call cost. Token counts come from the provider
 // response, never from an estimate, so cost reporting reflects reality.
@@ -85,8 +113,9 @@ type Usage struct {
 	LatencyMS        int
 }
 
-// chatRequest is the OpenRouter payload. Kept unexported: no other package
-// should be able to construct a raw model call.
+// chatRequest is the OpenAI-compatible payload every supported provider takes.
+// Kept unexported: no other package should be able to construct a raw model
+// call.
 type chatRequest struct {
 	Model          string        `json:"model"`
 	Messages       []chatMessage `json:"messages"`
@@ -110,7 +139,7 @@ type contentPart struct {
 	Audio *audioInput `json:"input_audio,omitempty"`
 }
 
-// audioInput carries a recording inline. OpenRouter accepts base64 audio in
+// audioInput carries a recording inline. Providers accept base64 audio in
 // "wav" or "mp3" only, so callers convert before they get here.
 type audioInput struct {
 	Data   string `json:"data"`
@@ -138,8 +167,8 @@ type chatResponse struct {
 }
 
 // complete sends one chat request and returns the assistant text plus usage.
-func (g *Gateway) complete(ctx context.Context, model, promptVersion string, messages []chatMessage, wantJSON bool) (string, Usage, error) {
-	if !g.enabled {
+func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion string, messages []chatMessage, wantJSON bool) (string, Usage, error) {
+	if !p.configured() {
 		return "", Usage{}, ErrUnavailable
 	}
 
@@ -149,7 +178,7 @@ func (g *Gateway) complete(ctx context.Context, model, promptVersion string, mes
 		// Low temperature: evaluation should be as repeatable as the provider
 		// allows, so two learners with similar work get similar feedback.
 		Temperature: 0.2,
-		MaxTokens:   2000,
+		MaxTokens:   g.maxTokens,
 	}
 	if wantJSON {
 		payload.ResponseFormat = &responseFmt{Type: "json_object"}
@@ -163,7 +192,7 @@ func (g *Gateway) complete(ctx context.Context, model, promptVersion string, mes
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		started := time.Now()
-		text, usage, err := g.send(ctx, body, model, promptVersion, started)
+		text, usage, err := g.send(ctx, p, body, model, promptVersion, started)
 		if err == nil {
 			return text, usage, nil
 		}
@@ -187,13 +216,13 @@ func (g *Gateway) complete(ctx context.Context, model, promptVersion string, mes
 	return "", Usage{}, ErrUnavailable
 }
 
-func (g *Gateway) send(ctx context.Context, body []byte, model, promptVersion string, started time.Time) (string, Usage, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openRouterURL, bytes.NewReader(body))
+func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, promptVersion string, started time.Time) (string, Usage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.completionsURL(), bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
 	res, err := g.client.Do(req)
 	if err != nil {
@@ -240,7 +269,7 @@ func (g *Gateway) send(ctx context.Context, body []byte, model, promptVersion st
 	}
 
 	usage := Usage{
-		Provider:         "openrouter",
+		Provider:         p.name,
 		Model:            model,
 		PromptVersion:    promptVersion,
 		PromptTokens:     parsed.Usage.PromptTokens,

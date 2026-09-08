@@ -80,7 +80,7 @@ func (g *Gateway) EvaluateWriting(ctx context.Context, req WritingRequest) (mode
 	var usage Usage
 
 	for attempt := 1; attempt <= maxValidationAttempts; attempt++ {
-		raw, attemptUsage, err := g.complete(ctx, g.models.Writing, WritingPromptVersion, messages, true)
+		raw, attemptUsage, err := g.complete(ctx, g.text, g.models.Writing, WritingPromptVersion, messages, true)
 		usage.add(attemptUsage)
 		if err != nil {
 			return models.Evaluation{}, Usage{}, err

@@ -30,11 +30,28 @@ type Config struct {
 	// SecureCookies must be true anywhere the app is served over HTTPS.
 	SecureCookies bool
 
-	OpenRouterAPIKey string
+	// AI providers. Everything text runs on the primary provider. Speaking
+	// sends a recording, and the primary provider has no model that accepts
+	// audio input, so it keeps a separate endpoint and key.
+	AIBaseURL      string
+	AIAPIKey       string
+	AIAudioBaseURL string
+	AIAudioAPIKey  string
+
 	AIModels         AIModels
 	AIRequestTimeout time.Duration
+	// AIMaxTokens caps one completion. Reasoning models spend part of this
+	// budget thinking before they emit any JSON, so it needs far more headroom
+	// than the visible answer suggests.
+	AIMaxTokens int
 
 	GoogleClientID string
+
+	// AdminEmail / AdminPassword back the one password login the product has:
+	// POST /auth/admin-login for the operations account. Learner accounts are
+	// Google-only and no password is ever stored for them.
+	AdminEmail    string
+	AdminPassword string
 
 	// Issue reporting. SMTPUser doubles as the From address.
 	SMTPUser      string
@@ -53,6 +70,11 @@ type Config struct {
 // nowhere.
 func (c Config) ReportingEnabled() bool { return c.SMTPUser != "" && c.SMTPPassword != "" }
 
+// AdminLoginEnabled reports whether the admin password endpoint has a
+// credential to check against. When false it returns 503 rather than comparing
+// against an empty password and letting anyone in.
+func (c Config) AdminLoginEnabled() bool { return c.AdminEmail != "" && c.AdminPassword != "" }
+
 // AIModels is the routing table the AI gateway uses. Model names are
 // configuration, never constants in the calling code, so a model can be
 // swapped without a redeploy of business logic.
@@ -67,7 +89,12 @@ func (c Config) IsProduction() bool { return c.Env == "production" }
 // AIEnabled reports whether the gateway has what it needs to reach a provider.
 // When false the AI endpoints return a clear "unavailable" error instead of
 // inventing a score.
-func (c Config) AIEnabled() bool { return c.OpenRouterAPIKey != "" }
+func (c Config) AIEnabled() bool { return c.AIAPIKey != "" }
+
+// SpeakingEnabled reports whether the audio provider is configured. Speaking is
+// the one capability the primary provider cannot serve, so it can be off while
+// writing and tutoring work.
+func (c Config) SpeakingEnabled() bool { return c.AIAudioAPIKey != "" }
 
 func Load() (*Config, error) {
 	loadDotEnv()
@@ -85,16 +112,25 @@ func Load() (*Config, error) {
 		Port:             stringOr("PORT", "8080"),
 		AllowedOrigins:   listOr("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
 		WebAppURL:        stringOr("WEB_APP_URL", "http://localhost:3000"),
-		RedisURL:         os.Getenv("REDIS_URL"),
-		OpenRouterAPIKey: os.Getenv("OPENROUTER_API_KEY"),
+		RedisURL: os.Getenv("REDIS_URL"),
+
+		AIBaseURL: strings.TrimRight(stringOr("AI_BASE_URL", "https://codecraftapi.com/v1"), "/"),
+		// CODE_CRAFT is accepted as an alias so an environment written against
+		// the provider's own naming keeps working.
+		AIAPIKey: firstOf("AI_API_KEY", "CODE_CRAFT"),
+
+		AIAudioBaseURL: strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", "https://openrouter.ai/api/v1"), "/"),
+		AIAudioAPIKey:  firstOf("AI_AUDIO_API_KEY", "OPENROUTER_API_KEY"),
+
 		AIModels: AIModels{
-			Writing: stringOr("AI_MODEL_WRITING", "deepseek/deepseek-chat"),
+			Writing: stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"),
 			// Speaking sends a recording, so this one must be a model that
-			// accepts audio input. A text-only model here does not degrade
-			// gracefully: it rejects the request and every speaking submission
-			// comes back as "evaluation unavailable".
+			// accepts audio input, and it is answered by the audio provider.
+			// A text-only model here does not degrade gracefully: it rejects
+			// the request and every speaking submission comes back as
+			// "evaluation unavailable".
 			Speaking: stringOr("AI_MODEL_SPEAKING", "google/gemini-2.5-flash"),
-			Tutoring: stringOr("AI_MODEL_TUTORING", "deepseek/deepseek-chat"),
+			Tutoring: stringOr("AI_MODEL_TUTORING", "gpt-5.6-luna"),
 		},
 		SecureCookies: boolOr("SECURE_COOKIES", isProd),
 
@@ -102,6 +138,9 @@ func Load() (*Config, error) {
 		// convenience, and a missing app password should not stop the API from
 		// booting and serving lessons.
 		GoogleClientID: strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
+
+		AdminEmail:    strings.ToLower(stringOr("ADMIN_EMAIL", "admin@prepyo.online")),
+		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
 
 		SMTPUser:      os.Getenv("GMAIL_USER"),
 		SMTPPassword:  os.Getenv("GMAIL_APP_PASSWORD"),
@@ -150,9 +189,21 @@ func Load() (*Config, error) {
 	}
 	cfg.AIRequestTimeout = timeout
 
+	maxTokens, err := intOr("AI_MAX_TOKENS", 8000)
+	if err != nil {
+		problems = append(problems, "AI_MAX_TOKENS "+err.Error())
+	}
+	cfg.AIMaxTokens = maxTokens
+
+	// A short admin password is worse than none: the endpoint is public and the
+	// account it opens can read every metric.
+	if cfg.AdminPassword != "" && len(cfg.AdminPassword) < 12 {
+		problems = append(problems, "ADMIN_PASSWORD must be at least 12 characters")
+	}
+
 	if isProd {
-		if cfg.OpenRouterAPIKey == "" {
-			problems = append(problems, "OPENROUTER_API_KEY is required in production")
+		if cfg.AIAPIKey == "" {
+			problems = append(problems, "AI_API_KEY is required in production")
 		}
 		if cfg.GoogleClientID == "" {
 			problems = append(problems, "GOOGLE_CLIENT_ID is required in production")
@@ -169,6 +220,17 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration:\n  - %s", strings.Join(problems, "\n  - "))
 	}
 	return cfg, nil
+}
+
+// firstOf returns the first of these environment variables that has a value,
+// so a renamed setting can keep honouring the old name.
+func firstOf(keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func stringOr(key, fallback string) string {
@@ -193,6 +255,21 @@ func listOr(key string, fallback []string) []string {
 		return fallback
 	}
 	return out
+}
+
+func intOr(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback, errors.New("must be a whole number")
+	}
+	if v <= 0 {
+		return fallback, errors.New("must be greater than zero")
+	}
+	return v, nil
 }
 
 func boolOr(key string, fallback bool) bool {

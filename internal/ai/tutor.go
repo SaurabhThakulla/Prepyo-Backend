@@ -48,7 +48,7 @@ func (g *Gateway) Tutor(ctx context.Context, req TutorRequest) (string, Usage, e
 		messages = append(messages, chatMessage{Role: role, Content: m.Content})
 	}
 
-	reply, usage, err := g.complete(ctx, g.models.Tutoring, TutorPromptVersion, messages, false)
+	reply, usage, err := g.complete(ctx, g.text, g.models.Tutoring, TutorPromptVersion, messages, false)
 	if err != nil {
 		return "", Usage{}, err
 	}

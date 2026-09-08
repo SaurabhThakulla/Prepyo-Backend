@@ -60,7 +60,7 @@ func TestLoadProductionRequirements(t *testing.T) {
 			name: "missing session secret",
 			env: map[string]string{
 				"SESSION_SECRET":     "",
-				"OPENROUTER_API_KEY": "key",
+				"AI_API_KEY":         "key",
 			},
 			wantErr: "SESSION_SECRET",
 		},
@@ -68,7 +68,7 @@ func TestLoadProductionRequirements(t *testing.T) {
 			name: "short session secret",
 			env: map[string]string{
 				"SESSION_SECRET":     "too-short",
-				"OPENROUTER_API_KEY": "key",
+				"AI_API_KEY":         "key",
 			},
 			wantErr: "at least 32 characters",
 		},
@@ -76,15 +76,15 @@ func TestLoadProductionRequirements(t *testing.T) {
 			name: "missing ai key",
 			env: map[string]string{
 				"SESSION_SECRET":     strings.Repeat("a", 40),
-				"OPENROUTER_API_KEY": "",
+				"AI_API_KEY":         "",
 			},
-			wantErr: "OPENROUTER_API_KEY",
+			wantErr: "AI_API_KEY",
 		},
 		{
 			name: "localhost origin",
 			env: map[string]string{
 				"SESSION_SECRET":     strings.Repeat("a", 40),
-				"OPENROUTER_API_KEY": "key",
+				"AI_API_KEY":         "key",
 				"ALLOWED_ORIGINS":    "https://prepyo.np,http://localhost:3000",
 			},
 			wantErr: "localhost",
@@ -120,7 +120,7 @@ func TestLoadProductionSucceedsWhenConfigured(t *testing.T) {
 		"DATABASE_URL":       "postgres://db/prepyo",
 		"ALLOWED_ORIGINS":    "https://prepyo.np",
 		"SESSION_SECRET":     strings.Repeat("a", 40),
-		"OPENROUTER_API_KEY": "key",
+		"AI_API_KEY":         "key",
 		"GOOGLE_CLIENT_ID":   "prepyo.apps.googleusercontent.com",
 	})
 
@@ -143,7 +143,7 @@ func TestLoadReportsAllProblemsTogether(t *testing.T) {
 		"APP_ENV":            "production",
 		"DATABASE_URL":       "",
 		"SESSION_SECRET":     "",
-		"OPENROUTER_API_KEY": "",
+		"AI_API_KEY":         "",
 		"ALLOWED_ORIGINS":    "https://prepyo.np",
 	})
 
@@ -151,7 +151,7 @@ func TestLoadReportsAllProblemsTogether(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load() succeeded, want an error")
 	}
-	for _, want := range []string{"DATABASE_URL", "SESSION_SECRET", "OPENROUTER_API_KEY"} {
+	for _, want := range []string{"DATABASE_URL", "SESSION_SECRET", "AI_API_KEY"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not mention %q; got:\n%s", want, err)
 		}
