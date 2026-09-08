@@ -1,12 +1,4 @@
-// Package ai is the only place in the backend that talks to a model provider.
-//
-// Product modules ask for a capability ("evaluate this essay"), never for a
-// specific model. Model choice, retries, timeouts and usage accounting all live
-// here, so swapping providers touches this package and nothing else.
-//
-// When no provider is configured the gateway returns ErrUnavailable. It does
-// not fall back to a canned score: a made-up band that looks real is worse for
-// a learner than an honest "not available".
+// Package ai handles communication with AI model providers for evaluation and tutoring.
 package ai
 
 import (
@@ -31,14 +23,11 @@ var (
 	// validation. The caller must not persist anything.
 	ErrBadOutput = errors.New("ai response failed validation")
 
-	// errPermanent marks a rejection a retry cannot fix: a bad key, no credit,
-	// a model this account cannot reach. Retrying those makes the learner wait
-	// twice as long for the same failure, and on a billed call it pays twice.
+	// errPermanent marks a non-retryable provider error.
 	errPermanent = errors.New("provider rejected the request")
 )
 
-// retryable reports whether another attempt could plausibly succeed. Anything
-// the provider refuses outright is a configuration problem, not a blip.
+// retryable reports whether an HTTP status code indicates a retryable error.
 func retryable(status int) bool {
 	switch status {
 	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
@@ -48,13 +37,8 @@ func retryable(status int) bool {
 	}
 }
 
-// maxAttempts covers one retry. Evaluations run while a learner waits, so a
-// long retry chain is worse than failing quickly.
 const maxAttempts = 2
 
-// provider is one OpenAI-compatible endpoint. The product uses two: a primary
-// one for text, and an audio-capable one for speaking, because no single
-// provider currently serves both.
 type provider struct {
 	name    string
 	baseURL string
@@ -65,8 +49,6 @@ func (p provider) configured() bool { return p.apiKey != "" && p.baseURL != "" }
 
 func (p provider) completionsURL() string { return p.baseURL + "/chat/completions" }
 
-// newProvider names a provider by its host, which is what usage rows are
-// grouped by when reporting spend.
 func newProvider(baseURL, apiKey string) provider {
 	name := baseURL
 	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
@@ -98,12 +80,10 @@ func NewGateway(cfg *config.Config, log *slog.Logger) *Gateway {
 // Available reports whether text evaluation and tutoring can run.
 func (g *Gateway) Available() bool { return g.text.configured() }
 
-// SpeakingAvailable reports whether the audio provider is configured. Speaking
-// can be unavailable while everything else works.
+// SpeakingAvailable reports whether the audio provider is configured.
 func (g *Gateway) SpeakingAvailable() bool { return g.audio.configured() }
 
-// Usage is what one provider call cost. Token counts come from the provider
-// response, never from an estimate, so cost reporting reflects reality.
+// Usage records token counts and latency for a provider call.
 type Usage struct {
 	Provider         string
 	Model            string
@@ -113,9 +93,6 @@ type Usage struct {
 	LatencyMS        int
 }
 
-// chatRequest is the OpenAI-compatible payload every supported provider takes.
-// Kept unexported: no other package should be able to construct a raw model
-// call.
 type chatRequest struct {
 	Model          string        `json:"model"`
 	Messages       []chatMessage `json:"messages"`
@@ -124,9 +101,6 @@ type chatRequest struct {
 	MaxTokens      int           `json:"max_tokens,omitempty"`
 }
 
-// chatMessage is one turn sent upstream. Content is `any` because a turn is
-// either plain text or a list of parts (text alongside a recording); it is
-// never read back off a response, which is always text — see chatResponse.
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"`
@@ -139,8 +113,6 @@ type contentPart struct {
 	Audio *audioInput `json:"input_audio,omitempty"`
 }
 
-// audioInput carries a recording inline. Providers accept base64 audio in
-// "wav" or "mp3" only, so callers convert before they get here.
 type audioInput struct {
 	Data   string `json:"data"`
 	Format string `json:"format"`
@@ -175,8 +147,6 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 	payload := chatRequest{
 		Model:    model,
 		Messages: messages,
-		// Low temperature: evaluation should be as repeatable as the provider
-		// allows, so two learners with similar work get similar feedback.
 		Temperature: 0.2,
 		MaxTokens:   g.maxTokens,
 	}
@@ -198,8 +168,6 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 		}
 		lastErr = err
 
-		// The caller's context being done means the learner is gone or the
-		// deadline passed; another attempt would only waste a call.
 		if ctx.Err() != nil {
 			return "", Usage{}, ErrUnavailable
 		}
@@ -230,16 +198,11 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 	}
 	defer res.Body.Close()
 
-	// Cap the read so a malformed or hostile response cannot exhaust memory.
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return "", Usage{}, err
 	}
 	var parsed chatResponse
-	// Decoding before the status check on purpose: a rejection carries the only
-	// explanation there is — an exhausted balance, a model that cannot take
-	// audio — and a bare status number sends whoever reads the log guessing.
-	// It goes no further than the log; the learner still gets the generic line.
 	decodeErr := json.Unmarshal(raw, &parsed)
 
 	if res.StatusCode != http.StatusOK {
@@ -263,7 +226,6 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 	if len(parsed.Choices) == 0 {
 		return "", Usage{}, errors.New("provider returned no choices")
 	}
-	// A truncated reply cannot be trusted to be complete JSON.
 	if parsed.Choices[0].FinishReason == "length" {
 		return "", Usage{}, errors.New("provider response was truncated")
 	}

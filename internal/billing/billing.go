@@ -1,8 +1,4 @@
 // Package billing owns plans, entitlements and purchase rewards.
-//
-// Entitlements are read from the database on every check rather than cached on
-// the user row, so a plan change takes effect immediately and a stale counter
-// cannot grant access nobody paid for.
 package billing
 
 import (
@@ -87,23 +83,6 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 		return models.SubscriptionState{}, err
 	}
 
-	// Counting usage.
-	//
-	// Sub-tests are task sets attempted today, in any skill. Reading and
-	// listening land in practice_attempts, one row per question, so they are
-	// collapsed to their task set by COALESCE(group_id, id): a True/False set of
-	// six statements is one sub-test, and answering its remaining questions does
-	// not add another. Writing and speaking land in ai_evaluations instead, one
-	// row per submission, and practice/handler.go refuses non-deterministic
-	// skills — so the two sources cannot double-count the same work.
-	//
-	// Mocks are deliberately absent from both: they write mock_attempts, and a
-	// reading mock writes no practice_attempts at all, so a mock never spends a
-	// sub-test. They have their own allowance below.
-	//
-	// The day is the learner's own, bounded half-open, so a row on the boundary
-	// belongs to one day and not both. Using the same helper as XP and missions
-	// means a learner's quota and their streak roll over together.
 	dayStart, dayEnd := gamification.LocalDayStart(user), gamification.LocalDayEnd(user)
 
 	const subTestsToday = `
@@ -163,12 +142,7 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 	return state, nil
 }
 
-// SubTestKeyForQuestion is the task set a question belongs to: its group when it
-// has one, otherwise itself. It is what makes a six-statement True/False set one
-// sub-test rather than six.
-//
-// Writing and speaking submissions have no task set to share, so they pass an
-// empty key and always count as one.
+// SubTestKeyForQuestion returns the group ID if present, otherwise the question ID.
 func SubTestKeyForQuestion(question models.Question) string {
 	if question.GroupID != "" {
 		return question.GroupID
@@ -176,20 +150,7 @@ func SubTestKeyForQuestion(question models.Question) string {
 	return question.ID
 }
 
-// LockUserForQuota takes the row lock that makes a quota check and the write it
-// authorises atomic.
-//
-// Without it two concurrent submissions both read 4 of 5 and both proceed,
-// landing the learner on 6. Both quota-consuming paths — practice submit and
-// evaluation persist — take this lock first, inside their own transaction, so
-// they serialise against each other.
-//
-// It must be the first statement in the transaction. users is written later in
-// the same transaction by XP and streak updates, so locking it up front also
-// gives every path a consistent lock order.
-//
-// It must NOT be held across a provider call. An evaluation locks only after the
-// model has returned; see evaluations.Service.persist.
+// LockUserForQuota acquires an exclusive row lock on the user for atomic quota checks.
 func LockUserForQuota(ctx context.Context, db database.DB, userID string) error {
 	if _, err := db.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, userID); err != nil {
 		return fmt.Errorf("lock user for quota: %w", err)
@@ -197,13 +158,7 @@ func LockUserForQuota(ctx context.Context, db database.DB, userID string) error 
 	return nil
 }
 
-// CheckSubTestAllowance returns an error when the learner has used up today's
-// sub-tests.
-//
-// taskSetKey is the set the work belongs to, or empty when it stands alone. A
-// set already counted today is always allowed through, whatever the limit says:
-// a learner who spends their last sub-test on question 1 of six must still be
-// able to answer the other five. Only starting a *new* set can be refused.
+// CheckSubTestAllowance checks if the user has remaining daily sub-test allowance.
 func (s *Service) CheckSubTestAllowance(ctx context.Context, db database.DB, user models.User, taskSetKey string) (models.SubscriptionState, error) {
 	state, err := s.State(ctx, db, user)
 	if err != nil {
@@ -225,8 +180,7 @@ func (s *Service) CheckSubTestAllowance(ctx context.Context, db database.DB, use
 	return state, ErrLimitReached
 }
 
-// taskSetCountedToday reports whether this learner has already answered
-// something in this task set today, which is what makes it free to continue.
+// taskSetCountedToday reports whether this task set was already attempted today.
 func (s *Service) taskSetCountedToday(ctx context.Context, db database.DB, user models.User, taskSetKey string) (bool, error) {
 	var counted bool
 	err := db.QueryRow(ctx, `
@@ -306,14 +260,7 @@ func (s *Service) ConfirmPayment(ctx context.Context, pool *pgxpool.Pool, p Conf
 	bonusDays := plan.BonusDays
 	effectiveDays := baseDays + bonusDays
 
-	// Update user's plan and expiration date transactionally
 	var updatedUser models.User
-	// role carries the tier, so it is written with the plan rather than left to
-	// the hourly reconcile: a learner who has just paid must not wait for a
-	// tick to see it. The admin account keeps its access level whatever it buys.
-	//
-	// plan_started_at is the start of THIS period, so it resets on every
-	// purchase, while plan_valid_until extends from whatever was left.
 	err = tx.QueryRow(ctx, `
 		UPDATE users
 		SET plan_id = $2,
@@ -371,8 +318,7 @@ func (s *Service) ConfirmPayment(ctx context.Context, pool *pgxpool.Pool, p Conf
 	return s.State(ctx, pool, updatedUser)
 }
 
-// effectivePlan falls back to the free plan once a paid plan has lapsed, so an
-// expired subscription cannot keep its higher limits.
+// effectivePlan returns the user's active plan, falling back to free if lapsed.
 func (s *Service) effectivePlan(ctx context.Context, user models.User) (models.Plan, error) {
 	if !planIsActive(user) {
 		return s.repo.Plan(ctx, "free")

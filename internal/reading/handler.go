@@ -30,8 +30,6 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/passages", h.listPassages)
 	r.Get("/passages/{passageID}", h.getPassage)
 
-	// POST, not GET: dealing a set records that this learner has now read the
-	// passage, which is what stops the next set repeating it.
 	r.Post("/practice", h.practice)
 
 	r.Route("/mocks", func(m chi.Router) {
@@ -45,8 +43,7 @@ func (h *Handler) Routes() chi.Router {
 	return r
 }
 
-// examFor resolves the exam a request is about, defaulting to the learner's
-// own target exam so the common case needs no parameter.
+// examFor resolves the exam from a request, defaulting to the user's target exam.
 func examFor(raw string, user models.User) (models.ExamType, bool) {
 	if strings.TrimSpace(raw) == "" {
 		return user.TargetExam, true
@@ -70,13 +67,6 @@ func (h *Handler) types(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// What a generated mock for this exam will ask for, so the client can show
-	// which tasks a mock covers rather than hardcoding a list. It comes from the
-	// blueprint, so IELTS and PTE each describe their own paper.
-	//
-	// A missing blueprint is not an error here: the practice menu still works
-	// for an exam that has no generated mock, it just has nothing to say about
-	// one.
 	required := []string{}
 	passageCount := 0
 	if blueprint, err := h.repo.GeneratedBlueprint(r.Context(), exam); err == nil {
@@ -131,17 +121,13 @@ func (h *Handler) listPassages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"passages": list,
-		// Which of these the learner has already sat in a mock, and so will not
-		// be dealt again. Listing the ids rather than a flag per passage keeps
-		// the passage payload the same shape everywhere it appears.
+		"passages":            list,
 		"satInMockPassageIds": seen,
 		"pagination":          page.Meta(total),
 	})
 }
 
-// getPassage returns one passage with every task set on it, answer keys
-// stripped. It is a direct read, so it does not count as having been dealt.
+// getPassage returns one passage with every task set on it.
 func (h *Handler) getPassage(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "passageID")
 
@@ -172,8 +158,7 @@ type practiceRequest struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-// practice deals one task set of the chosen type from a passage picked for this
-// learner.
+// practice deals one task set of the chosen type.
 func (h *Handler) practice(w http.ResponseWriter, r *http.Request) {
 	var req practiceRequest
 	if !httpx.Decode(w, r, &req, h.log, "reading.practice") {
@@ -219,7 +204,6 @@ type startMockRequest struct {
 
 // startMock deals a reading paper, or returns the one the learner already holds.
 func (h *Handler) startMock(w http.ResponseWriter, r *http.Request) {
-	// The body is optional: an empty POST means "a mock for my exam".
 	var req startMockRequest
 	if r.ContentLength > 0 && !httpx.Decode(w, r, &req, h.log, "reading.startMock") {
 		return
@@ -242,8 +226,6 @@ func (h *Handler) startMock(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound,
 				"Reading mocks are not available for that exam yet.")
 		case errors.Is(err, ErrBankTooSmall):
-			// A content shortage, not a fault the learner can do anything
-			// about, so it says what happened rather than "try again".
 			h.log.Warn("reading mock bank too small", "op", "reading.startMock", "error", err, "exam", exam)
 			httpx.Error(w, http.StatusConflict, httpx.CodeConflict,
 				"There are not enough reading passages to build a full mock yet. Please try again soon.")

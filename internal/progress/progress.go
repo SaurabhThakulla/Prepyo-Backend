@@ -1,9 +1,4 @@
-// Package progress turns a learner's attempt history into an estimate and a
-// per-skill breakdown.
-//
-// Nothing here is stored on the user row. The estimate is recomputed from
-// attempts each time it is asked for, so it cannot drift away from the evidence
-// behind it.
+// Package progress provides score estimates and per-skill breakdown calculations based on attempt history.
 package progress
 
 import (
@@ -20,8 +15,7 @@ import (
 	"github.com/prepyo/backend/internal/scoring"
 )
 
-// recentWindow limits the estimate to work done in the last two months. Older
-// attempts say more about who the learner used to be than who they are now.
+// recentWindow limits the estimate to work done in the last 60 days.
 const recentWindow = 60 * 24 * time.Hour
 
 type Service struct {
@@ -40,20 +34,11 @@ type SkillBreakdown struct {
 	Estimate *float64         `json:"estimate"`
 	Status   string           `json:"status"` // strong, steady, needs_work, no_data
 
-	// Available is how many published questions exist for this skill and exam,
-	// and Completed how many distinct ones this learner has answered.
-	//
-	// Both are all-time, unlike Attempts and Accuracy above, which look at a
-	// recent window. "You have done 12 of 133 reading questions" is a statement
-	// about the bank, and a question answered two months ago is still done.
 	Available int `json:"available"`
 	Completed int `json:"completed"`
 }
 
 // Estimate computes the learner's current standing for their target exam.
-//
-// With no attempts the value is nil rather than a default number, so the UI can
-// say "take a diagnostic" instead of showing a score nobody earned.
 func (s *Service) Estimate(ctx context.Context, db database.DB, user models.User) (models.ScoreEstimate, error) {
 	version, err := s.exams.Current(ctx, user.TargetExam)
 	if err != nil {
@@ -79,8 +64,7 @@ func (s *Service) Estimate(ctx context.Context, db database.DB, user models.User
 		UpdatedAt:   time.Now(),
 	}
 
-	// A mock is a better signal than scattered practice, so when one exists it
-	// takes precedence.
+	// If a mock attempt exists, prioritize its score.
 	var mockScore *float64
 	err = db.QueryRow(ctx, `
 		SELECT user_score FROM mock_attempts
@@ -110,8 +94,7 @@ func (s *Service) Estimate(ctx context.Context, db database.DB, user models.User
 		gap := math.Max(0, *user.TargetScore-*estimate.Value)
 		estimate.TargetGap = &gap
 
-		// Readiness is progress along the scale towards the target, not a raw
-		// score ratio, so IELTS band 6 of 7 does not read as 86% ready.
+		// Calculate readiness towards target score.
 		span := *user.TargetScore - scale.Min
 		readiness := 100
 		if span > 0 {
@@ -168,8 +151,7 @@ func (s *Service) Skills(ctx context.Context, db database.DB, user models.User) 
 		return nil, err
 	}
 
-	// Always return all four skills in a stable order so the UI does not have
-	// rows appearing and disappearing between refreshes.
+	// Return all skills in stable order.
 	breakdown := make([]SkillBreakdown, 0, len(models.AllSkills))
 	for _, skill := range models.AllSkills {
 		t := bySkill[skill]
@@ -193,17 +175,7 @@ func (s *Service) Skills(ctx context.Context, db database.DB, user models.User) 
 	return breakdown, nil
 }
 
-// bankCoverage counts what exists and what this learner has done, per skill.
-//
-// The available count is every published question for the exam, deliberately
-// including passage-backed reading questions and re-order items. Those are
-// excluded from the generic /questions listing because they cannot be dealt
-// standalone, but they are absolutely part of the bank a learner works through,
-// and leaving them out would report a reading bank of 3 against a real 133.
-//
-// Completed unions the two places an answer can land: reading and listening
-// write practice_attempts, writing and speaking write ai_evaluations. Counting
-// only the first would leave those two skills permanently at zero.
+// bankCoverage counts total available and completed questions per skill.
 func (s *Service) bankCoverage(ctx context.Context, db database.DB, user models.User) (map[models.SkillType]int, map[models.SkillType]int, error) {
 	available := map[models.SkillType]int{}
 	completed := map[models.SkillType]int{}
@@ -263,10 +235,7 @@ func statusFor(accuracy float64) string {
 	}
 }
 
-// ActivityDay is one day of practice, bucketed in the learner's own timezone.
-//
-// Only days with attempts are returned. A year of empty squares is the client's
-// job to draw, not ours to send.
+// ActivityDay represents one day of practice activity.
 type ActivityDay struct {
 	Date    string                   `json:"date"` // YYYY-MM-DD
 	Count   int                      `json:"count"`
@@ -285,22 +254,16 @@ type ActivitySummary struct {
 	LongestStreak int           `json:"longestStreak"`
 }
 
-// maxActivityDays caps the window at roughly two years. The heatmap asks for
-// one; anything past that is someone probing the query.
 const maxActivityDays = 750
 
-// Activity returns per-day practice counts for the last `days` days.
-//
-// Days are bucketed in the learner's timezone, not UTC: a 9pm session in
-// Kathmandu belongs to that evening's square, not to the next morning's.
+// Activity returns per-day practice counts for the last `days` days in the user's timezone.
 func (s *Service) Activity(ctx context.Context, db database.DB, user models.User, days int) (ActivitySummary, error) {
 	if days <= 0 {
 		days = 365
 	}
 	days = min(days, maxActivityDays)
 
-	// An unknown zone must not take the whole page down, and Postgres would
-	// reject it too, so fall back to UTC and carry on.
+	// Fall back to UTC if timezone is invalid.
 	loc, err := time.LoadLocation(user.Timezone)
 	if err != nil {
 		loc = time.UTC
@@ -310,9 +273,6 @@ func (s *Service) Activity(ctx context.Context, db database.DB, user models.User
 	end := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc)
 	start := end.AddDate(0, 0, -(days - 1))
 
-	// The extra created_at bound is what lets the query use
-	// idx_practice_attempts_user; the date cast alone would not. A day of slack
-	// covers every UTC offset either side of the local midnight.
 	rows, err := db.Query(ctx, `
 		SELECT (a.created_at AT TIME ZONE $2)::date AS day,
 		       q.skill,
@@ -375,8 +335,6 @@ func (s *Service) Activity(ctx context.Context, db database.DB, user models.User
 	return summary, nil
 }
 
-// currentStreak counts back from today. Today not being practised yet does not
-// break a streak — it is still early — so the walk starts at yesterday then.
 func currentStreak(byDate map[string]*ActivityDay, end time.Time) int {
 	cursor := end
 	if byDate[cursor.Format(time.DateOnly)] == nil {

@@ -49,9 +49,14 @@ func TestRoleForUser(t *testing.T) {
 	}
 }
 
+// DaysRemaining truncates to whole days, so an expiry set an exact multiple of
+// 24h away lands on a boundary: the clock advances between building the offset
+// and measuring it, and the result falls into the day below. Every offset here
+// sits mid-bucket, far from the edge, so the assertion cannot be decided by how
+// long the test run took or by the host's clock granularity.
 func TestDaysRemaining(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour)
-	soon := time.Now().Add(50 * time.Hour)
+	soon := time.Now().Add(60 * time.Hour) // 2.5 days: 12h clear of both edges
 
 	if got := (User{PlanID: "pro", PlanValidUntil: &past}).DaysRemaining(); got != 0 {
 		t.Errorf("expired DaysRemaining() = %d, want 0", got)
@@ -68,7 +73,8 @@ func TestDaysRemaining(t *testing.T) {
 // dates must survive the conversion.
 func TestNewUserProfilePlanWindow(t *testing.T) {
 	start := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
-	until := time.Now().Add(72 * time.Hour)
+	// 3.5 days out, not exactly 3: see the note on TestDaysRemaining.
+	until := time.Now().Add(84 * time.Hour)
 
 	profile := NewUserProfile(User{
 		Role: RoleTaiyari, PlanID: "pro",

@@ -10,13 +10,10 @@ import (
 	"github.com/prepyo/backend/internal/models"
 )
 
-// WritingPromptVersion is stamped on every stored evaluation. Change it
-// whenever the prompt below changes, so old feedback stays traceable to the
-// wording that produced it.
+// WritingPromptVersion identifies the active writing evaluation prompt version.
 const WritingPromptVersion = "writing.v1"
 
-// EvaluationVersion is the shape of the JSON contract, stored alongside each
-// result so a later reader knows how to interpret it.
+// EvaluationVersion is the evaluation schema version.
 const EvaluationVersion = "v1"
 
 type WritingRequest struct {
@@ -24,19 +21,13 @@ type WritingRequest struct {
 	TaskName    string
 	Prompt      string
 	LearnerText string
-	// FigureData is the data behind a chart the learner was shown as an
-	// image. Empty for every task that has no figure. Without it the model
-	// cannot tell an accurate description from an invented one.
+	// FigureData is the tabular data behind an image prompt, if applicable.
 	FigureData string
-	// MinScore and MaxScore come from the exam version, so PTE is validated
-	// against 10-90 and IELTS against 0-9.
-	MinScore float64
-	MaxScore float64
+	MinScore   float64
+	MaxScore   float64
 }
 
-// evaluationPayload mirrors the JSON the model is told to return. It is
-// deliberately separate from models.Evaluation: the model fills this, and only
-// validated fields are copied across.
+// evaluationPayload mirrors the raw JSON returned by the model.
 type evaluationPayload struct {
 	Summary        string   `json:"summary"`
 	Strengths      []string `json:"strengths"`
@@ -59,24 +50,15 @@ type evaluationPayload struct {
 	} `json:"sentenceFeedback"`
 }
 
-// maxValidationAttempts covers one correction round. A reply can be perfectly
-// well-formed JSON and still be unusable — most often a score on the wrong
-// exam's scale — and telling the model exactly what was wrong fixes it far
-// more cheaply than failing the learner's submission.
 const maxValidationAttempts = 2
 
-// EvaluateWriting returns qualitative feedback and an estimated score.
-//
-// The estimate is a practice estimate. Neither this package nor its callers
-// present it as an official Pearson or IELTS result.
+// EvaluateWriting evaluates a writing task submission and returns feedback with an estimated score.
 func (g *Gateway) EvaluateWriting(ctx context.Context, req WritingRequest) (models.Evaluation, Usage, error) {
 	messages := []chatMessage{
 		{Role: "system", Content: writingSystemPrompt(req)},
 		{Role: "user", Content: writingUserPrompt(req)},
 	}
 
-	// Usage accumulates across attempts: a correction round costs real tokens,
-	// and cost reporting that hid them would understate what evaluations spend.
 	var usage Usage
 
 	for attempt := 1; attempt <= maxValidationAttempts; attempt++ {
@@ -98,9 +80,6 @@ func (g *Gateway) EvaluateWriting(ctx context.Context, req WritingRequest) (mode
 			break
 		}
 
-		// Hand back the exact reply and the exact complaint, so the retry
-		// corrects the one field that was wrong instead of starting over and
-		// risking a different mistake.
 		messages = append(messages,
 			chatMessage{Role: "assistant", Content: raw},
 			chatMessage{Role: "user", Content: fmt.Sprintf(
@@ -112,8 +91,7 @@ func (g *Gateway) EvaluateWriting(ctx context.Context, req WritingRequest) (mode
 	return models.Evaluation{}, usage, ErrBadOutput
 }
 
-// parseWriting decodes and validates one reply. It returns the underlying
-// problem rather than ErrBadOutput so the caller can quote it back to the model.
+// parseWriting decodes and validates a raw response string.
 func parseWriting(raw string, req WritingRequest) (models.Evaluation, error) {
 	var payload evaluationPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
@@ -122,8 +100,7 @@ func parseWriting(raw string, req WritingRequest) (models.Evaluation, error) {
 	return validateWriting(payload, req)
 }
 
-// add folds one attempt's usage into a running total. Provider, model and
-// prompt version are the same for every attempt, so the last one wins.
+// add accumulates usage metrics from an attempt.
 func (u *Usage) add(other Usage) {
 	if other.Provider != "" {
 		u.Provider = other.Provider
@@ -145,22 +122,15 @@ func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation
 	})
 }
 
-// feedbackSpec is what a reply is judged against. Both skills produce the same
-// evaluation shape, so they share one validator and differ only in this.
 type feedbackSpec struct {
 	Exam     models.ExamType
 	Skill    models.SkillType
 	MinScore float64
 	MaxScore float64
-	// Quotable is the learner's own words — typed for writing, transcribed for
-	// speaking. sentenceFeedback may only quote from it.
 	Quotable string
 }
 
-// validateFeedback checks the model's reply before any of it is stored.
-//
-// Anything out of range is rejected outright rather than clamped: a score the
-// model could not produce correctly is not one to guess at.
+// validateFeedback validates the parsed evaluation payload against the specification.
 func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation, error) {
 	if strings.TrimSpace(p.Summary) == "" {
 		return models.Evaluation{}, fmt.Errorf("summary is empty")
@@ -175,11 +145,6 @@ func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation
 		return models.Evaluation{}, fmt.Errorf("unknown confidence %q", p.EstimatedScore.Confidence)
 	}
 
-	// An off-scale score is rejected, never converted onto the right scale.
-	// Reading a stray 8.5 as an IELTS band and mapping it to PTE assumes what
-	// the model meant, and any linear PTE/IELTS mapping overstates the middle
-	// of the range badly against the published concordance. The retry in
-	// EvaluateWriting asks for a corrected score instead.
 	score := p.EstimatedScore.Value
 	if score != nil {
 		if *score < spec.MinScore || *score > spec.MaxScore {
@@ -203,9 +168,6 @@ func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation
 		})
 	}
 
-	// Sentence feedback must quote text the learner actually produced. Dropping
-	// unmatched entries stops the model from "correcting" invented sentences,
-	// which is confusing and makes the whole report look untrustworthy.
 	haystack := normaliseSpace(spec.Quotable)
 	sentences := make([]models.SentenceFeedback, 0, len(p.SentenceFeedback))
 	for _, s := range p.SentenceFeedback {
@@ -265,17 +227,9 @@ func writingSystemPrompt(req WritingRequest) string {
 	return b.String()
 }
 
-// exampleScore picks a plausible value on this exam's own scale for the worked
-// example in the system prompt.
-//
-// A fixed number cannot work here. 7.0 reads as a sensible IELTS band and as a
-// nonsense PTE score, and an example on the wrong scale drags the model's real
-// answer onto that scale with it — which is exactly how PTE evaluations started
-// coming back as 8.5 and getting thrown out by validateWriting.
+// exampleScore returns a representative score value formatted for the given scale.
 func exampleScore(min, max float64) float64 {
 	v := min + 0.75*(max-min)
-	// Wide point scales like PTE's 10-90 do not use fractions; narrow band
-	// scales like IELTS's 0-9 move in half points.
 	if max-min > 20 {
 		return math.Round(v)
 	}
@@ -294,8 +248,7 @@ func writingUserPrompt(req WritingRequest) string {
 	return b.String()
 }
 
-// normaliseSpace collapses runs of whitespace so a quote that differs only in
-// line breaks still matches the learner's text.
+// normaliseSpace collapses whitespace runs into single spaces.
 func normaliseSpace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

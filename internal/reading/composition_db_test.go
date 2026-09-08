@@ -13,15 +13,9 @@ import (
 	"github.com/prepyo/backend/internal/questions"
 )
 
-// Composition is almost entirely SQL and content: which passages can fill a
-// section, which questions an exam is allowed to see, and whether a paper stays
-// the paper it was dealt. None of that can be exercised without a database, so
-// these run against a real one and skip when there is not one to talk to.
-//
-//	TEST_DATABASE_URL=postgres://postgres@localhost:5432/prepyo_refactor?sslmode=disable go test ./internal/reading/
-//
-// They need a database with every migration applied, including 000027, because
-// they read the shared bank rather than inventing content.
+// Database-backed integration tests for reading mock composition and passage eligibility.
+// Run with:
+//   TEST_DATABASE_URL=postgres://postgres@localhost:5432/prepyo?sslmode=disable go test ./internal/reading/
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -68,7 +62,6 @@ func newLearner(t *testing.T, pool *pgxpool.Pool, exam models.ExamType) models.U
 	return user
 }
 
-// The point of the refactor: one passage, two exams, no duplicated text.
 func TestOnePassageServesBothExams(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -94,9 +87,6 @@ func TestOnePassageServesBothExams(t *testing.T) {
 	}
 }
 
-// A passage is text. Nothing about which exam a learner is sitting may be read
-// off it — the column that used to say so is gone, and both exams reach passages
-// that were authored for the other.
 func TestPassagesCarryNoExam(t *testing.T) {
 	pool := testPool(t)
 	repo := NewRepository(pool)
@@ -135,8 +125,6 @@ func TestPassagesCarryNoExam(t *testing.T) {
 	}
 }
 
-// The passage index belongs to an exam when that exam sets something on the
-// passage, which after the refactor is a question about the questions.
 func TestPassageIndexIsPerExam(t *testing.T) {
 	pool := testPool(t)
 	repo := NewRepository(pool)
@@ -166,8 +154,6 @@ func TestPassageIndexIsPerExam(t *testing.T) {
 	}
 }
 
-// Practice deals only what the exam sets. An IELTS learner working on a shared
-// passage must never be shown its PTE questions, and the reverse.
 func TestPracticeDealsOnlyEligibleQuestions(t *testing.T) {
 	pool := testPool(t)
 	svc := testService(t, pool)
@@ -209,8 +195,6 @@ func TestPracticeDealsOnlyEligibleQuestions(t *testing.T) {
 	}
 }
 
-// The IELTS paper is the one being composed before this refactor: three
-// passages, forty questions, in the same task mix.
 func TestIELTSPaperKeepsItsShape(t *testing.T) {
 	pool := testPool(t)
 	svc := testService(t, pool)
@@ -260,8 +244,6 @@ func TestIELTSPaperKeepsItsShape(t *testing.T) {
 	}
 }
 
-// PTE has a reading paper of its own, over the same bank, and it is not a copy
-// of the IELTS one.
 func TestPTEPaperComposesIndependently(t *testing.T) {
 	pool := testPool(t)
 	svc := testService(t, pool)
@@ -306,8 +288,6 @@ func TestPTEPaperComposesIndependently(t *testing.T) {
 	}
 }
 
-// A paper is the question ids it was dealt. Adding a question to one of its
-// passages afterwards must not put that question on the paper.
 func TestAddingAQuestionDoesNotChangeADealtPaper(t *testing.T) {
 	pool := testPool(t)
 	svc := testService(t, pool)
@@ -337,9 +317,6 @@ func TestAddingAQuestionDoesNotChangeADealtPaper(t *testing.T) {
 		t.Fatalf("hydrate before: %v", err)
 	}
 
-	// A new question on a group the paper already uses: the sharpest version of
-	// the problem, because the group is on screen and the question is not on the
-	// paper.
 	var groupID, passageID string
 	if err := pool.QueryRow(ctx, `
 		SELECT group_id, passage_id FROM questions WHERE id = $1`, composed.QuestionIDs[0]).
@@ -384,7 +361,6 @@ func TestAddingAQuestionDoesNotChangeADealtPaper(t *testing.T) {
 	}
 }
 
-// A paper reopened later is the same paper, in the same order.
 func TestHydrateIsStableAcrossReads(t *testing.T) {
 	pool := testPool(t)
 	svc := testService(t, pool)

@@ -84,9 +84,6 @@ func (h *Handler) listAttempts(w http.ResponseWriter, r *http.Request) {
 }
 
 // submit grades one answer and records the result.
-//
-// The request carries only what the learner did. Score, correctness and XP are
-// all decided here, so nothing the client sends can inflate them.
 func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	var sub models.AnswerSubmission
 	if !httpx.Decode(w, r, &sub, h.log, "practice.submit") {
@@ -116,28 +113,18 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The exam comes from the request, defaulting to the learner's own target.
-	//
-	// It used to come from the question, and it cannot any more: a question on a
-	// shared passage may be answerable under either exam, so the question no
-	// longer knows which one the learner was working under. Everything the
-	// attempt is later read by — progress, the mistake bank — keys off this.
 	exam, ok := examFor(sub.Exam, user)
 	if !ok {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE or IELTS.")
 		return
 	}
 
-	// A question that is not set by this exam cannot be answered under it.
-	// Without this an IELTS-only True/False set could be submitted with
-	// exam=PTE and land in that learner's PTE progress.
 	if !question.SupportsExam(exam) {
 		httpx.Error(w, http.StatusUnprocessableEntity, httpx.CodeBadRequest,
 			"That question is not part of the "+string(exam)+" syllabus.")
 		return
 	}
 
-	// The version that scores the attempt follows the exam, not the question.
 	version, err := h.exams.Current(ctx, exam)
 	if err != nil {
 		httpx.Internal(w, h.log, "practice.submit.examVersion", err)
@@ -146,9 +133,6 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 
 	result, ok := scoring.Grade(question, sub)
 	if !ok {
-		// No grader for this task type. Failing here is deliberate: awarding
-		// marks for something nobody can score would put a made-up number into
-		// the learner's history.
 		h.log.Error("no grader for question type", "questionId", question.ID, "typeId", question.TypeID)
 		httpx.Error(w, http.StatusNotImplemented, httpx.CodeInternal,
 			"This task type cannot be scored yet. Your answer was not recorded.")
@@ -162,13 +146,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Quota, under the same user-row lock the evaluation path takes, so the two
-	// serialise and a concurrent pair cannot both spend the last sub-test.
-	// Grading above is pure and already done, so nothing external is inside it.
-	//
-	// The key is the question's task set: continuing a set already started today
-	// is free, so a learner who spends their last sub-test on question 1 of six
-	// can still answer the other five. Only a new set can be refused.
+	// Quota check under user lock.
 	if err := billing.LockUserForQuota(ctx, tx, user.ID); err != nil {
 		httpx.Internal(w, h.log, "practice.submit.lock", err)
 		return
@@ -216,10 +194,6 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// XP is keyed to question and day, not to the attempt row. Practising the
-	// same question again is still recorded and still counts towards progress,
-	// but it only pays once per day, so XP cannot be farmed by resubmitting a
-	// question the learner already knows the answer to.
 	amount := gamification.XPPracticeAttempted
 	if result.IsCorrect {
 		amount = gamification.XPPracticeCorrect
@@ -271,12 +245,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// examFor is the exam a submission was made under: the one it names, or the
-// learner's target when it names none.
-//
-// Same rule as reading.examFor. Both exist because a client that knows which
-// exam the learner is sitting should be able to say so, and one that does not
-// should still work.
+// examFor resolves the exam from a submission, defaulting to the user's target exam.
 func examFor(raw models.ExamType, user models.User) (models.ExamType, bool) {
 	if strings.TrimSpace(string(raw)) == "" {
 		return user.TargetExam, true

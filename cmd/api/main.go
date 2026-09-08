@@ -52,15 +52,8 @@ func run() error {
 		log.Warn("GOOGLE_CLIENT_ID is not set: POST /auth/google returns 503 and nobody can sign in")
 	}
 
-	// The admin login always works, so the risk is not a locked door but an
-	// open one: the built-in password ships in the source.
-	if !cfg.AdminPasswordOverridden() {
-		msg := "ADMIN_PASSWORD is not set: admin sign-in is using the password built into the binary, which anyone with the source can read"
-		if cfg.IsProduction() {
-			log.Warn(msg + " — set ADMIN_PASSWORD on this deployment")
-		} else {
-			log.Info(msg)
-		}
+	if !cfg.AdminLoginEnabled() {
+		log.Warn("ADMIN_PASSWORD is not set: POST /auth/admin-login returns 503 and the admin area is unreachable")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

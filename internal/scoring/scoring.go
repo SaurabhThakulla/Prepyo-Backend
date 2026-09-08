@@ -1,11 +1,4 @@
-// Package scoring turns a learner's answer into a result.
-//
-// Everything here is deterministic and runs on the server. The client sends
-// what the learner typed or selected and nothing else, so a score cannot be
-// forged by editing a request.
-//
-// Skills that need judgement (speaking, writing) are not scored here; they go
-// to the AI gateway for qualitative feedback and an explicitly estimated score.
+// Package scoring provides deterministic scoring logic for reading and listening questions.
 package scoring
 
 import (
@@ -36,10 +29,6 @@ func Deterministic(skill models.SkillType) bool {
 }
 
 // Grade evaluates a submission against a question.
-//
-// An unrecognised task type returns ok=false rather than a default pass. The
-// caller turns that into an error, because silently awarding full marks for a
-// task nobody wrote a grader for is worse than failing loudly.
 func Grade(q models.Question, sub models.AnswerSubmission) (Result, bool) {
 	switch {
 	case len(q.Blanks) > 0:
@@ -79,9 +68,7 @@ func gradeBlanks(q models.Question, sub models.AnswerSubmission) Result {
 		strings.Join(correctParts, ", "), strings.Join(userParts, ", "), "Vocabulary")
 }
 
-// gradeReorder scores adjacent pairs, which is how PTE marks this task: getting
-// two neighbours in the right order earns a mark even if the whole sequence is
-// not perfect.
+// gradeReorder scores adjacent pairs for re-order tasks.
 func gradeReorder(q models.Question, sub models.AnswerSubmission) Result {
 	want := q.CorrectAnswers
 	got := sub.SelectedOptions
@@ -106,9 +93,7 @@ func gradeReorder(q models.Question, sub models.AnswerSubmission) Result {
 		strings.Join(want, " → "), orPlaceholder(strings.Join(got, " → ")), "Sequencing")
 }
 
-// gradeDictation compares the words the learner typed against the target
-// sentence. Each target word can only be matched once, so repeating a word does
-// not earn extra marks.
+// gradeDictation compares typed words against the target sentence.
 func gradeDictation(q models.Question, sub models.AnswerSubmission) Result {
 	if len(q.CorrectAnswers) == 0 {
 		return Result{}
@@ -134,29 +119,16 @@ func gradeDictation(q models.Question, sub models.AnswerSubmission) Result {
 		q.CorrectAnswers[0], orPlaceholder(sub.TextResponse), "Dictation accuracy")
 }
 
-// shortAnswerTypes are the reading tasks answered by typing a word or a short
-// phrase lifted from the passage.
-//
-// They need naming because CorrectAnswers means something different here than
-// it does elsewhere. In a True/False set it is a sequence — one answer per
-// statement, compared in order. In a gap-fill it is a set of spellings that are
-// all accepted for the one gap: "flavour" and "flavor", "Nestle" and "Nestlé".
-// Without this case gradeOrderedAnswers would read the alternatives as extra
-// gaps and mark a right answer one-third correct.
+// shortAnswerTypes are reading tasks answered with short text phrases matching accepted spellings.
 var shortAnswerTypes = map[string]bool{
 	"reading-sentence-completion": true,
 	"reading-summary-completion":  true,
 	"reading-short-answer":        true,
 }
 
-// gradeShortAnswer marks a typed gap right when it matches any accepted
-// spelling. Case, surrounding punctuation and stray spacing are ignored, so
-// "Gods." earns the mark that "gods" does; nothing else is forgiven, because
-// the task is to lift the word out of the passage exactly.
+// gradeShortAnswer marks a typed gap right when it matches any accepted spelling.
 func gradeShortAnswer(q models.Question, sub models.AnswerSubmission) Result {
 	given := sub.TextResponse
-	// A client may render a gap with a word bank rather than a text field. One
-	// selected option is the same answer arriving by a different route.
 	if strings.TrimSpace(given) == "" && len(sub.SelectedOptions) == 1 {
 		given = sub.SelectedOptions[0]
 	}
@@ -181,9 +153,7 @@ func gradeShortAnswer(q models.Question, sub models.AnswerSubmission) Result {
 		strings.Join(q.CorrectAnswers, " / "), orPlaceholder(given), "Detail")
 }
 
-// gradeChoice handles single and multiple answer questions. Extra selections
-// cancel out correct ones, so guessing everything scores zero rather than full
-// marks.
+// gradeChoice handles single and multiple answer choice questions.
 func gradeChoice(q models.Question, sub models.AnswerSubmission) Result {
 	want := make(map[string]bool, len(q.CorrectAnswers))
 	for _, id := range q.CorrectAnswers {
@@ -215,8 +185,7 @@ func gradeChoice(q models.Question, sub models.AnswerSubmission) Result {
 		strings.Join(q.CorrectAnswers, ", "), orPlaceholder(strings.Join(sub.SelectedOptions, ", ")), "Comprehension")
 }
 
-// gradeOrderedAnswers compares answers position by position, used for
-// True/False/Not Given sets where each statement has its own answer.
+// gradeOrderedAnswers compares answers position by position.
 func gradeOrderedAnswers(q models.Question, sub models.AnswerSubmission) Result {
 	correct := 0
 	for i, want := range q.CorrectAnswers {
@@ -230,8 +199,7 @@ func gradeOrderedAnswers(q models.Question, sub models.AnswerSubmission) Result 
 		strings.Join(q.CorrectAnswers, ", "), orPlaceholder(strings.Join(sub.SelectedOptions, ", ")), "Inference")
 }
 
-// proportional builds the result shared by every grader: marks scale with the
-// share of sub-items answered correctly.
+// proportional calculates score proportionally based on correct items.
 func proportional(q models.Question, correct, total int, feedback, correctDisplay, userDisplay, errorTag string) Result {
 	maxScore := float64(q.Points)
 	if total <= 0 {

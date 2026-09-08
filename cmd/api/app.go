@@ -36,8 +36,6 @@ import (
 	"github.com/prepyo/backend/pkg/httpx"
 )
 
-// app holds everything the router needs. Building it in one place makes the
-// dependency direction obvious: repositories, then services, then handlers.
 type app struct {
 	cfg  *config.Config
 	pool *pgxpool.Pool
@@ -133,8 +131,6 @@ func (a *app) router() http.Handler {
 		AllowedOrigins: a.cfg.AllowedOrigins,
 		AllowedMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"Accept", "Content-Type"},
-		// The session lives in a cookie, so the browser must be allowed to
-		// send it. This is why AllowedOrigins can never be "*".
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
@@ -144,8 +140,6 @@ func (a *app) router() http.Handler {
 	r.Route("/api/v1", func(v1 chi.Router) {
 		// Public.
 		v1.Group(func(public chi.Router) {
-			// Credential endpoints are the ones worth guessing at, so they get
-			// a tighter limit than everything else.
 			public.With(rateLimit(10, time.Minute)).
 				Mount("/auth", a.authHandler.Routes())
 			public.Mount("/exams", a.examHandler.Routes())
@@ -169,14 +163,9 @@ func (a *app) router() http.Handler {
 			private.Mount("/leaderboards", a.leaderboardHandler.Routes())
 			private.Mount("/notifications", a.notificationHandler.Routes())
 
-			// Reporting sends mail, so it gets a much tighter limit than
-			// ordinary reads: room for a frustrated learner, not for a spammer.
 			private.With(rateLimit(5, 10*time.Minute)).
 				Mount("/report", a.reportHandler.Routes())
 
-			// AI endpoints cost money per call, so they are limited harder
-			// than ordinary reads. Plan allowances are enforced separately in
-			// the evaluations service.
 			private.With(rateLimit(20, time.Minute)).
 				Mount("/evaluations", a.evaluationHandler.Routes())
 			private.With(rateLimit(20, time.Minute)).
@@ -190,18 +179,12 @@ func (a *app) router() http.Handler {
 		})
 	})
 
-	// Anything that is not a known route is either a page of the single-page
-	// frontend or a call to an endpoint that does not exist. Only the frontend
-	// handler can tell the difference, and only when it is switched on.
 	var serveWeb http.Handler
 	if a.cfg.WebDistDir != "" {
 		serveWeb = web.Handler(a.cfg.WebDistDir)
 	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		// /api/* always answers in the API's own envelope. A missing endpoint
-		// is a bug in the caller, and handing it an HTML page would turn a
-		// clear 404 into "unexpected token < in JSON".
 		if serveWeb == nil || strings.HasPrefix(r.URL.Path, "/api/") {
 			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "No such endpoint.")
 			return
@@ -215,23 +198,13 @@ func (a *app) router() http.Handler {
 	return r
 }
 
-// rateLimit throttles by client IP and answers in the same JSON envelope as
-// every other error. httprate's own default writes plain text, which the
-// browser cannot parse and which surfaces to a learner as "the server returned
-// an unreadable response" instead of "you are going too fast".
-//
-// NOTE: httprate.KeyByIP reads r.RemoteAddr, which middleware.RealIP above has
-// already rewritten from the client-supplied X-Forwarded-For header. Behind a
-// trusted proxy that is correct; directly exposed it lets a caller pick their
-// own bucket. See GHSA-9g5q-2w5x-hmxf. Fixing it properly needs to know which
-// proxies to trust.
+// rateLimit throttles requests by client IP.
 func rateLimit(requests int, window time.Duration) func(http.Handler) http.Handler {
 	return httprate.LimitBy(requests, window, httprate.KeyByIP,
 		httprate.WithLimitHandler(httpx.RateLimited))
 }
 
-// health reports whether the API can reach its database, so a load balancer
-// does not keep sending traffic to an instance that cannot serve it.
+// health reports whether the API can reach its database.
 func (a *app) health(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -244,8 +217,7 @@ func (a *app) health(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"status": "healthy"})
 }
 
-// requestLogger records one line per request with the fields the spec asks for:
-// request id, method, path, status and duration.
+// requestLogger logs incoming HTTP requests with latency and status.
 func (a *app) requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
@@ -257,8 +229,6 @@ func (a *app) requestLogger(next http.Handler) http.Handler {
 		if wrapped.Status() >= 500 {
 			level = slog.LevelError
 		}
-		// Only the path is logged, never the query string or body: those can
-		// carry a learner's own writing.
 		a.log.Log(r.Context(), level, "request",
 			"requestId", middleware.GetReqID(r.Context()),
 			"method", r.Method,
@@ -269,9 +239,7 @@ func (a *app) requestLogger(next http.Handler) http.Handler {
 	})
 }
 
-// reconcileRoles keeps the tier stored in users.role true as plans lapse.
-// Roles are a copy of plan state and nothing writes to the row when a
-// subscription simply runs out, so the copy has to be refreshed on a timer.
+// reconcileRoles updates user roles for expired subscriptions on a periodic schedule.
 func (a *app) reconcileRoles(ctx context.Context) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()

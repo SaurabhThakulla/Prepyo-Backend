@@ -1,21 +1,4 @@
-// Package reading serves passage-driven reading work.
-//
-// It answers two requests that the flat question bank cannot:
-//
-//   - "give me a Matching Information set" — one random passage that carries
-//     that task type, dealt with its questions in a random order;
-//   - "give me a reading mock" — three passages this learner has never sat,
-//     each carrying the full spread of task types.
-//
-// Both rest on the same rule: a passage is the unit of content, and what a
-// learner has already read is remembered. Practice comes back to a passage only
-// once the rest of the bank has been used; a mock does not come back to one at
-// all until there is nothing left to deal.
-//
-// Grading is not reimplemented here. A generated mock produces an ordinary
-// mock_attempts row scored by internal/mocks, and a single practice answer goes
-// through /api/v1/practice like every other question, because a reading
-// question is a row in `questions` like every other question.
+// Package reading serves passage-driven reading practice and mock sessions.
 package reading
 
 import (
@@ -38,8 +21,7 @@ var (
 	ErrNoReorderItem = errors.New("no re-order item available")
 )
 
-// Exposure contexts. They are stored separately because the rules differ: a
-// mock must not re-deal a passage the learner has sat, while practice may.
+// Exposure contexts.
 const (
 	ContextPractice = "practice"
 	ContextMock     = "mock"
@@ -113,14 +95,8 @@ type ListPassagesParams struct {
 	Offset int
 }
 
-// ListPassages is the passage index: what is in the bank, newest ids last.
+// ListPassages returns passages matching the filter parameters.
 func (r *Repository) ListPassages(ctx context.Context, p ListPassagesParams) ([]models.ReadingPassage, int, error) {
-	// The type filter is a question about the groups on a passage, so both
-	// statements share the same EXISTS rather than the count drifting from the
-	// page it is counting.
-	// Both filters are questions about the questions on a passage, not about the
-	// passage: a passage has no exam of its own any more, and it belongs in an
-	// exam's index when that exam sets something on it.
 	const where = `
 		WHERE is_published
 		  AND ($1 = '' OR EXISTS (
@@ -171,9 +147,7 @@ const groupFields = `
 	id, passage_id, position, type_id, type_name, instructions, resources,
 	passage_display, shuffle_questions, time_limit_seconds`
 
-// Group is a stored group. It carries shuffleQuestions, which the service needs
-// and the client does not: whether a set may be dealt out of order is a
-// property of the task, not something the browser should be asked to respect.
+// Group represents a stored reading question group.
 type Group struct {
 	models.ReadingGroup
 	ShuffleQuestions bool
@@ -225,11 +199,7 @@ func (r *Repository) GroupByID(ctx context.Context, id string) (Group, error) {
 	return g, nil
 }
 
-// TaskTypes is the practice menu: every reading task type in the bank, with the
-// number of passages and questions behind it.
-//
-// The counts are the point. A type with no published questions must be shown as
-// unavailable rather than offered and then failing to deal a set.
+// TaskTypes returns reading task types available for an exam with their passage and question counts.
 func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]models.ReadingTaskType, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT type_id, type_name, passage_count, question_count FROM (
@@ -245,9 +215,7 @@ func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]mod
 
 			UNION ALL
 
-			-- Re-order Paragraphs has no passages, so an item counts as one.
-			-- The menu is asking "how much is there to work through", and for
-			-- this task an item is the unit a learner is dealt.
+			-- Re-order Paragraphs has no passages; each item counts as one.
 			SELECT 'reorder-paragraphs',
 			       'Re-order Paragraphs',
 			       count(DISTINCT i.id),
@@ -278,12 +246,8 @@ func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]mod
 // Selection
 // ---------------------------------------------------------------------------
 
-// PickPracticeGroup chooses one group of the requested type for this learner.
-//
-// Passages the learner has never practised come first; after that the one they
-// met longest ago. Ties break at random, so a learner with a fresh bank gets a
-// genuinely random passage and a learner who has worked through it gets an even
-// rotation rather than the same passage every time.
+// PickPracticeGroup chooses one group of the requested type for this learner,
+// prioritizing unpractised passages then least-recently seen passages.
 func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam models.ExamType, typeID string) (Group, error) {
 	var id string
 	err := r.db.QueryRow(ctx, `
@@ -316,12 +280,7 @@ type MockCandidate struct {
 }
 
 // PickReorderItem chooses one item for this learner, with its backing question.
-//
-// Two rules, in order. An item derived from a passage the learner has already
-// read is skipped outright: they have seen those sentences in the right order,
-// so re-ordering them is not a task any more. Among what is left, unseen items
-// come first and otherwise the one met longest ago, which is the same rule
-// PickPracticeGroup applies to passages.
+// Items from previously seen passages are skipped; unseen items are prioritized.
 func (r *Repository) PickReorderItem(ctx context.Context, userID string, exam models.ExamType) (models.ReadingReorderItem, string, error) {
 	var item models.ReadingReorderItem
 	var questionID string
@@ -361,9 +320,7 @@ func (r *Repository) PickReorderItem(ctx context.Context, userID string, exam mo
 	return item, questionID, nil
 }
 
-// RecordReorderExposure marks items as dealt to this learner. The mirror of
-// RecordExposure, and called at the same point: when the content is handed over,
-// not when it is finished with.
+// RecordReorderExposure marks items as dealt to this learner.
 func (r *Repository) RecordReorderExposure(ctx context.Context, db database.DB, userID string, itemIDs []string, exposureContext string) error {
 	if len(itemIDs) == 0 {
 		return nil
@@ -381,11 +338,7 @@ func (r *Repository) RecordReorderExposure(ctx context.Context, db database.DB, 
 	return nil
 }
 
-// RecordExposure marks passages as met by this learner.
-//
-// It is called when the content is handed over, not when it is finished with. A
-// learner who opens a mock and closes the tab has still read those passages,
-// and giving them the same three next time would defeat the point.
+// RecordExposure marks passages as seen by this learner.
 func (r *Repository) RecordExposure(ctx context.Context, db database.DB, userID string, exam models.ExamType, passageIDs []string, exposureContext string) error {
 	if len(passageIDs) == 0 {
 		return nil
@@ -403,8 +356,7 @@ func (r *Repository) RecordExposure(ctx context.Context, db database.DB, userID 
 	return nil
 }
 
-// SeenPassageIDs returns the passages this learner has met in a context. It
-// backs the "you have sat 6 of 40 passages" line, not the selection itself.
+// SeenPassageIDs returns the passages this learner has met in a context.
 func (r *Repository) SeenPassageIDs(ctx context.Context, userID string, exam models.ExamType, exposureContext string) ([]string, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT passage_id FROM user_passage_exposures
@@ -430,12 +382,7 @@ func (r *Repository) SeenPassageIDs(ctx context.Context, userID string, exam mod
 // Mock sessions
 // ---------------------------------------------------------------------------
 
-// Blueprint is the shape of one exam's generated reading paper: how many
-// passages it deals, how many questions it comes to, and which task types fill
-// each section.
-//
-// MockID is the `mocks` row the paper is recorded against, because generated
-// papers still produce ordinary mock_attempts and those reference a mock id.
+// Blueprint represents the structure of a generated reading mock exam.
 type Blueprint struct {
 	ID              string
 	MockID          string
@@ -448,11 +395,6 @@ type Blueprint struct {
 }
 
 // BlueprintSlot is one section of a paper, filled from one passage.
-//
-// Tasks are the sets inside it, each with its own count, because that is what a
-// section is: Questions 1-7 sentence completion, 8-13 True/False/Not Given. A
-// single total would let a section be filled entirely from whichever task set
-// the passage happens to list first.
 type BlueprintSlot struct {
 	Position int
 	Source   string
@@ -560,23 +502,8 @@ func (r *Repository) blueprintSlots(ctx context.Context, blueprintID string) ([]
 	return list, rows.Err()
 }
 
-// SlotPassageCandidates is every passage able to fill a section for this
-// learner, best first.
-//
-// "Able to fill" is a count of eligible questions, not a shape the passage had
-// to be authored into. A passage qualifies when it carries at least as many
-// published questions of each of the section's tasks, set by this exam, as that
-// task asks for. That is what replaces the old rule, which demanded every
-// passage carry all three IELTS sections and so kept any passage without a full
-// set of eight task sets out of every paper.
-//
-// It returns the whole list rather than the best one because sections cannot be
-// filled independently: they must take different passages, and choosing the best
-// passage for an early section can leave a later one with nothing. The caller
-// assigns across all of them at once.
-//
-// Ordering is the rule practice uses: never sat first, then never met at all,
-// then longest ago, then at random.
+// SlotPassageCandidates returns all passages eligible to fill a section for this
+// learner, ordered by exposure priority.
 func (r *Repository) SlotPassageCandidates(
 	ctx context.Context,
 	userID string,
@@ -595,8 +522,6 @@ func (r *Repository) SlotPassageCandidates(
 		      AND practised.exam = $2 AND practised.context = 'practice'
 		WHERE p.is_published
 		  AND NOT EXISTS (
-			  -- A section is short if any one of its tasks is short, so this
-			  -- asks per task rather than over the section as a whole.
 			  SELECT 1
 			  FROM unnest($3::text[], $4::int[]) AS want(type_id, n)
 			  WHERE (
@@ -629,12 +554,7 @@ func (r *Repository) SlotPassageCandidates(
 	return list, rows.Err()
 }
 
-// PickReorderItems chooses items for a Re-order Paragraphs slot, with the
-// question backing each one.
-//
-// Same rules as PickReorderItem, which deals one for practice: an item derived
-// from a passage the learner has already read is skipped, because they have seen
-// those sentences in the right order.
+// PickReorderItems chooses items for a Re-order Paragraphs slot, with backing questions.
 func (r *Repository) PickReorderItems(
 	ctx context.Context,
 	userID string,
@@ -674,8 +594,7 @@ func (r *Repository) PickReorderItems(
 	return picks, rows.Err()
 }
 
-// GroupsByIDs loads groups by id, which is how a stored paper is rebuilt: the
-// paper knows its question ids, and the questions know their groups.
+// GroupsByIDs loads groups by ID.
 func (r *Repository) GroupsByIDs(ctx context.Context, groupIDs []string) (map[string]Group, error) {
 	byID := map[string]Group{}
 	if len(groupIDs) == 0 {
@@ -702,8 +621,7 @@ func (r *Repository) GroupsByIDs(ctx context.Context, groupIDs []string) (map[st
 	return byID, rows.Err()
 }
 
-// Session is a stored paper. QuestionIDs is the whole point of the row: it is
-// the paper as dealt, so grading cannot be widened by the client.
+// Session represents a stored reading mock paper session.
 type Session struct {
 	models.ReadingMockSession
 	QuestionIDs []string
@@ -730,12 +648,7 @@ type CreateSessionParams struct {
 // ErrSessionOpen means this learner already has a live paper for this exam.
 var ErrSessionOpen = errors.New("a reading mock is already in progress")
 
-// CreateSession stores a dealt paper.
-//
-// A learner may hold one live paper per exam. The unique index enforcing that
-// is what makes a retried start request resume the first paper instead of
-// spending three more passages on a second one; the error is translated here so
-// the caller can do the resuming.
+// CreateSession stores a dealt reading mock session.
 func (r *Repository) CreateSession(ctx context.Context, db database.DB, p CreateSessionParams) (Session, error) {
 	row := db.QueryRow(ctx, `
 		WITH inserted AS (
@@ -775,8 +688,7 @@ func (r *Repository) LiveSession(ctx context.Context, userID string, exam models
 	return s, nil
 }
 
-// SessionByID scopes the lookup to the owner, so one learner cannot read
-// another's paper by guessing a uuid.
+// SessionByID loads a reading mock session for a specific user.
 func (r *Repository) SessionByID(ctx context.Context, db database.DB, userID, sessionID string) (Session, error) {
 	row := db.QueryRow(ctx, `SELECT `+sessionFields+sessionFrom+`
 		WHERE s.id = $1 AND s.user_id = $2`, sessionID, userID)
@@ -791,8 +703,7 @@ func (r *Repository) SessionByID(ctx context.Context, db database.DB, userID, se
 	return s, nil
 }
 
-// ListSessions returns this learner's papers, newest first, without their
-// question lists filled in.
+// ListSessions returns a user's reading mock sessions ordered newest first.
 func (r *Repository) ListSessions(ctx context.Context, userID string, limit, offset int) ([]models.ReadingMockSession, int, error) {
 	var total int
 	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM reading_mock_sessions WHERE user_id = $1`,
@@ -820,9 +731,7 @@ func (r *Repository) ListSessions(ctx context.Context, userID string, limit, off
 	return list, total, rows.Err()
 }
 
-// CloseSession moves a live paper to its final state. The status is part of the
-// WHERE clause so a double submit updates nothing and reports it, rather than
-// grading the same paper twice.
+// CloseSession transitions an in-progress session to the specified status.
 func (r *Repository) CloseSession(ctx context.Context, db database.DB, sessionID, status string, attemptID *string) (bool, error) {
 	tag, err := db.Exec(ctx, `
 		UPDATE reading_mock_sessions

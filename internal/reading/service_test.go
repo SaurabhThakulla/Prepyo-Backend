@@ -41,9 +41,6 @@ func equal(a, b []string) bool {
 	return true
 }
 
-// Nothing a learner is given while answering may carry the answer key, and a
-// reading question travels with more of one than most: the accepted spellings,
-// the model answer, the explanation, and the answer inside each blank.
 func TestBuildGroupStripsTheAnswerKey(t *testing.T) {
 	group := buildGroup(Group{ShuffleQuestions: false}, sampleQuestions(), "")
 
@@ -76,8 +73,6 @@ func TestBuildGroupShufflesWhenTheTaskAllowsIt(t *testing.T) {
 	}
 }
 
-// An ordering task is the position of each question in the set, so shuffling it
-// would destroy the question.
 func TestBuildGroupKeepsOrderWhenTheTaskDependsOnIt(t *testing.T) {
 	original := idsOf(sampleQuestions())
 
@@ -131,9 +126,6 @@ func TestReviewOfFollowsTheDealtOrderAndRestoresAnswers(t *testing.T) {
 	}
 }
 
-// A question the exam does not set is not a question the learner can be asked,
-// whichever route reached it. buildGroup is the last place every path passes
-// through, so the filter lives there and is asserted here.
 func TestBuildGroupDropsQuestionsTheExamDoesNotSet(t *testing.T) {
 	list := []models.Question{
 		{ID: "ielts-only", SupportedExams: []models.ExamType{models.ExamIELTS}},
@@ -158,8 +150,6 @@ func TestBuildGroupDropsQuestionsTheExamDoesNotSet(t *testing.T) {
 	}
 }
 
-// A question written before eligibility existed carries no supported exams, and
-// has to stay answerable under the exam it was authored for.
 func TestSupportsExamFallsBackToTheAuthoredExam(t *testing.T) {
 	legacy := models.Question{ID: "old", Exam: models.ExamIELTS}
 

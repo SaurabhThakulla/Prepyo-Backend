@@ -1,8 +1,4 @@
-// Package models holds the types shared across modules and sent to the client.
-//
-// Fields that can be worked out from other data are marked "derived": they are
-// computed when a response is built, never stored. Level always agrees with XP
-// because there is only one place it can come from.
+// Package models holds domain models shared across modules.
 package models
 
 import "time"
@@ -40,8 +36,7 @@ var AllSkills = []SkillType{SkillSpeaking, SkillWriting, SkillReading, SkillList
 // Users
 // ---------------------------------------------------------------------------
 
-// User is the stored row. It never leaves the backend, because it carries the
-// role.
+// User represents a user account in the database.
 type User struct {
 	ID                   string
 	Email                string
@@ -64,17 +59,10 @@ type User struct {
 	BonusProDays         int
 	CreatedAt            time.Time
 
-	// Set when a profile image exists. The bytes themselves are not loaded
-	// here: the user row is read on every authenticated request and must stay
-	// cheap. See users.Repository.Image.
 	AvatarUpdatedAt *time.Time
 	CoverUpdatedAt  *time.Time
 }
 
-// Roles are the learner's tier as well as their access level: RoleAdmin is the
-// operations account, and the other four mirror the plans in the plans table.
-// The tier half is a denormalised copy of plan_id — plan_id and
-// plan_valid_until remain what entitlement is actually read from.
 const (
 	RoleAdmin   = "admin"
 	RoleSuru    = "suru"
@@ -83,9 +71,6 @@ const (
 	RoleUdaan   = "udaan"
 )
 
-// planRoles maps a plan id to the role that represents it. A plan missing from
-// here is treated as the free tier rather than as an error: an unknown plan
-// must never hand out a higher role than it has paid for.
 var planRoles = map[string]string{
 	"free":   RoleSuru,
 	"weekly": RoleAbhyas,
@@ -101,10 +86,7 @@ func RoleForPlan(planID string) string {
 	return RoleSuru
 }
 
-// RoleForUser is the role a user should currently hold. Admin is never
-// downgraded by a plan: it is an access level, and the operations account has
-// no subscription. An expired plan reports the free tier, matching the limits
-// billing already applies.
+// RoleForUser returns the role a user should hold based on their plan validity.
 func RoleForUser(u User) string {
 	if u.IsAdmin() {
 		return RoleAdmin
@@ -117,15 +99,12 @@ func RoleForUser(u User) string {
 
 func (u User) IsAdmin() bool { return u.Role == RoleAdmin }
 
-// HasActivePaidPlan reports whether the user is inside a live paid period.
-// Distinct from billing.planIsActive, which answers "are this user's limits
-// valid" and is therefore true on the free plan too.
+// HasActivePaidPlan reports whether the user is inside a live paid subscription.
 func (u User) HasActivePaidPlan() bool {
 	return u.PlanValidUntil != nil && u.PlanValidUntil.After(time.Now())
 }
 
-// DaysRemaining is whole days left in the current period, 0 when it is not a
-// live paid one.
+// DaysRemaining is whole days left in the current period, 0 when it is not a live paid one.
 func (u User) DaysRemaining() int {
 	if !u.HasActivePaidPlan() {
 		return 0
@@ -137,8 +116,7 @@ func (u User) DaysRemaining() int {
 	return days
 }
 
-// UserProfile is what the client receives. Build it with NewUserProfile so the
-// derived fields are always filled the same way.
+// UserProfile is the public profile sent to the client.
 type UserProfile struct {
 	ID             string    `json:"id"`
 	Email          string    `json:"email"`
@@ -161,20 +139,12 @@ type UserProfile struct {
 	BonusProDays   int       `json:"bonusProDays"`
 	CreatedAt      time.Time `json:"createdAt"`
 
-	// Derived.
-	Level         int `json:"level"`
-	XPToNextLevel int `json:"xpToNextLevel"`
-
-	// When a profile image was last set, or absent when there is none. The
-	// client uses it both to decide whether to render an image and to bust its
-	// own cache when one changes.
-	AvatarUpdatedAt *time.Time `json:"avatarUpdatedAt,omitempty"`
-	CoverUpdatedAt  *time.Time `json:"coverUpdatedAt,omitempty"`
-
-	// Filled from other tables by the caller. Nil when not requested, so a
-	// cheap endpoint does not pay for an estimate it will not use.
-	Estimate     *ScoreEstimate     `json:"estimate,omitempty"`
-	Subscription *SubscriptionState `json:"subscription,omitempty"`
+	Level           int                `json:"level"`
+	XPToNextLevel   int                `json:"xpToNextLevel"`
+	AvatarUpdatedAt *time.Time         `json:"avatarUpdatedAt,omitempty"`
+	CoverUpdatedAt  *time.Time         `json:"coverUpdatedAt,omitempty"`
+	Estimate        *ScoreEstimate     `json:"estimate,omitempty"`
+	Subscription    *SubscriptionState `json:"subscription,omitempty"`
 }
 
 // XPPerLevel is the width of one level. Levels start at 1.
@@ -358,8 +328,6 @@ type SubscriptionPayment struct {
 // Exam content
 // ---------------------------------------------------------------------------
 
-// ExamVersion freezes the scoring scale for an exam. Attempts store the version
-// they ran under so an old result keeps its original meaning.
 type ExamVersion struct {
 	ID          string   `json:"id"`
 	Exam        ExamType `json:"exam"`
@@ -377,10 +345,9 @@ type QuestionOption struct {
 }
 
 type Blank struct {
-	ID      string   `json:"id"`
-	Options []string `json:"options,omitempty"`
-	// CorrectAnswer is stripped before a question is sent to a learner.
-	CorrectAnswer string `json:"correctAnswer,omitempty"`
+	ID            string   `json:"id"`
+	Options       []string `json:"options,omitempty"`
+	CorrectAnswer string   `json:"correctAnswer,omitempty"`
 }
 
 type Question struct {
@@ -400,37 +367,18 @@ type Question struct {
 	TimeLimitSeconds int              `json:"timeLimitSeconds"`
 	Options          []QuestionOption `json:"options,omitempty"`
 	Blanks           []Blank          `json:"blanks,omitempty"`
-	// GroupID is the task set this question belongs to, empty when it stands
-	// alone. Not sent to the client — it is the server's unit for metering, see
-	// billing.SubTestKeyForQuestion.
-	GroupID string `json:"-"`
-
-	Difficulty string   `json:"difficulty"`
-	Tags       []string `json:"tags"`
-	Points     int      `json:"points"`
-
-	// SupportedExams is which exams set this question. It lives on the question
-	// rather than on its passage because a passage is shared and a question is
-	// not: one text can carry an IELTS True/False set and a PTE gap-fill, and
-	// only the questions can say which is which.
-	SupportedExams []ExamType `json:"supportedExams,omitempty"`
-
-	// Answer key. Never serialised: PublicQuestion drops these before the
-	// question reaches a learner, so the browser cannot read the answers.
-	CorrectAnswers []string `json:"-"`
-	ModelAnswer    string   `json:"-"`
-	Explanation    string   `json:"-"`
-
-	// FigureData describes the chart behind an image in words, for the
-	// evaluator only. The learner is shown ImageURL and never this.
-	FigureData string `json:"-"`
+	GroupID          string           `json:"-"`
+	Difficulty       string           `json:"difficulty"`
+	Tags             []string         `json:"tags"`
+	Points           int              `json:"points"`
+	SupportedExams   []ExamType       `json:"supportedExams,omitempty"`
+	CorrectAnswers   []string         `json:"-"`
+	ModelAnswer      string           `json:"-"`
+	Explanation      string           `json:"-"`
+	FigureData       string           `json:"-"`
 }
 
 // SupportsExam reports whether this question may be answered under an exam.
-//
-// A question with no supported exams recorded falls back to the exam it was
-// authored for. That is what keeps every row written before eligibility existed
-// answerable, and it is why the fallback is here rather than in each caller.
 func (q Question) SupportsExam(exam ExamType) bool {
 	if len(q.SupportedExams) == 0 {
 		return q.Exam == exam
@@ -443,8 +391,7 @@ func (q Question) SupportsExam(exam ExamType) bool {
 	return false
 }
 
-// PublicQuestion is the question as a learner sees it while answering: no
-// answer key, no explanation.
+// PublicQuestion returns a version of the question with answer keys removed.
 func (q Question) PublicQuestion() Question {
 	safe := q
 	safe.CorrectAnswers = nil
@@ -459,8 +406,7 @@ func (q Question) PublicQuestion() Question {
 	return safe
 }
 
-// ReviewQuestion is the question as shown after submission, with the answer key
-// and explanation restored.
+// ReviewQuestion is the question as shown after submission.
 type ReviewQuestion struct {
 	Question
 	CorrectAnswers []string `json:"correctAnswers,omitempty"`
@@ -486,100 +432,59 @@ type MockSection struct {
 }
 
 type Mock struct {
-	ID                   string   `json:"id"`
-	ExamVersionID        string   `json:"examVersionId"`
-	Exam                 ExamType `json:"exam"`
-	Title                string   `json:"title"`
-	Description          string   `json:"description"`
-	TotalDurationMinutes int      `json:"totalDurationMinutes"`
-	TotalQuestions       int      `json:"totalQuestions"`
-	IsDiagnostic         bool     `json:"isDiagnostic"`
-
-	// IsGenerated marks a blueprint whose paper is composed per learner when
-	// they start it. Sections and TotalQuestions stay empty for these, because
-	// there is no fixed question list to report: the client sends the learner
-	// to the reading mock endpoints instead of reading questions from here.
-	IsGenerated bool `json:"isGenerated"`
-
-	Sections []MockSection `json:"sections"`
+	ID                   string        `json:"id"`
+	ExamVersionID        string        `json:"examVersionId"`
+	Exam                 ExamType      `json:"exam"`
+	Title                string        `json:"title"`
+	Description          string        `json:"description"`
+	TotalDurationMinutes int           `json:"totalDurationMinutes"`
+	TotalQuestions       int           `json:"totalQuestions"`
+	IsDiagnostic         bool          `json:"isDiagnostic"`
+	IsGenerated          bool          `json:"isGenerated"`
+	Sections             []MockSection `json:"sections"`
 }
 
 // ---------------------------------------------------------------------------
 // Reading passages
 // ---------------------------------------------------------------------------
 
-// ReadingParagraph is one labelled block of a passage. The label is not
-// decoration: a Matching Information answer is a paragraph label.
 type ReadingParagraph struct {
 	Label string `json:"label"`
 	Text  string `json:"text"`
 }
 
-// ReadingPassage is the text a set of reading questions is written about.
-// ReadingPassage is reusable reading content. It has no exam: the same text is
-// set by IELTS and by PTE with different tasks on it, and which exam may deal a
-// task is recorded on the questions (see Question.SupportedExams).
 type ReadingPassage struct {
 	ID            string             `json:"id"`
 	ExamVersionID string             `json:"examVersionId"`
 	Title         string             `json:"title"`
 	Subtitle      string             `json:"subtitle,omitempty"`
 	Paragraphs    []ReadingParagraph `json:"paragraphs"`
-
-	// Sources carried the attributed excerpts Find the Writer matched against.
-	// That task was replaced by Find the Paragraph in 000019 and the column was
-	// emptied with it; the field stays so the down migration has somewhere to
-	// restore into.
-	Sources []ReadingParagraph `json:"sources,omitempty"`
-
-	WordCount  int      `json:"wordCount"`
-	Difficulty string   `json:"difficulty"`
-	Topic      string   `json:"topic,omitempty"`
-	Tags       []string `json:"tags"`
+	Sources       []ReadingParagraph `json:"sources,omitempty"`
+	WordCount     int                `json:"wordCount"`
+	Difficulty    string             `json:"difficulty"`
+	Topic         string             `json:"topic,omitempty"`
+	Tags          []string           `json:"tags"`
 }
 
-// ReadingGroup is one task set on a passage: a type, the instruction line above
-// it, and the questions in it.
 type ReadingGroup struct {
-	ID           string `json:"id"`
-	PassageID    string `json:"passageId"`
-	Position     int    `json:"position"`
-	TypeID       string `json:"typeId"`
-	TypeName     string `json:"typeName"`
-	Instructions string `json:"instructions"`
-
-	// Resources is material belonging to the task rather than to the passage:
-	// the boxes of an ordering task, a summary with gaps in it.
-	Resources []ReadingParagraph `json:"resources,omitempty"`
-
-	// PassageDisplay tells the client whether to render the passage this group
-	// hangs from. "hidden" is for tasks whose text is a gapped rewrite of it:
-	// showing the clean original would hand over every answer.
-	PassageDisplay string `json:"passageDisplay"`
-
-	TimeLimitSeconds int        `json:"timeLimitSeconds,omitempty"`
-	Questions        []Question `json:"questions"`
+	ID               string             `json:"id"`
+	PassageID        string             `json:"passageId"`
+	Position         int                `json:"position"`
+	TypeID           string             `json:"typeId"`
+	TypeName         string             `json:"typeName"`
+	Instructions     string             `json:"instructions"`
+	Resources        []ReadingParagraph `json:"resources,omitempty"`
+	PassageDisplay   string             `json:"passageDisplay"`
+	TimeLimitSeconds int                `json:"timeLimitSeconds,omitempty"`
+	Questions        []Question         `json:"questions"`
 }
 
-// ReadingSet is a passage with some of its groups attached. Practice returns
-// one group; a mock returns the groups making up one section of the paper.
-//
-// Passage is a pointer because a set does not always have one. A task whose
-// content is the item itself rather than a view onto a text — PTE's Re-order
-// Paragraphs — is dealt as a set with groups and no passage.
 type ReadingSet struct {
 	Passage        *ReadingPassage `json:"passage,omitempty"`
 	Groups         []ReadingGroup  `json:"groups"`
 	TotalQuestions int             `json:"totalQuestions"`
 }
 
-// ReadingReorderItem is a Re-order Paragraphs task: a set of boxes whose correct
-// sequence is the answer.
-//
-// It is not a passage and does not belong to one. The boxes are the whole of the
-// content, and there is no text to read alongside them — which is exactly why it
-// cannot be a group on a passage that would be rendered in the correct order
-// next to it.
 type ReadingReorderItem struct {
 	ID              string             `json:"id"`
 	ExamVersionID   string             `json:"examVersionId"`
@@ -593,8 +498,6 @@ type ReadingReorderItem struct {
 	Tags            []string           `json:"tags"`
 }
 
-// ReadingTaskType is one entry in the "what can I practise?" menu, carrying the
-// size of the bank behind it so the client can grey out an empty choice.
 type ReadingTaskType struct {
 	TypeID        string `json:"typeId"`
 	TypeName      string `json:"typeName"`
@@ -602,8 +505,6 @@ type ReadingTaskType struct {
 	QuestionCount int    `json:"questionCount"`
 }
 
-// ReadingMockSession is one generated reading paper. Sets are filled only when
-// the paper itself is served, not when a session is listed.
 type ReadingMockSession struct {
 	ID              string     `json:"id"`
 	MockID          string     `json:"mockId"`
@@ -616,33 +517,17 @@ type ReadingMockSession struct {
 	PassageIDs      []string   `json:"passageIds"`
 	CreatedAt       time.Time  `json:"createdAt"`
 	SubmittedAt     *time.Time `json:"submittedAt,omitempty"`
-
-	// ReusedPassages is true when the bank held fewer unseen passages than the
-	// paper needed and one had to be repeated. It is reported rather than
-	// hidden, so a repeat does not read as a bug.
-	ReusedPassages bool `json:"reusedPassages"`
-
-	Sets []ReadingSet `json:"sets,omitempty"`
+	ReusedPassages  bool       `json:"reusedPassages"`
+	Sets            []ReadingSet `json:"sets,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
 // Learner activity
 // ---------------------------------------------------------------------------
 
-// AnswerSubmission is one answer sent by the client. Note what is absent: no
-// score, no correctness flag. The server works those out.
 type AnswerSubmission struct {
-	QuestionID string `json:"questionId"`
-
-	// Exam is the context the learner is working under, which decides what the
-	// attempt is recorded against and which exam version scores it. Empty means
-	// the learner's target exam.
-	//
-	// It is not read from the question: a question on a shared passage may be
-	// answerable under either exam, so the question cannot say which one this
-	// was.
-	Exam ExamType `json:"exam,omitempty"`
-
+	QuestionID       string            `json:"questionId"`
+	Exam             ExamType          `json:"exam,omitempty"`
 	TextResponse     string            `json:"textResponse,omitempty"`
 	SelectedOptions  []string          `json:"selectedOptions,omitempty"`
 	BlankResponses   map[string]string `json:"blankResponses,omitempty"`
@@ -712,8 +597,6 @@ type SentenceFeedback struct {
 	Explanation string `json:"explanation"`
 }
 
-// Evaluation is qualitative AI feedback plus an estimate. EstimatedScore is a
-// practice estimate, never an official result; the client labels it that way.
 type Evaluation struct {
 	ID                string                `json:"id"`
 	QuestionID        string                `json:"questionId,omitempty"`
@@ -728,16 +611,9 @@ type Evaluation struct {
 	Weaknesses        []string              `json:"weaknesses"`
 	SentenceFeedback  []SentenceFeedback    `json:"sentenceFeedback"`
 	ModelRewrite      string                `json:"modelRewrite,omitempty"`
-
-	// Transcript is what the learner was heard to say. Speaking only: it is the
-	// evidence every other field here rests on, so it is stored and shown with
-	// them rather than thrown away after scoring.
-	Transcript string `json:"transcript,omitempty"`
-
-	CreatedAt time.Time `json:"createdAt"`
-
-	// Usage is recorded for cost tracking and shown only to admins.
-	Usage EvaluationUsage `json:"usage,omitempty"`
+	Transcript        string                `json:"transcript,omitempty"`
+	CreatedAt         time.Time             `json:"createdAt"`
+	Usage             EvaluationUsage       `json:"usage,omitempty"`
 }
 
 type EvaluationUsage struct {

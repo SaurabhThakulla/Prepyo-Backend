@@ -1,8 +1,4 @@
-// Package config loads settings from the environment.
-//
-// Load returns an error listing every problem it found rather than stopping at
-// the first one, so a misconfigured deploy tells you everything that is wrong
-// in a single boot attempt.
+// Package config loads application configuration from environment variables.
 package config
 
 import (
@@ -30,9 +26,7 @@ type Config struct {
 	// SecureCookies must be true anywhere the app is served over HTTPS.
 	SecureCookies bool
 
-	// AI providers. Everything text runs on the primary provider. Speaking
-	// sends a recording, and the primary provider has no model that accepts
-	// audio input, so it keeps a separate endpoint and key.
+	// AI providers.
 	AIBaseURL      string
 	AIAPIKey       string
 	AIAudioBaseURL string
@@ -40,18 +34,14 @@ type Config struct {
 
 	AIModels         AIModels
 	AIRequestTimeout time.Duration
-	// AIMaxTokens caps one completion. Reasoning models spend part of this
-	// budget thinking before they emit any JSON, so it needs far more headroom
-	// than the visible answer suggests.
+	// AIMaxTokens caps total completion tokens per request.
 	AIMaxTokens int
 
 	GoogleClientID string
 
-	// AdminEmail / AdminPassword override the operations account's built-in
-	// credentials for POST /auth/admin-login, the one password login the
-	// product has. Both may be empty: the binary carries a default so a fresh
-	// deploy can reach the admin area with no configuration. Learner accounts
-	// are Google-only and no password is ever stored for them.
+	// AdminEmail / AdminPassword back the one password login the product has:
+	// POST /auth/admin-login for the operations account. Learner accounts are
+	// Google-only and no password is ever stored for them.
 	AdminEmail    string
 	AdminPassword string
 
@@ -60,27 +50,19 @@ type Config struct {
 	SMTPPassword  string
 	ReportEmailTo string
 
-	// WebDistDir is the frontend's build output. Set it and this binary serves
-	// the app and the API from one origin; leave it empty and it is API-only,
-	// which is what you want when running against `vite dev`.
+	// WebDistDir is the optional directory path to frontend production build assets.
 	WebDistDir string
 }
 
-// ReportingEnabled reports whether /report has credentials to send with. When
-// false the endpoint says so outright rather than accepting a report and
-// dropping it: a learner who has typed out a bug deserves to know it went
-// nowhere.
+// ReportingEnabled reports whether issue reporting credentials are configured.
 func (c Config) ReportingEnabled() bool { return c.SMTPUser != "" && c.SMTPPassword != "" }
 
-// AdminPasswordOverridden reports whether ADMIN_PASSWORD replaces the password
-// built into the binary. When false the admin login still works — the built-in
-// credential is used — but that password is readable by anyone with the source,
-// so production is expected to override it.
-func (c Config) AdminPasswordOverridden() bool { return c.AdminPassword != "" }
+// AdminLoginEnabled reports whether the admin password endpoint has a
+// credential to check against. When false it returns 503 rather than comparing
+// against an empty password and letting anyone in.
+func (c Config) AdminLoginEnabled() bool { return c.AdminEmail != "" && c.AdminPassword != "" }
 
-// AIModels is the routing table the AI gateway uses. Model names are
-// configuration, never constants in the calling code, so a model can be
-// swapped without a redeploy of business logic.
+// AIModels defines model names for each AI task capability.
 type AIModels struct {
 	Writing  string
 	Speaking string
@@ -89,14 +71,10 @@ type AIModels struct {
 
 func (c Config) IsProduction() bool { return c.Env == "production" }
 
-// AIEnabled reports whether the gateway has what it needs to reach a provider.
-// When false the AI endpoints return a clear "unavailable" error instead of
-// inventing a score.
+// AIEnabled reports whether the AI provider is configured.
 func (c Config) AIEnabled() bool { return c.AIAPIKey != "" }
 
-// SpeakingEnabled reports whether the audio provider is configured. Speaking is
-// the one capability the primary provider cannot serve, so it can be off while
-// writing and tutoring work.
+// SpeakingEnabled reports whether the audio provider is configured.
 func (c Config) SpeakingEnabled() bool { return c.AIAudioAPIKey != "" }
 
 func Load() (*Config, error) {
@@ -118,8 +96,6 @@ func Load() (*Config, error) {
 		RedisURL: os.Getenv("REDIS_URL"),
 
 		AIBaseURL: strings.TrimRight(stringOr("AI_BASE_URL", "https://codecraftapi.com/v1"), "/"),
-		// CODE_CRAFT is accepted as an alias so an environment written against
-		// the provider's own naming keeps working.
 		AIAPIKey: firstOf("AI_API_KEY", "CODE_CRAFT"),
 
 		AIAudioBaseURL: strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", "https://openrouter.ai/api/v1"), "/"),
@@ -127,19 +103,11 @@ func Load() (*Config, error) {
 
 		AIModels: AIModels{
 			Writing: stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"),
-			// Speaking sends a recording, so this one must be a model that
-			// accepts audio input, and it is answered by the audio provider.
-			// A text-only model here does not degrade gracefully: it rejects
-			// the request and every speaking submission comes back as
-			// "evaluation unavailable".
 			Speaking: stringOr("AI_MODEL_SPEAKING", "google/gemini-2.5-flash"),
 			Tutoring: stringOr("AI_MODEL_TUTORING", "gpt-5.6-luna"),
 		},
 		SecureCookies: boolOr("SECURE_COOKIES", isProd),
 
-		// Not required anywhere, including production: reporting is a
-		// convenience, and a missing app password should not stop the API from
-		// booting and serving lessons.
 		GoogleClientID: strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID")),
 
 		AdminEmail:    strings.ToLower(stringOr("ADMIN_EMAIL", "admin@prepyo.online")),
@@ -152,17 +120,12 @@ func Load() (*Config, error) {
 		WebDistDir: os.Getenv("WEB_DIST_DIR"),
 	}
 
-	// A path that is set but wrong is worth stopping the boot for: the
-	// alternative is an API that looks healthy while every page request 404s.
 	if cfg.WebDistDir != "" {
 		if _, err := os.Stat(filepath.Join(cfg.WebDistDir, "index.html")); err != nil {
 			problems = append(problems, "WEB_DIST_DIR is set but has no index.html in it: "+cfg.WebDistDir)
 		}
 	}
 
-	// DATABASE_URL is required everywhere: there is no in-memory fallback, by
-	// design. A missing database should stop the boot, not quietly serve
-	// blank data.
 	cfg.DatabaseURL = os.Getenv("DATABASE_URL")
 	if cfg.DatabaseURL == "" {
 		problems = append(problems, "DATABASE_URL is required")
@@ -173,8 +136,6 @@ func Load() (*Config, error) {
 	case cfg.SessionSecret == "" && isProd:
 		problems = append(problems, "SESSION_SECRET is required in production")
 	case cfg.SessionSecret == "":
-		// Development only. Restarting the server invalidates existing
-		// sessions, which is a fair trade for not needing setup to run locally.
 		cfg.SessionSecret = "dev-only-insecure-session-secret"
 	case len(cfg.SessionSecret) < 32:
 		problems = append(problems, "SESSION_SECRET must be at least 32 characters")
@@ -198,8 +159,6 @@ func Load() (*Config, error) {
 	}
 	cfg.AIMaxTokens = maxTokens
 
-	// A short admin password is worse than none: the endpoint is public and the
-	// account it opens can read every metric.
 	if cfg.AdminPassword != "" && len(cfg.AdminPassword) < 12 {
 		problems = append(problems, "ADMIN_PASSWORD must be at least 12 characters")
 	}
@@ -225,8 +184,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// firstOf returns the first of these environment variables that has a value,
-// so a renamed setting can keep honouring the old name.
+// firstOf returns the first non-empty environment variable value from the provided keys.
 func firstOf(keys ...string) string {
 	for _, key := range keys {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {

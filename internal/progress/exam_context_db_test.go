@@ -11,15 +11,9 @@ import (
 	"github.com/prepyo/backend/internal/models"
 )
 
-// Progress and the mistake bank used to read the exam off the question. Once a
-// passage is shared, a question can be set by both exams, and the question stops
-// being able to say which one a learner was working under — so the attempt says
-// it instead.
-//
-// These tests are the ones that prove the switch: the same question answered
-// under two exams has to land in two different places.
-//
-//	TEST_DATABASE_URL=postgres://postgres@localhost:5432/prepyo_refactor?sslmode=disable go test ./internal/progress/
+// Database-backed integration tests for exam-scoped progress and attempts.
+// Run with:
+//   TEST_DATABASE_URL=postgres://postgres@localhost:5432/prepyo?sslmode=disable go test ./internal/progress/
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -57,9 +51,7 @@ func newLearner(t *testing.T, pool *pgxpool.Pool, exam models.ExamType) models.U
 	return user
 }
 
-// sharedQuestion returns a question id that both exams may set, creating one if
-// the bank has none. It is the only case where "the exam of the question" is
-// genuinely undefined.
+// sharedQuestion returns a question ID supported by both exams.
 func sharedQuestion(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	ctx := context.Background()
@@ -100,8 +92,6 @@ func recordAttempt(t *testing.T, pool *pgxpool.Pool, user models.User, questionI
 	}
 }
 
-// The same shared question, answered by two learners under two exams, must
-// count towards two different exams' progress.
 func TestProgressFollowsTheAttemptNotTheQuestion(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -127,8 +117,6 @@ func TestProgressFollowsTheAttemptNotTheQuestion(t *testing.T) {
 	}
 }
 
-// An attempt recorded under one exam must not appear in the other's progress,
-// even when the question is set by both.
 func TestProgressIgnoresTheOtherExamsAttempts(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -149,8 +137,6 @@ func TestProgressIgnoresTheOtherExamsAttempts(t *testing.T) {
 	}
 }
 
-// Every attempt written before the exam column existed was backfilled from its
-// question, so old history still resolves.
 func TestExistingAttemptsStillResolveTheirQuestions(t *testing.T) {
 	pool := testPool(t)
 
@@ -167,8 +153,6 @@ func TestExistingAttemptsStillResolveTheirQuestions(t *testing.T) {
 	}
 }
 
-// The mistake bank filters on the attempt's exam too, and a mistake made under
-// one exam must not show up in the other's list.
 func TestMistakeBankFiltersOnTheAttemptsExam(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -206,8 +190,6 @@ func TestMistakeBankFiltersOnTheAttemptsExam(t *testing.T) {
 	}
 }
 
-// Bank size counts what an exam sets, which after the refactor means the
-// question's eligibility rather than the passage it hangs on.
 func TestBankSizeCountsSharedQuestionsForBothExams(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()

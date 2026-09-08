@@ -261,3 +261,41 @@ func validRole(role string) bool {
 	_, ok := planForRole[role]
 	return ok
 }
+
+type examQuestionCount struct {
+	Exam  string `json:"exam"`
+	Count int    `json:"count"`
+}
+
+// questionsByExam counts published questions per exam. Only exams the schema
+// actually allows are returned; the dashboard is responsible for showing an
+// exam that is planned but not yet built.
+func (h *Handler) questionsByExam(ctx context.Context) ([]examQuestionCount, error) {
+	rows, err := h.db.Query(ctx, `
+		SELECT exam, count(*) FROM questions WHERE is_published GROUP BY exam`)
+	if err != nil {
+		return nil, fmt.Errorf("count questions by exam: %w", err)
+	}
+	defer rows.Close()
+
+	found := map[string]int{}
+	for rows.Next() {
+		var exam string
+		var count int
+		if err := rows.Scan(&exam, &count); err != nil {
+			return nil, fmt.Errorf("scan exam count: %w", err)
+		}
+		found[exam] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Listed even at zero, so an exam with no published questions reads as
+	// empty rather than vanishing from the dropdown.
+	counts := make([]examQuestionCount, 0, 2)
+	for _, exam := range []string{string(models.ExamPTE), string(models.ExamIELTS)} {
+		counts = append(counts, examQuestionCount{Exam: exam, Count: found[exam]})
+	}
+	return counts, nil
+}

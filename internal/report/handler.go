@@ -1,14 +1,4 @@
-// Package report takes an issue report from the in-app dialog and emails it.
-//
-// This used to be a Next.js route handler in the frontend repo, back when that
-// repo shipped a server. The frontend is a static build now, so the endpoint
-// moved here — which is where it always belonged: it is the only part of the
-// product that sends mail, and mail is not something a browser bundle can do.
-//
-// Two things got simpler in the move. The Next version held an opaque session
-// cookie and had to call /profile to learn who was reporting; here the auth
-// middleware has already resolved the user. And rate limiting was a map of IPs
-// swept by hand; here it is the same chi middleware every other route uses.
+// Package report handles issue reporting by emailing user feedback.
 package report
 
 import (
@@ -28,18 +18,10 @@ import (
 )
 
 const (
-	// Long enough for a real report, short enough that nobody can post a book.
-	maxMessage = 4000
-	// The path is context, not content. It only ever holds an app route.
-	maxPath = 200
-
-	smtpHost = "smtp.gmail.com"
-	// Implicit TLS. Port 587 would work too, but it starts in the clear and
-	// upgrades, and there is nothing to gain from the extra round trip.
-	smtpAddr = smtpHost + ":465"
-
-	// A report is a background courtesy, not something the learner waits on
-	// happily. If Gmail has not answered by now it is not going to.
+	maxMessage  = 4000
+	maxPath     = 200
+	smtpHost    = "smtp.gmail.com"
+	smtpAddr    = smtpHost + ":465"
 	sendTimeout = 15 * time.Second
 )
 
@@ -92,7 +74,6 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.smtpUser == "" || h.smtpPassword == "" {
-		// Deliberately not a 200. See Config.ReportingEnabled.
 		h.log.Error("issue report dropped: GMAIL_USER / GMAIL_APP_PASSWORD are not set")
 		httpx.Error(w, http.StatusInternalServerError, httpx.CodeNotConfigured,
 			"Reporting is not switched on in this environment yet.")
@@ -109,13 +90,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, nil)
 }
 
-// send composes the mail and hands it to Gmail.
-//
-// The reporter's name and address end up in headers, so both are stripped of
-// CR and LF first. Without that, a name containing a newline could append
-// headers of its own and turn this endpoint into an open relay for whoever
-// picked the name. The subject is Q-encoded because plenty of learners have
-// names that are not ASCII.
+// send composes and delivers the issue report email.
 func (h *Handler) send(name, email, path, message string) error {
 	name = sanitizeHeader(name)
 	email = sanitizeHeader(email)
@@ -128,7 +103,6 @@ func (h *Handler) send(name, email, path, message string) error {
 	headers := []string{
 		fmt.Sprintf("From: Prepyo Reports <%s>", h.smtpUser),
 		fmt.Sprintf("To: %s", h.to),
-		// Replying in the mail client goes straight back to the learner.
 		fmt.Sprintf("Reply-To: %s", email),
 		fmt.Sprintf("Subject: %s", subject),
 		fmt.Sprintf("Date: %s", time.Now().Format(time.RFC1123Z)),
@@ -150,9 +124,7 @@ func (h *Handler) send(name, email, path, message string) error {
 	return h.deliver([]byte(msg))
 }
 
-// deliver opens the connection itself rather than calling smtp.SendMail, which
-// dials without a timeout: one unresponsive mail server would otherwise hang a
-// goroutine for as long as the process lives.
+// deliver establishes a TLS SMTP connection with timeout and transmits the message.
 func (h *Handler) deliver(msg []byte) error {
 	conn, err := tls.DialWithDialer(
 		&net.Dialer{Timeout: sendTimeout},
@@ -197,7 +169,7 @@ func (h *Handler) deliver(msg []byte) error {
 	return client.Quit()
 }
 
-// sanitizeHeader removes what would let a value break out of its header line.
+// sanitizeHeader strips carriage returns and newlines to prevent header injection.
 func sanitizeHeader(v string) string {
 	return strings.TrimSpace(strings.NewReplacer("\r", "", "\n", "").Replace(v))
 }

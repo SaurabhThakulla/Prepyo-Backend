@@ -80,7 +80,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"mocks": list})
 }
 
-// get returns the blueprint plus its questions, with the answer key stripped.
+// get returns the mock blueprint and its public questions.
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	mock, err := h.repo.ByID(r.Context(), chi.URLParam(r, "mockID"))
 	if err != nil {
@@ -130,11 +130,7 @@ type submitRequest struct {
 	DurationSeconds int                       `json:"durationSeconds"`
 }
 
-// submit grades every answer the learner gave and stores the result.
-//
-// The score comes from their answers. Speaking and writing sections are left
-// out of the score rather than guessed at, and the response says how many
-// questions the score covers.
+// submit grades the submitted answers and saves the mock attempt.
 func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	var req submitRequest
 	if !httpx.Decode(w, r, &req, h.log, "mocks.submit") {
@@ -177,7 +173,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Full mock exams consume entitlement; check plan quota and bonus mock tests
+	// Check plan quota and bonus mock tests.
 	if !mock.IsDiagnostic && h.billing != nil {
 		if _, err := h.billing.CheckMockAllowance(ctx, h.db, user); err != nil {
 			if errors.Is(err, billing.ErrMockLimitReached) {
@@ -221,9 +217,6 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keyed by mock and day: retaking a mock is useful practice and the result
-	// is still stored, but the 300 XP is paid once per mock per day rather than
-	// on every retake.
 	awarded, err := h.xp.Award(ctx, tx, gamification.AwardParams{
 		UserID:    user.ID,
 		Amount:    gamification.XPMockCompleted,
@@ -257,8 +250,6 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		"attempt":   attempt,
 		"xpAwarded": awarded,
 		"streak":    streak,
-		// Says plainly what the score is based on, so a mock with speaking
-		// sections does not look like it graded everything.
 		"scoredQuestions":   graded.total,
 		"ungradedQuestions": graded.ungraded,
 		"scoreConfidence":   scoring.Confidence(graded.total),
@@ -287,9 +278,6 @@ type gradedMock struct {
 }
 
 // gradeAll scores each answer that belongs to this mock.
-//
-// Answers for questions outside the blueprint are ignored, so a client cannot
-// pad its score by submitting extra answers.
 func gradeAll(bank map[string]models.Question, answers []models.AnswerSubmission) gradedMock {
 	result := gradedMock{bySkill: map[models.SkillType]tally{}}
 	seen := map[string]bool{}
@@ -302,8 +290,6 @@ func gradeAll(bank map[string]models.Question, answers []models.AnswerSubmission
 		seen[answer.QuestionID] = true
 
 		if !scoring.Deterministic(question.Skill) {
-			// Speaking and writing need evaluation; they are reported
-			// separately instead of being counted as right or wrong.
 			result.ungraded++
 			continue
 		}
@@ -329,24 +315,16 @@ func gradeAll(bank map[string]models.Question, answers []models.AnswerSubmission
 	return result
 }
 
-// GradedSet is what GradeAnswers reports back: how much of a paper was
-// gradable, and how accurately it was answered overall and per skill.
+// GradedSet holds aggregate scoring metrics for a set of answers.
 type GradedSet struct {
 	Correct  int
 	Total    int
 	Ungraded int
 	Accuracy float64
-	// BySkill holds accuracy in 0..1 for each skill that had a graded
-	// question. A skill with nothing gradable is absent rather than zero,
-	// because "not measured" and "scored nothing" are different results.
-	BySkill map[models.SkillType]float64
+	BySkill  map[models.SkillType]float64
 }
 
 // GradeAnswers grades a set of answers against a bank of questions.
-//
-// It exists so a mock that composes its own paper — see internal/reading — is
-// scored by exactly the same code as a fixed blueprint, rather than by a second
-// implementation that can drift away from this one.
 func GradeAnswers(bank map[string]models.Question, answers []models.AnswerSubmission) GradedSet {
 	graded := gradeAll(bank, answers)
 
@@ -363,8 +341,6 @@ func GradeAnswers(bank map[string]models.Question, answers []models.AnswerSubmis
 	return set
 }
 
-// generatedMockMessage is what a caller gets for trying to read or submit a
-// generated blueprint through the fixed-mock endpoints.
 const generatedMockMessage = "This mock is composed for you when you start it. " +
 	"Start it at POST /api/v1/reading/mocks and submit it to that session."
 

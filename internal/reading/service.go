@@ -114,17 +114,8 @@ type PracticeParams struct {
 	Limit int
 }
 
-// PracticeSet deals one task set: a passage chosen for this learner, and one
-// group of the requested type from it, questions in a random order.
-//
-// The same question may come back on a later set. That is deliberate — a
-// learner working on Matching Information should meet the same passage's
-// questions again once the rest of the bank has been through — so nothing here
-// tracks questions, only passages.
+// PracticeSet deals one task set of the requested type for a learner.
 func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeParams) (models.ReadingSet, error) {
-	// Re-order Paragraphs is not a task on a passage, so it is not dealt like
-	// one. Its content lives in its own table and its set comes back without a
-	// passage at all.
 	if p.TypeID == TypeReorderParagraphs {
 		return s.practiceReorder(ctx, user, p.Exam)
 	}
@@ -149,8 +140,6 @@ func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeP
 		built.Questions = built.Questions[:p.Limit]
 	}
 
-	// Recorded after the set is built, so a passage is never marked as read
-	// because of a request that failed before the learner saw anything.
 	if err := s.repo.RecordExposure(ctx, s.db, user.ID, p.Exam, []string{passage.ID}, ContextPractice); err != nil {
 		return models.ReadingSet{}, err
 	}
@@ -163,11 +152,6 @@ func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeP
 }
 
 // practiceReorder deals one Re-order Paragraphs item as a set with no passage.
-//
-// The boxes are shuffled here rather than stored shuffled, so the same item
-// comes back arranged differently every time. The stored order is the answer
-// key: it has to be written down once, and this is the only place that reads it
-// without handing it over.
 func (s *Service) practiceReorder(ctx context.Context, user models.User, exam models.ExamType) (models.ReadingSet, error) {
 	item, questionID, err := s.repo.PickReorderItem(ctx, user.ID, exam)
 	if err != nil {
@@ -198,8 +182,6 @@ func (s *Service) practiceReorder(ctx context.Context, user models.User, exam mo
 		Questions:        []models.Question{safe},
 	}
 
-	// Recorded after the set is built, so an item is never marked as dealt
-	// because of a request that failed before the learner saw anything.
 	if err := s.repo.RecordReorderExposure(ctx, s.db, user.ID, []string{item.ID}, ContextPractice); err != nil {
 		return models.ReadingSet{}, err
 	}
@@ -214,12 +196,7 @@ func (s *Service) practiceReorder(ctx context.Context, user models.User, exam mo
 // Generated mocks
 // ---------------------------------------------------------------------------
 
-// StartMock deals a reading paper: three passages this learner has not sat, each
-// with every task type, questions shuffled within each set.
-//
-// A learner who already has a live paper gets that one back. Starting is not
-// idempotent in the usual sense — it spends passages — so the second call must
-// resume rather than deal again.
+// StartMock deals or resumes a reading paper for the learner.
 func (s *Service) StartMock(ctx context.Context, user models.User, exam models.ExamType) (models.ReadingMockSession, error) {
 	blueprint, err := s.repo.GeneratedBlueprint(ctx, exam)
 	if err != nil {
@@ -232,9 +209,6 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		return models.ReadingMockSession{}, err
 	}
 
-	// Checked before any passage is spent. Finding out at submit time that the
-	// paper was never allowed would burn three fresh passages on a result the
-	// learner cannot keep.
 	if s.billing != nil {
 		if _, err := s.billing.CheckMockAllowance(ctx, s.db, user); err != nil {
 			return models.ReadingMockSession{}, err
@@ -247,8 +221,6 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 	}
 	passageIDs, questionIDs, reorderIDs, reused := composed.PassageIDs, composed.QuestionIDs, composed.ReorderIDs, composed.Reused
 
-	// Spending the passages and recording the paper are one unit. Either the
-	// learner has a paper and those passages are used up, or neither happened.
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return models.ReadingMockSession{}, fmt.Errorf("begin reading mock: %w", err)
@@ -274,8 +246,6 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		DurationMinutes: blueprint.DurationMinutes,
 	})
 	if err != nil {
-		// Two starts raced. The other one won and its paper stands; this one's
-		// passage spend rolls back with the transaction.
 		if errors.Is(err, ErrSessionOpen) {
 			live, liveErr := s.repo.LiveSession(ctx, user.ID, exam)
 			if liveErr != nil {
@@ -301,16 +271,7 @@ type composition struct {
 	Reused      bool
 }
 
-// compose deals a paper: one slot at a time, a passage that can fill it, and
-// that slot's questions from it.
-//
-// A slot is filled from whatever the passage actually carries. It does not
-// require the passage to have been authored into a particular shape, which is
-// what the old paper_slot column demanded — under that rule a passage without
-// all eight task sets on it could never appear in any paper.
-//
-// The order questions are taken in is the order they are dealt in, and that
-// order is what gets frozen into the session. Shuffling happens here, once.
+// compose builds a concrete paper from a blueprint for a learner.
 func (s *Service) compose(
 	ctx context.Context,
 	userID string,
@@ -359,8 +320,6 @@ func (s *Service) compose(
 
 		out.PassageIDs = append(out.PassageIDs, candidate.PassageID)
 		out.QuestionIDs = append(out.QuestionIDs, ids...)
-		// The bank ran out of passages this learner had not sat. They get one
-		// back rather than no mock at all, and the paper says so.
 		out.Reused = out.Reused || candidate.SeenInMock
 	}
 
@@ -370,18 +329,7 @@ func (s *Service) compose(
 	return out, nil
 }
 
-// assignPassages gives each passage-backed section a passage of its own.
-//
-// It is done for the whole paper at once, not section by section, because the
-// sections compete: a passage that could fill three of them can only fill one,
-// and taking the best passage for section one can leave section four with
-// nothing. That is not hypothetical — a passage carrying no multiple-answer set
-// is a perfectly good passage, and requiring every passage to carry every task
-// type is exactly the assumption this refactor removes.
-//
-// So: candidates per section, then the sections with the fewest candidates
-// first, then backtracking. Candidate order is the exposure preference, so the
-// first assignment that works is also the one practice would have chosen.
+// assignPassages finds a valid assignment of distinct passages to slots using backtracking.
 func (s *Service) assignPassages(
 	ctx context.Context,
 	userID string,
@@ -409,9 +357,7 @@ func (s *Service) assignPassages(
 		sections = append(sections, section{position: slot.Position, candidates: candidates})
 	}
 
-	// Most constrained first. It is not required for correctness — the search
-	// backtracks — but it finds the answer far sooner and fails faster when
-	// there is not one.
+	// Sort most constrained slots first to prune the search space quickly.
 	sort.SliceStable(sections, func(i, j int) bool {
 		return len(sections[i].candidates) < len(sections[j].candidates)
 	})
@@ -446,12 +392,7 @@ func (s *Service) assignPassages(
 	return assigned, nil
 }
 
-// slotQuestions takes one section's worth of questions from one passage: each
-// task in turn, its own count, from the task sets of that type on the passage.
-//
-// Counting per task rather than over the section is what keeps the mix right. A
-// section asking for six sentence completions and four matching-information
-// questions gets six and four, not ten of whichever set the passage lists first.
+// slotQuestions selects the required question counts per task from a passage.
 func (s *Service) slotQuestions(
 	ctx context.Context,
 	passageID string,
@@ -505,8 +446,7 @@ func (s *Service) slotQuestions(
 	return ids, nil
 }
 
-// ResumeMock returns a paper the learner already holds, with the questions in
-// the order they were dealt.
+// ResumeMock returns an in-progress paper for the learner.
 func (s *Service) ResumeMock(ctx context.Context, user models.User, sessionID string) (models.ReadingMockSession, error) {
 	session, err := s.repo.SessionByID(ctx, s.db, user.ID, sessionID)
 	if err != nil {
@@ -523,8 +463,6 @@ func (s *Service) AbandonMock(ctx context.Context, user models.User, sessionID s
 	if session.Status != StatusInProgress {
 		return ErrAlreadySubmitted
 	}
-	// The passages stay spent. The learner has seen them, and abandoning a
-	// paper is not a way to get them dealt again.
 	_, err = s.repo.CloseSession(ctx, s.db, session.ID, StatusAbandoned, nil)
 	return err
 }
@@ -541,11 +479,6 @@ type MockResult struct {
 }
 
 // SubmitMock grades a dealt paper and records the result.
-//
-// Grading runs over the question ids stored when the paper was dealt, never
-// over the ids in the request, so extra answers cannot widen the paper. The
-// answers themselves go through internal/mocks, which is the same grader the
-// fixed blueprints use.
 func (s *Service) SubmitMock(
 	ctx context.Context,
 	user models.User,
@@ -603,9 +536,6 @@ func (s *Service) SubmitMock(
 		return MockResult{}, err
 	}
 
-	// Keyed to the session rather than to the mock and the day, because every
-	// generated paper is new work: a learner who sits two reading mocks in one
-	// afternoon has done two mocks, not one.
 	awarded, err := s.xp.Award(ctx, tx, gamification.AwardParams{
 		UserID:    user.ID,
 		Amount:    gamification.XPMockCompleted,
@@ -621,9 +551,6 @@ func (s *Service) SubmitMock(
 		return MockResult{}, err
 	}
 
-	// The status guard is inside the update. If another request submitted this
-	// paper between the read above and here, nothing is written and the
-	// attempt rolls back with the transaction.
 	closed, err := s.repo.CloseSession(ctx, tx, session.ID, StatusSubmitted, &attempt.ID)
 	if err != nil {
 		return MockResult{}, err
@@ -651,26 +578,13 @@ func (s *Service) SubmitMock(
 // Composition
 // ---------------------------------------------------------------------------
 
-// hydrate rebuilds a stored paper from the question ids it was dealt.
-//
-// Those ids are the paper. Everything else — which groups appear, which
-// passages, what order they run in — is derived from them, so a paper cannot be
-// changed by anything that happens to the bank afterwards. Adding a question to
-// a passage does not add it to a paper already dealt; changing a blueprint does
-// not re-cut one; only unpublishing a question removes it, and then it is gone
-// rather than silently replaced.
-//
-// It used to rebuild by re-running composition and then filtering the result
-// against the stored ids, which is why 000009 had to abandon every live paper
-// when the slots moved. This does not have that dependency.
+// hydrate rebuilds a stored paper session from its dealt question IDs.
 func (s *Service) hydrate(ctx context.Context, session Session) (models.ReadingMockSession, error) {
 	bank, err := s.questions.ByIDs(ctx, session.QuestionIDs)
 	if err != nil {
 		return models.ReadingMockSession{}, err
 	}
 
-	// Groups and passages in the order the paper first reaches them, so the
-	// rebuilt paper runs in dealt order rather than in id order.
 	var groupOrder []string
 	seenGroup := map[string]bool{}
 	questionsByGroup := map[string][]models.Question{}
@@ -734,11 +648,6 @@ func (s *Service) hydrate(ctx context.Context, session Session) (models.ReadingM
 		sets = append(sets, set)
 	}
 
-	// Re-order Paragraphs has no passage to hang from, so its questions come
-	// last as a set of their own. The boxes are shuffled per deal, and the
-	// shuffle is not stored, so this is where a resumed paper gets them
-	// rearranged again — the answer is the sequence, not the arrangement they
-	// happen to start in.
 	if len(standalone) > 0 {
 		sets = append(sets, reorderSet(standalone))
 	}
@@ -768,14 +677,7 @@ func reorderSet(list []models.Question) models.ReadingSet {
 	}
 }
 
-// buildSets loads passages and their groups and assembles them, shuffling each
-// group that allows it. An empty typeID takes every group on the passage, and an
-// empty exam takes every question regardless of which exams set it.
-//
-// This is the read path for a single passage — /reading/passages/{id} — not the
-// composition path. A paper is composed by compose() and rebuilt by hydrate();
-// neither goes through here, because a paper is a frozen list of question ids
-// and this function answers a different question: what is on this passage.
+// buildSets loads passages and groups for display, filtering by typeID and exam.
 func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID string, exam models.ExamType) ([]models.ReadingSet, error) {
 	passages, err := s.repo.PassagesByIDs(ctx, passageIDs)
 	if err != nil {
@@ -799,16 +701,12 @@ func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID str
 	built := make(map[string][]models.ReadingGroup, len(passages))
 	for _, g := range groups {
 		group := buildGroup(g, byGroup[g.ID], exam)
-		// A task set this exam does not set has no questions left in it, and an
-		// empty set is not something to put on screen.
 		if len(group.Questions) == 0 {
 			continue
 		}
 		built[g.PassageID] = append(built[g.PassageID], group)
 	}
 
-	// passageIDs order is the order the paper was dealt in, so it drives the
-	// result rather than whatever order the database returned rows in.
 	sets := make([]models.ReadingSet, 0, len(passageIDs))
 	for _, id := range passageIDs {
 		passage, ok := passages[id]
@@ -824,14 +722,7 @@ func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID str
 	return sets, nil
 }
 
-// buildGroup attaches questions to a group, with the answer key stripped, the
-// questions this exam does not set left out, and the order randomised where the
-// task allows it.
-//
-// The eligibility filter is here rather than in the query because this is the
-// last place every path passes through: practice, a dealt paper and a resumed
-// one all build their sets from here. A question the exam does not set is not a
-// question the learner can be asked, whichever route reached it.
+// buildGroup attaches questions to a group, filtering by exam eligibility and stripping answers.
 func buildGroup(g Group, list []models.Question, exam models.ExamType) models.ReadingGroup {
 	safe := make([]models.Question, 0, len(list))
 	for _, q := range list {
@@ -849,9 +740,7 @@ func buildGroup(g Group, list []models.Question, exam models.ExamType) models.Re
 	return group
 }
 
-// reviewOf returns the paper with its answer key restored, in dealt order, for
-// the results screen. Safe here and only here: the paper has been graded and
-// closed, so the answers can no longer change what the learner scored.
+// reviewOf returns the paper questions with answer keys restored for review.
 func reviewOf(questionIDs []string, bank map[string]models.Question) []models.ReviewQuestion {
 	review := make([]models.ReviewQuestion, 0, len(questionIDs))
 	for _, id := range questionIDs {

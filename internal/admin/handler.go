@@ -65,9 +65,25 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The same breakdown the users table filters by, so the card above it and
+	// the tiles below can never disagree about how many are on a plan.
+	byRole, err := h.countsByRole(r.Context())
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.countsByRole", err)
+		return
+	}
+
+	byExam, err := h.questionsByExam(r.Context())
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.questionsByExam", err)
+		return
+	}
+
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"metrics":      m,
-		"usageByModel": byModel,
+		"metrics":         m,
+		"usageByModel":    byModel,
+		"usersByRole":     byRole,
+		"questionsByExam": byExam,
 	})
 }
 

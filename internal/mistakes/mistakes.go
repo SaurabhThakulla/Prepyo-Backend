@@ -1,5 +1,4 @@
-// Package mistakes keeps the mistake bank: questions a learner got wrong,
-// grouped so repeat failures show up as one entry with a rising count.
+// Package mistakes manages recorded user mistakes and resolution status.
 package mistakes
 
 import (
@@ -31,11 +30,7 @@ type RecordParams struct {
 	Explanation     string
 }
 
-// Record adds or updates a mistake.
-//
-// A second failure on the same question bumps failed_count and reopens the
-// entry rather than creating a duplicate, which is what keeps the bank a list
-// of recurring weaknesses instead of a log of every wrong click.
+// Record adds or updates a mistake, incrementing failure count on duplicate.
 func (r *Repository) Record(ctx context.Context, db database.DB, p RecordParams) error {
 	_, err := db.Exec(ctx, `
 		INSERT INTO mistakes (user_id, question_id, exam, error_tag, user_response, correct_response, explanation)
@@ -106,10 +101,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, 
 	return list, total, rows.Err()
 }
 
-// Resolve marks a mistake as handled.
-//
-// The user_id in the WHERE clause is the ownership check: another learner's id
-// simply matches no rows, so there is no way to resolve someone else's entry.
+// Resolve marks a mistake as handled for a user.
 func (r *Repository) Resolve(ctx context.Context, db database.DB, userID, mistakeID string) error {
 	tag, err := db.Exec(ctx, `
 		UPDATE mistakes SET resolved = TRUE

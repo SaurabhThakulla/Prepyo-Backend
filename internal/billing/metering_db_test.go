@@ -13,16 +13,9 @@ import (
 	"github.com/prepyo/backend/internal/models"
 )
 
-// Sub-test metering is almost entirely SQL — what counts as one task set, whose
-// day it is counted in, and whether two concurrent submissions can both spend
-// the last one. None of that can be exercised without a database, so these tests
-// run against a real one and skip when there is not one to talk to.
-//
-//	TEST_DATABASE_URL=postgres://postgres@localhost:5432/prepyo?sslmode=disable go test ./internal/billing/
-//
-// They need a database that has had the migrations applied, including the
-// reading seed, because they borrow its question groups rather than inventing
-// content.
+// Database-backed integration tests for sub-test quota metering.
+// Run with:
+//   TEST_DATABASE_URL=postgres://postgres@localhost:5432/prepyo?sslmode=disable go test ./internal/billing/
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -38,8 +31,6 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// newLearner makes a throwaway user on the free plan and removes them, and
-// everything that cascades from them, when the test ends.
 func newLearner(t *testing.T, pool *pgxpool.Pool) models.User {
 	t.Helper()
 	ctx := context.Background()
@@ -63,8 +54,6 @@ func newLearner(t *testing.T, pool *pgxpool.Pool) models.User {
 	return user
 }
 
-// taskSets borrows n reading groups from the seed, each with at least two
-// published questions, so a test can tell "one set" from "one question".
 func taskSets(t *testing.T, pool *pgxpool.Pool, n int) [][]models.Question {
 	t.Helper()
 	ctx := context.Background()
@@ -162,8 +151,6 @@ func TestTaskSetCountsOnceHoweverManyQuestions(t *testing.T) {
 	}
 }
 
-// A learner who spends their last sub-test on question 1 of six must still be
-// able to answer the other five. Only starting a new set can be refused.
 func TestSetAlreadyStartedStaysAnswerableAtTheLimit(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool)
@@ -194,9 +181,6 @@ func TestSetAlreadyStartedStaysAnswerableAtTheLimit(t *testing.T) {
 	}
 }
 
-// Mocks have their own allowance. A mock writes mock_attempts and a reading mock
-// writes no practice_attempts at all, so neither should be visible here — but
-// that is a property of the queries, and properties get broken.
 func TestMocksDoNotConsumeSubTests(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool)
@@ -235,8 +219,6 @@ func TestMocksDoNotConsumeSubTests(t *testing.T) {
 	}
 }
 
-// The race the user-row lock exists to close: with one sub-test left, several
-// concurrent first-answers for different new sets must not all get through.
 func TestConcurrentFirstAnswersSpendOneSubTest(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool)
@@ -310,10 +292,6 @@ func TestConcurrentFirstAnswersSpendOneSubTest(t *testing.T) {
 	}
 }
 
-// The day a sub-test lands in is the learner's, not the server's. Before this
-// change billing used date_trunc('day', now()) while XP and missions already
-// used the learner's zone, so on a UTC server a Kathmandu learner's quota reset
-// at 05:45 local while the error message said midnight.
 func TestUsageCountsTheLearnersOwnDay(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool)
@@ -328,8 +306,6 @@ func TestUsageCountsTheLearnersOwnDay(t *testing.T) {
 			}
 			user.Timezone = tz
 
-			// An unparseable zone falls back to Nepal, which is localDay's
-			// existing policy and not something this test gets to redefine.
 			start := gamification.LocalDayStart(user)
 
 			mustInsertAt(t, pool, user, sets[0][0], start.Add(-time.Second))

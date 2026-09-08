@@ -1,8 +1,4 @@
 // Package questions serves the shared question bank.
-//
-// Questions are content, not learner data: the same row is served to everyone.
-// The answer key never reaches the browser while a question is being answered
-// (see models.Question.PublicQuestion).
 package questions
 
 import (
@@ -41,24 +37,12 @@ type ListParams struct {
 	Limit  int
 	Offset int
 
-	// IncludePassageQuestions brings reading questions that belong to a passage
-	// into the results. Off by default: see List.
+	// IncludePassageQuestions includes reading questions that belong to a passage.
 	IncludePassageQuestions bool
 }
 
-// List returns published questions matching the filters. Empty filter fields
-// mean "any".
-//
-// Questions attached to a reading passage are left out unless asked for. They
-// are not standalone tasks — the text they are about lives in
-// reading_passages, not in the question row — so serving one here would hand a
-// learner a question with nothing to read. They are served with their passage
-// by /api/v1/reading instead.
+// List returns published questions matching the filters.
 func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question, int, error) {
-	// A question belonging to a passage or to a re-order item is dealt by the
-	// reading module, which knows what has to be rendered alongside it. Handing
-	// one out here would strand it: a gap-fill with no text, or an ordering task
-	// with no boxes.
 	const where = `
 		WHERE is_published
 		  AND ($1 = '' OR $1 = ANY(supported_exams))
@@ -94,8 +78,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question,
 	return list, total, rows.Err()
 }
 
-// ByID returns one question including its answer key. Callers serving a
-// learner must call PublicQuestion before sending it out.
+// ByID returns one question by ID. Callers serving learners should use PublicQuestion.
 func (r *Repository) ByID(ctx context.Context, id string) (models.Question, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+selectFields+` FROM questions WHERE id = $1 AND is_published`, id)
 
@@ -132,13 +115,7 @@ func (r *Repository) ByIDs(ctx context.Context, ids []string) (map[string]models
 	return found, rows.Err()
 }
 
-// ByGroupIDs returns the questions belonging to several reading groups in one
-// round trip, keyed by group id and in their authored order within each group.
-//
-// It lives here rather than in internal/reading so that there stays exactly one
-// piece of code that knows how a question row is shaped. Answer keys come back
-// attached: the caller decides whether it is grading (keep them) or serving
-// (strip them with PublicQuestion).
+// ByGroupIDs returns questions belonging to several reading groups keyed by group ID.
 func (r *Repository) ByGroupIDs(ctx context.Context, groupIDs []string) (map[string][]models.Question, error) {
 	byGroup := map[string][]models.Question{}
 	if len(groupIDs) == 0 {
@@ -184,8 +161,7 @@ func scanWithPrefix(row pgx.Row, prefix any) (models.Question, error) {
 	return q, nil
 }
 
-// fieldsOf lists scan targets in the order of selectFields. The two are a pair:
-// change one and change the other.
+// fieldsOf lists scan targets matching selectFields.
 func fieldsOf(q *models.Question) []any {
 	return []any{
 		&q.ID, &q.ExamVersionID, &q.Exam, &q.Skill, &q.TypeID, &q.TypeName,
