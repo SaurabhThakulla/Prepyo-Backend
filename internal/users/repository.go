@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,13 +19,12 @@ import (
 var (
 	ErrNotFound      = errors.New("user not found")
 	ErrEmailTaken    = errors.New("email already registered")
-	ErrPhoneTaken    = errors.New("phone already registered")
 	uniqueViolation  = "23505"
 	selectUserFields = `
-		id, COALESCE(email, ''), COALESCE(password_hash, ''), name, role, target_exam, target_score, exam_date,
+		id, COALESCE(email, ''), name, role, target_exam, target_score, exam_date,
 		nepal_region, xp, streak_days, streak_last_active_date, timezone,
 		plan_id, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at,
-		avatar_updated_at, cover_updated_at, COALESCE(phone, '')`
+		avatar_updated_at, cover_updated_at, COALESCE(google_sub, '')`
 )
 
 type Repository struct {
@@ -39,8 +37,7 @@ func NewRepository(db database.DB) *Repository {
 
 type CreateParams struct {
 	Email        string
-	Phone        string
-	PasswordHash string
+	GoogleSub    string
 	Name         string
 	NepalRegion  string
 	Timezone     string
@@ -53,19 +50,15 @@ func (r *Repository) Create(ctx context.Context, p CreateParams) (models.User, e
 
 func (r *Repository) CreateTx(ctx context.Context, db database.DB, p CreateParams) (models.User, error) {
 	row := db.QueryRow(ctx, `
-		INSERT INTO users (email, phone, phone_verified_at, password_hash, name, nepal_region, timezone, referral_code)
-		VALUES (NULLIF($1, ''), NULLIF($2, ''), CASE WHEN $2 = '' THEN NULL ELSE now() END,
-		        NULLIF($3, ''), $4, $5, $6, $7)
+		INSERT INTO users (email, google_sub, name, nepal_region, timezone, referral_code)
+		VALUES (lower(NULLIF($1, '')), NULLIF($2, ''), $3, $4, $5, $6)
 		RETURNING `+selectUserFields,
-		p.Email, p.Phone, p.PasswordHash, p.Name, p.NepalRegion, p.Timezone, p.ReferralCode)
+		p.Email, p.GoogleSub, p.Name, p.NepalRegion, p.Timezone, p.ReferralCode)
 
 	user, err := scanUser(row)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
-			if strings.Contains(pgErr.ConstraintName, "phone") {
-				return models.User{}, ErrPhoneTaken
-			}
 			return models.User{}, ErrEmailTaken
 		}
 		return models.User{}, fmt.Errorf("create user: %w", err)
@@ -79,13 +72,23 @@ func (r *Repository) ByID(ctx context.Context, id string) (models.User, error) {
 }
 
 func (r *Repository) ByEmail(ctx context.Context, email string) (models.User, error) {
-	row := r.db.QueryRow(ctx, `SELECT `+selectUserFields+` FROM users WHERE email = lower($1)`, email)
+	row := r.db.QueryRow(ctx, `SELECT `+selectUserFields+` FROM users WHERE lower(email) = lower($1)`, email)
 	return r.scanOne(row, "by email")
 }
 
-func (r *Repository) ByPhone(ctx context.Context, phone string) (models.User, error) {
-	row := r.db.QueryRow(ctx, `SELECT `+selectUserFields+` FROM users WHERE phone = $1`, phone)
-	return r.scanOne(row, "by phone")
+func (r *Repository) ByGoogleSub(ctx context.Context, sub string) (models.User, error) {
+	row := r.db.QueryRow(ctx, `SELECT `+selectUserFields+` FROM users WHERE google_sub = $1`, sub)
+	return r.scanOne(row, "by google sub")
+}
+
+func (r *Repository) LinkGoogleSub(ctx context.Context, userID, sub string) (models.User, error) {
+	row := r.db.QueryRow(ctx, `
+		UPDATE users SET google_sub = $2, updated_at = now()
+		WHERE id = $1
+		RETURNING `+selectUserFields,
+		userID, sub)
+
+	return r.scanOne(row, "link google sub")
 }
 
 // UpdateProfile writes the onboarding and goal fields. Every argument is
@@ -155,11 +158,11 @@ func (r *Repository) scanOne(row pgx.Row, op string) (models.User, error) {
 func scanUser(row pgx.Row) (models.User, error) {
 	var u models.User
 	err := row.Scan(
-		&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Role, &u.TargetExam,
+		&u.ID, &u.Email, &u.Name, &u.Role, &u.TargetExam,
 		&u.TargetScore, &u.ExamDate, &u.NepalRegion, &u.XP, &u.StreakDays,
 		&u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanValidUntil,
 		&u.ReferralCode, &u.BonusMockTests, &u.BonusProDays,
-		&u.CreatedAt, &u.AvatarUpdatedAt, &u.CoverUpdatedAt, &u.Phone,
+		&u.CreatedAt, &u.AvatarUpdatedAt, &u.CoverUpdatedAt, &u.GoogleSub,
 	)
 	return u, err
 }

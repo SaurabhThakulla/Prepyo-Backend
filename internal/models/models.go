@@ -41,12 +41,11 @@ var AllSkills = []SkillType{SkillSpeaking, SkillWriting, SkillReading, SkillList
 // ---------------------------------------------------------------------------
 
 // User is the stored row. It never leaves the backend, because it carries the
-// password hash and the role.
+// role.
 type User struct {
 	ID                   string
 	Email                string
-	Phone                string
-	PasswordHash         string
+	GoogleSub            string
 	Name                 string
 	Role                 string
 	TargetExam           ExamType

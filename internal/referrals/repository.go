@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("referral not found")
-	ErrSelfReferral   = errors.New("cannot refer yourself")
+	ErrNotFound        = errors.New("referral not found")
+	ErrSelfReferral    = errors.New("cannot refer yourself")
 	ErrAlreadyReferred = errors.New("user has already been referred")
-	ErrCodeNotFound   = errors.New("referral code not found")
+	ErrCodeNotFound    = errors.New("referral code not found")
 )
 
 type Repository struct {
@@ -31,12 +31,12 @@ func (r *Repository) UserByCode(ctx context.Context, db database.DB, code string
 	norm := NormalizeCode(code)
 	var u models.User
 	err := db.QueryRow(ctx, `
-		SELECT id, email, password_hash, name, role, target_exam, target_score, exam_date,
+		SELECT id, email, name, role, target_exam, target_score, exam_date,
 		       nepal_region, xp, streak_days, streak_last_active_date, timezone,
 		       plan_id, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at
 		FROM users
 		WHERE referral_code = $1`, norm).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Role, &u.TargetExam,
+		Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.TargetExam,
 			&u.TargetScore, &u.ExamDate, &u.NepalRegion, &u.XP, &u.StreakDays,
 			&u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanValidUntil,
 			&u.ReferralCode, &u.BonusMockTests, &u.BonusProDays, &u.CreatedAt)

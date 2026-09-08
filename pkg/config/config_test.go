@@ -121,6 +121,7 @@ func TestLoadProductionSucceedsWhenConfigured(t *testing.T) {
 		"ALLOWED_ORIGINS":    "https://prepyo.np",
 		"SESSION_SECRET":     strings.Repeat("a", 40),
 		"OPENROUTER_API_KEY": "key",
+		"GOOGLE_CLIENT_ID":   "prepyo.apps.googleusercontent.com",
 	})
 
 	cfg, err := Load()

@@ -57,7 +57,7 @@ func TestIsValidFormat(t *testing.T) {
 	}{
 		{"PREP-X7K4M9", true},
 		{"PREP-234567", true},
-		{"prep-x7k4m9", true}, // normalized
+		{"prep-x7k4m9", true},  // normalized
 		{"PREP-123456", false}, // contains '1', which is excluded from charset
 		{"PREP-OOOOOO", false}, // contains 'O', which is excluded
 		{"X7K4M9", false},      // missing prefix

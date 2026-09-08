@@ -40,6 +40,10 @@ func run() error {
 		log.Warn("OPENROUTER_API_KEY is not set: evaluation and tutor endpoints will return 503")
 	}
 
+	if !cfg.GoogleSignInEnabled() {
+		log.Warn("GOOGLE_CLIENT_ID is not set: POST /auth/google returns 503 and nobody can sign in")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

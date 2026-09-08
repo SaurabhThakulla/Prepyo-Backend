@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	RewardReferrerXP      = 200
-	RewardRefereeXP       = 100
-	DefaultMonthlyLimit   = 50
-	MilestoneThreeReward  = 1 // 1 free mock test
-	MilestoneFiveDays     = 3 // 3 pro days
+	RewardReferrerXP     = 200
+	RewardRefereeXP      = 100
+	DefaultMonthlyLimit  = 50
+	MilestoneThreeReward = 1 // 1 free mock test
+	MilestoneFiveDays    = 3 // 3 pro days
 )
 
 type Service struct {
