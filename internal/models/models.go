@@ -535,7 +535,17 @@ type ReadingMockSession struct {
 // AnswerSubmission is one answer sent by the client. Note what is absent: no
 // score, no correctness flag. The server works those out.
 type AnswerSubmission struct {
-	QuestionID       string            `json:"questionId"`
+	QuestionID string `json:"questionId"`
+
+	// Exam is the context the learner is working under, which decides what the
+	// attempt is recorded against and which exam version scores it. Empty means
+	// the learner's target exam.
+	//
+	// It is not read from the question: a question on a shared passage may be
+	// answerable under either exam, so the question cannot say which one this
+	// was.
+	Exam ExamType `json:"exam,omitempty"`
+
 	TextResponse     string            `json:"textResponse,omitempty"`
 	SelectedOptions  []string          `json:"selectedOptions,omitempty"`
 	BlankResponses   map[string]string `json:"blankResponses,omitempty"`
@@ -545,6 +555,7 @@ type AnswerSubmission struct {
 type PracticeAttempt struct {
 	ID                 string    `json:"id"`
 	QuestionID         string    `json:"questionId"`
+	Exam               ExamType  `json:"exam"`
 	ExamVersionID      string    `json:"examVersionId"`
 	IsCorrect          bool      `json:"isCorrect"`
 	Score              float64   `json:"score"`

@@ -24,6 +24,7 @@ func NewRepository(db database.DB) *Repository {
 type SaveParams struct {
 	UserID             string
 	QuestionID         string
+	Exam               models.ExamType
 	ExamVersionID      string
 	IsCorrect          bool
 	Score              float64
@@ -38,15 +39,15 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 	var a models.PracticeAttempt
 	err := db.QueryRow(ctx, `
 		INSERT INTO practice_attempts (
-			user_id, question_id, exam_version_id, is_correct, score, max_score,
+			user_id, question_id, exam, exam_version_id, is_correct, score, max_score,
 			accuracy_percentage, user_response, feedback, time_spent_seconds)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, question_id, exam_version_id, is_correct, score, max_score,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, question_id, exam, exam_version_id, is_correct, score, max_score,
 		          accuracy_percentage, COALESCE(feedback, ''), COALESCE(user_response, ''),
 		          time_spent_seconds, created_at`,
-		p.UserID, p.QuestionID, p.ExamVersionID, p.IsCorrect, p.Score, p.MaxScore,
+		p.UserID, p.QuestionID, p.Exam, p.ExamVersionID, p.IsCorrect, p.Score, p.MaxScore,
 		p.AccuracyPercentage, p.UserResponse, p.Feedback, p.TimeSpentSeconds,
-	).Scan(&a.ID, &a.QuestionID, &a.ExamVersionID, &a.IsCorrect, &a.Score, &a.MaxScore,
+	).Scan(&a.ID, &a.QuestionID, &a.Exam, &a.ExamVersionID, &a.IsCorrect, &a.Score, &a.MaxScore,
 		&a.AccuracyPercentage, &a.Feedback, &a.UserResponse, &a.TimeSpentSeconds, &a.CreatedAt)
 	if err != nil {
 		return models.PracticeAttempt{}, fmt.Errorf("save practice attempt: %w", err)
@@ -67,7 +68,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.PracticeA
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT id, question_id, exam_version_id, is_correct, score, max_score,
+		SELECT id, question_id, exam, exam_version_id, is_correct, score, max_score,
 		       accuracy_percentage, COALESCE(feedback, ''), COALESCE(user_response, ''),
 		       time_spent_seconds, created_at
 		FROM practice_attempts
@@ -83,7 +84,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.PracticeA
 	list := []models.PracticeAttempt{}
 	for rows.Next() {
 		var a models.PracticeAttempt
-		if err := rows.Scan(&a.ID, &a.QuestionID, &a.ExamVersionID, &a.IsCorrect, &a.Score,
+		if err := rows.Scan(&a.ID, &a.QuestionID, &a.Exam, &a.ExamVersionID, &a.IsCorrect, &a.Score,
 			&a.MaxScore, &a.AccuracyPercentage, &a.Feedback, &a.UserResponse,
 			&a.TimeSpentSeconds, &a.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan practice attempt: %w", err)

@@ -46,8 +46,8 @@ func newLearner(t *testing.T, pool *pgxpool.Pool) models.User {
 
 	var user models.User
 	err := pool.QueryRow(ctx, `
-		INSERT INTO users (email, password_hash, name, plan_id, timezone, referral_code)
-		VALUES ('metering-' || gen_random_uuid() || '@test.local', 'x', 'Metering Test', 'free',
+		INSERT INTO users (email, name, plan_id, timezone, referral_code)
+		VALUES ('metering-' || gen_random_uuid() || '@test.local', 'Metering Test', 'free',
 		        'Asia/Kathmandu', 'TEST-' || substr(replace(gen_random_uuid()::text, '-', ''), 1, 10))
 		RETURNING id, plan_id, timezone, bonus_mock_tests`).
 		Scan(&user.ID, &user.PlanID, &user.Timezone, &user.BonusMockTests)
@@ -70,7 +70,7 @@ func taskSets(t *testing.T, pool *pgxpool.Pool, n int) [][]models.Question {
 	ctx := context.Background()
 
 	rows, err := pool.Query(ctx, `
-		SELECT q.group_id, q.id, q.exam_version_id
+		SELECT q.group_id, q.id, q.exam, q.exam_version_id
 		  FROM questions q
 		 WHERE q.group_id IN (
 			   SELECT group_id FROM questions
@@ -88,7 +88,7 @@ func taskSets(t *testing.T, pool *pgxpool.Pool, n int) [][]models.Question {
 	var order []string
 	for rows.Next() {
 		var q models.Question
-		if err := rows.Scan(&q.GroupID, &q.ID, &q.ExamVersionID); err != nil {
+		if err := rows.Scan(&q.GroupID, &q.ID, &q.Exam, &q.ExamVersionID); err != nil {
 			t.Fatalf("scan question: %v", err)
 		}
 		if _, seen := bySet[q.GroupID]; !seen {
@@ -116,8 +116,8 @@ func answer(t *testing.T, pool *pgxpool.Pool, user models.User, q models.Questio
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
 		INSERT INTO practice_attempts
-			(user_id, question_id, exam_version_id, is_correct, score, max_score, accuracy_percentage)
-		VALUES ($1, $2, $3, TRUE, 1, 1, 100)`, user.ID, q.ID, q.ExamVersionID)
+			(user_id, question_id, exam, exam_version_id, is_correct, score, max_score, accuracy_percentage)
+		VALUES ($1, $2, $3, $4, TRUE, 1, 1, 100)`, user.ID, q.ID, q.Exam, q.ExamVersionID)
 	if err != nil {
 		t.Fatalf("record attempt for %s: %v", q.ID, err)
 	}
@@ -277,8 +277,8 @@ func TestConcurrentFirstAnswersSpendOneSubTest(t *testing.T) {
 			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO practice_attempts
-					(user_id, question_id, exam_version_id, is_correct, score, max_score, accuracy_percentage)
-				VALUES ($1, $2, $3, TRUE, 1, 1, 100)`, user.ID, q.ID, q.ExamVersionID); err != nil {
+					(user_id, question_id, exam, exam_version_id, is_correct, score, max_score, accuracy_percentage)
+				VALUES ($1, $2, $3, $4, TRUE, 1, 1, 100)`, user.ID, q.ID, q.Exam, q.ExamVersionID); err != nil {
 				results[i] = err
 				return
 			}
@@ -349,8 +349,8 @@ func mustInsertAt(t *testing.T, pool *pgxpool.Pool, user models.User, q models.Q
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
 		INSERT INTO practice_attempts
-			(user_id, question_id, exam_version_id, is_correct, score, max_score, accuracy_percentage, created_at)
-		VALUES ($1, $2, $3, TRUE, 1, 1, 100, $4)`, user.ID, q.ID, q.ExamVersionID, at)
+			(user_id, question_id, exam, exam_version_id, is_correct, score, max_score, accuracy_percentage, created_at)
+		VALUES ($1, $2, $3, $4, TRUE, 1, 1, 100, $5)`, user.ID, q.ID, q.Exam, q.ExamVersionID, at)
 	if err != nil {
 		t.Fatalf("record attempt at %s: %v", at, err)
 	}

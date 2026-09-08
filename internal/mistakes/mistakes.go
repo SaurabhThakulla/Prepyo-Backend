@@ -24,6 +24,7 @@ func NewRepository(db database.DB) *Repository {
 type RecordParams struct {
 	UserID          string
 	QuestionID      string
+	Exam            models.ExamType
 	ErrorTag        string
 	UserResponse    string
 	CorrectResponse string
@@ -37,15 +38,16 @@ type RecordParams struct {
 // of recurring weaknesses instead of a log of every wrong click.
 func (r *Repository) Record(ctx context.Context, db database.DB, p RecordParams) error {
 	_, err := db.Exec(ctx, `
-		INSERT INTO mistakes (user_id, question_id, error_tag, user_response, correct_response, explanation)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO mistakes (user_id, question_id, exam, error_tag, user_response, correct_response, explanation)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (user_id, question_id) DO UPDATE SET
 			failed_count      = mistakes.failed_count + 1,
+			exam              = EXCLUDED.exam,
 			error_tag         = EXCLUDED.error_tag,
 			user_response     = EXCLUDED.user_response,
 			resolved          = FALSE,
 			last_attempted_at = now()`,
-		p.UserID, p.QuestionID, p.ErrorTag, p.UserResponse, p.CorrectResponse, p.Explanation)
+		p.UserID, p.QuestionID, p.Exam, p.ErrorTag, p.UserResponse, p.CorrectResponse, p.Explanation)
 	if err != nil {
 		return fmt.Errorf("record mistake: %w", err)
 	}
@@ -64,7 +66,7 @@ type ListParams struct {
 func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, int, error) {
 	const filter = `
 		WHERE m.user_id = $1
-		  AND ($2 = '' OR q.exam = $2)
+		  AND ($2 = '' OR m.exam = $2)
 		  AND ($3 = '' OR q.skill = $3)
 		  AND (NOT $4 OR NOT m.resolved)`
 
@@ -78,7 +80,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, 
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT m.id, m.question_id, q.title, q.exam, q.skill, q.type_name, q.prompt,
+		SELECT m.id, m.question_id, q.title, m.exam, q.skill, q.type_name, q.prompt,
 		       m.user_response, m.correct_response, m.explanation, m.error_tag,
 		       m.failed_count, m.resolved, m.last_attempted_at
 		FROM mistakes m
