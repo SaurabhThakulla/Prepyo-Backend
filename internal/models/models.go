@@ -57,6 +57,7 @@ type User struct {
 	StreakLastActiveDate *time.Time
 	Timezone             string
 	PlanID               string
+	PlanStartedAt        time.Time
 	PlanValidUntil       *time.Time
 	ReferralCode         string
 	BonusMockTests       int
@@ -70,9 +71,71 @@ type User struct {
 	CoverUpdatedAt  *time.Time
 }
 
-const RoleAdmin = "admin"
+// Roles are the learner's tier as well as their access level: RoleAdmin is the
+// operations account, and the other four mirror the plans in the plans table.
+// The tier half is a denormalised copy of plan_id — plan_id and
+// plan_valid_until remain what entitlement is actually read from.
+const (
+	RoleAdmin   = "admin"
+	RoleSuru    = "suru"
+	RoleAbhyas  = "abhyas"
+	RoleTaiyari = "taiyari"
+	RoleUdaan   = "udaan"
+)
+
+// planRoles maps a plan id to the role that represents it. A plan missing from
+// here is treated as the free tier rather than as an error: an unknown plan
+// must never hand out a higher role than it has paid for.
+var planRoles = map[string]string{
+	"free":   RoleSuru,
+	"weekly": RoleAbhyas,
+	"pro":    RoleTaiyari,
+	"elite":  RoleUdaan,
+}
+
+// RoleForPlan returns the tier role a plan id corresponds to.
+func RoleForPlan(planID string) string {
+	if role, ok := planRoles[planID]; ok {
+		return role
+	}
+	return RoleSuru
+}
+
+// RoleForUser is the role a user should currently hold. Admin is never
+// downgraded by a plan: it is an access level, and the operations account has
+// no subscription. An expired plan reports the free tier, matching the limits
+// billing already applies.
+func RoleForUser(u User) string {
+	if u.IsAdmin() {
+		return RoleAdmin
+	}
+	if u.PlanValidUntil == nil || !u.PlanValidUntil.After(time.Now()) {
+		return RoleSuru
+	}
+	return RoleForPlan(u.PlanID)
+}
 
 func (u User) IsAdmin() bool { return u.Role == RoleAdmin }
+
+// HasActivePaidPlan reports whether the user is inside a live paid period.
+// Distinct from billing.planIsActive, which answers "are this user's limits
+// valid" and is therefore true on the free plan too.
+func (u User) HasActivePaidPlan() bool {
+	return u.PlanValidUntil != nil && u.PlanValidUntil.After(time.Now())
+}
+
+// DaysRemaining is whole days left in the current period, 0 when it is not a
+// live paid one.
+func (u User) DaysRemaining() int {
+	if !u.HasActivePaidPlan() {
+		return 0
+	}
+	days := int(time.Until(*u.PlanValidUntil).Hours() / 24)
+	if days < 0 {
+		return 0
+	}
+	return days
+}
 
 // UserProfile is what the client receives. Build it with NewUserProfile so the
 // derived fields are always filled the same way.
@@ -81,6 +144,11 @@ type UserProfile struct {
 	Email          string    `json:"email"`
 	Name           string    `json:"name"`
 	Role           string    `json:"role"`
+	PlanID         string    `json:"planId"`
+	PlanStartedAt  string    `json:"planStartedAt"`
+	PlanValidUntil string    `json:"planValidUntil,omitempty"`
+	PaidPlanActive bool      `json:"paidPlanActive"`
+	DaysRemaining  int       `json:"daysRemaining"`
 	TargetExam     ExamType  `json:"targetExam"`
 	TargetScore    *float64  `json:"targetScore"`
 	ExamDate       string    `json:"examDate,omitempty"`
@@ -121,6 +189,10 @@ func NewUserProfile(u User) UserProfile {
 		Email:          u.Email,
 		Name:           u.Name,
 		Role:           u.Role,
+		PlanID:         u.PlanID,
+		PlanStartedAt:  u.PlanStartedAt.Format(time.DateOnly),
+		PaidPlanActive: u.HasActivePaidPlan(),
+		DaysRemaining:  u.DaysRemaining(),
 		TargetExam:     u.TargetExam,
 		TargetScore:    u.TargetScore,
 		NepalRegion:    u.NepalRegion,
@@ -139,6 +211,9 @@ func NewUserProfile(u User) UserProfile {
 	}
 	if u.ExamDate != nil {
 		profile.ExamDate = u.ExamDate.Format(time.DateOnly)
+	}
+	if u.PlanValidUntil != nil {
+		profile.PlanValidUntil = u.PlanValidUntil.Format(time.DateOnly)
 	}
 	return profile
 }

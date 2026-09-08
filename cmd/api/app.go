@@ -44,6 +44,7 @@ type app struct {
 	log  *slog.Logger
 
 	authService *auth.Service
+	userRepo    *users.Repository
 
 	authHandler         *auth.Handler
 	userHandler         *users.Handler
@@ -97,6 +98,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		log:         log,
 		authService: authService,
 
+		userRepo:            userRepo,
 		authHandler:         auth.NewHandler(authService, cfg.SecureCookies, cfg.SessionTTL),
 		userHandler:         users.NewHandler(pool, userRepo, progressService, billingService, log),
 		examHandler:         exams.NewHandler(examRepo, log),
@@ -265,6 +267,35 @@ func (a *app) requestLogger(next http.Handler) http.Handler {
 			"durationMs", time.Since(started).Milliseconds(),
 		)
 	})
+}
+
+// reconcileRoles keeps the tier stored in users.role true as plans lapse.
+// Roles are a copy of plan state and nothing writes to the row when a
+// subscription simply runs out, so the copy has to be refreshed on a timer.
+func (a *app) reconcileRoles(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	run := func() {
+		changed, err := a.userRepo.ReconcileRoles(ctx)
+		if err != nil {
+			a.log.Error("role reconcile failed", "error", err)
+			return
+		}
+		if changed > 0 {
+			a.log.Info("reconciled subscription roles", "count", changed)
+		}
+	}
+
+	run()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
 }
 
 // cleanExpiredSessions removes dead session rows in the background.

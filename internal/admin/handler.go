@@ -74,7 +74,7 @@ func (h *Handler) read(ctx context.Context) (metrics, error) {
 		SELECT
 			(SELECT count(*) FROM questions WHERE is_published),
 			(SELECT count(*) FROM mocks),
-			(SELECT count(*) FROM users WHERE role = 'learner'),
+			(SELECT count(*) FROM users WHERE role <> 'admin'),
 			(SELECT count(DISTINCT user_id) FROM practice_attempts WHERE created_at > now() - interval '7 days'),
 			(SELECT count(*) FROM practice_attempts),
 			(SELECT count(*) FROM mock_attempts),

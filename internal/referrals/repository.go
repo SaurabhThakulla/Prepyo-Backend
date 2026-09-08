@@ -33,12 +33,12 @@ func (r *Repository) UserByCode(ctx context.Context, db database.DB, code string
 	err := db.QueryRow(ctx, `
 		SELECT id, email, name, role, target_exam, target_score, exam_date,
 		       nepal_region, xp, streak_days, streak_last_active_date, timezone,
-		       plan_id, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at
+		       plan_id, plan_started_at, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at
 		FROM users
 		WHERE referral_code = $1`, norm).
 		Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.TargetExam,
 			&u.TargetScore, &u.ExamDate, &u.NepalRegion, &u.XP, &u.StreakDays,
-			&u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanValidUntil,
+			&u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanStartedAt, &u.PlanValidUntil,
 			&u.ReferralCode, &u.BonusMockTests, &u.BonusProDays, &u.CreatedAt)
 
 	if errors.Is(err, pgx.ErrNoRows) {

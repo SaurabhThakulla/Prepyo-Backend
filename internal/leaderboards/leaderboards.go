@@ -79,7 +79,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Leaderboa
 			            ), 0)
 			       END AS score
 			FROM users u
-			WHERE u.role = 'learner'
+			WHERE u.role <> 'admin'
 			  AND ($1 = '' OR u.target_exam = $1)
 			  AND ($2 = '' OR $2 = 'all' OR u.nepal_region = $2)
 		)

@@ -71,6 +71,7 @@ func run() error {
 
 	app := newApp(cfg, pool, log)
 	go app.cleanExpiredSessions(ctx)
+	go app.reconcileRoles(ctx)
 
 	server := &http.Server{
 		Addr:              "0.0.0.0:" + cfg.Port,

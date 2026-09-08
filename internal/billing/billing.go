@@ -290,8 +290,8 @@ func (s *Service) ConfirmPayment(ctx context.Context, pool *pgxpool.Pool, p Conf
 	if err == nil && existingStatus == "success" {
 		// Already processed successfully! Return current state without duplicating entitlement.
 		var u models.User
-		_ = tx.QueryRow(ctx, `SELECT id, email, name, role, target_exam, target_score, exam_date, nepal_region, xp, streak_days, streak_last_active_date, timezone, plan_id, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at FROM users WHERE id = $1`, p.UserID).
-			Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.TargetExam, &u.TargetScore, &u.ExamDate, &u.NepalRegion, &u.XP, &u.StreakDays, &u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanValidUntil, &u.ReferralCode, &u.BonusMockTests, &u.BonusProDays, &u.CreatedAt)
+		_ = tx.QueryRow(ctx, `SELECT id, email, name, role, target_exam, target_score, exam_date, nepal_region, xp, streak_days, streak_last_active_date, timezone, plan_id, plan_started_at, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at FROM users WHERE id = $1`, p.UserID).
+			Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.TargetExam, &u.TargetScore, &u.ExamDate, &u.NepalRegion, &u.XP, &u.StreakDays, &u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanStartedAt, &u.PlanValidUntil, &u.ReferralCode, &u.BonusMockTests, &u.BonusProDays, &u.CreatedAt)
 		return s.State(ctx, tx, u)
 	}
 
@@ -308,18 +308,26 @@ func (s *Service) ConfirmPayment(ctx context.Context, pool *pgxpool.Pool, p Conf
 
 	// Update user's plan and expiration date transactionally
 	var updatedUser models.User
+	// role carries the tier, so it is written with the plan rather than left to
+	// the hourly reconcile: a learner who has just paid must not wait for a
+	// tick to see it. The admin account keeps its access level whatever it buys.
+	//
+	// plan_started_at is the start of THIS period, so it resets on every
+	// purchase, while plan_valid_until extends from whatever was left.
 	err = tx.QueryRow(ctx, `
 		UPDATE users
 		SET plan_id = $2,
+		    plan_started_at = CURRENT_DATE,
 		    plan_valid_until = COALESCE(GREATEST(plan_valid_until, CURRENT_DATE), CURRENT_DATE) + ($3 || ' days')::INTERVAL,
+		    role = CASE WHEN role = 'admin' THEN 'admin' ELSE $4 END,
 		    updated_at = now()
 		WHERE id = $1
-		RETURNING id, email, name, role, target_exam, target_score, exam_date, nepal_region, xp, streak_days, streak_last_active_date, timezone, plan_id, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at`,
-		p.UserID, plan.ID, effectiveDays).
+		RETURNING id, email, name, role, target_exam, target_score, exam_date, nepal_region, xp, streak_days, streak_last_active_date, timezone, plan_id, plan_started_at, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at`,
+		p.UserID, plan.ID, effectiveDays, models.RoleForPlan(plan.ID)).
 		Scan(&updatedUser.ID, &updatedUser.Email, &updatedUser.Name,
 			&updatedUser.Role, &updatedUser.TargetExam, &updatedUser.TargetScore, &updatedUser.ExamDate,
 			&updatedUser.NepalRegion, &updatedUser.XP, &updatedUser.StreakDays, &updatedUser.StreakLastActiveDate,
-			&updatedUser.Timezone, &updatedUser.PlanID, &updatedUser.PlanValidUntil,
+			&updatedUser.Timezone, &updatedUser.PlanID, &updatedUser.PlanStartedAt, &updatedUser.PlanValidUntil,
 			&updatedUser.ReferralCode, &updatedUser.BonusMockTests, &updatedUser.BonusProDays, &updatedUser.CreatedAt)
 	if err != nil {
 		return models.SubscriptionState{}, fmt.Errorf("update user plan: %w", err)
