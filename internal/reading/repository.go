@@ -33,6 +33,9 @@ var (
 	ErrNoPassage       = errors.New("no passage available")
 	ErrSessionNotFound = errors.New("reading mock session not found")
 	ErrNoBlueprint     = errors.New("no generated reading mock blueprint for this exam")
+
+	// ErrNoReorderItem means the bank holds no item this learner can be dealt.
+	ErrNoReorderItem = errors.New("no re-order item available")
 )
 
 // Exposure contexts. They are stored separately because the rules differ: a
@@ -58,7 +61,7 @@ func NewRepository(db database.DB) *Repository {
 }
 
 const passageFields = `
-	id, exam_version_id, exam, title, subtitle, paragraphs, sources,
+	id, exam_version_id, title, subtitle, paragraphs, sources,
 	word_count, difficulty, topic, tags`
 
 // ---------------------------------------------------------------------------
@@ -115,9 +118,15 @@ func (r *Repository) ListPassages(ctx context.Context, p ListPassagesParams) ([]
 	// The type filter is a question about the groups on a passage, so both
 	// statements share the same EXISTS rather than the count drifting from the
 	// page it is counting.
+	// Both filters are questions about the questions on a passage, not about the
+	// passage: a passage has no exam of its own any more, and it belongs in an
+	// exam's index when that exam sets something on it.
 	const where = `
 		WHERE is_published
-		  AND ($1 = '' OR exam = $1)
+		  AND ($1 = '' OR EXISTS (
+			  SELECT 1 FROM questions q
+			  WHERE q.passage_id = reading_passages.id AND q.is_published
+			    AND $1 = ANY(q.supported_exams)))
 		  AND ($2 = '' OR EXISTS (
 			  SELECT 1 FROM reading_question_groups g
 			  WHERE g.passage_id = reading_passages.id AND g.type_id = $2))`
@@ -149,7 +158,7 @@ func (r *Repository) ListPassages(ctx context.Context, p ListPassagesParams) ([]
 
 func scanPassage(row pgx.Row) (models.ReadingPassage, error) {
 	var p models.ReadingPassage
-	err := row.Scan(&p.ID, &p.ExamVersionID, &p.Exam, &p.Title, &p.Subtitle,
+	err := row.Scan(&p.ID, &p.ExamVersionID, &p.Title, &p.Subtitle,
 		&p.Paragraphs, &p.Sources, &p.WordCount, &p.Difficulty, &p.Topic, &p.Tags)
 	return p, err
 }
@@ -160,7 +169,7 @@ func scanPassage(row pgx.Row) (models.ReadingPassage, error) {
 
 const groupFields = `
 	id, passage_id, position, type_id, type_name, instructions, resources,
-	paper_slot, passage_display, shuffle_questions, time_limit_seconds`
+	passage_display, shuffle_questions, time_limit_seconds`
 
 // Group is a stored group. It carries shuffleQuestions, which the service needs
 // and the client does not: whether a set may be dealt out of order is a
@@ -190,7 +199,7 @@ func (r *Repository) GroupsForPassages(ctx context.Context, passageIDs []string,
 	for rows.Next() {
 		var g Group
 		if err := rows.Scan(&g.ID, &g.PassageID, &g.Position, &g.TypeID, &g.TypeName,
-			&g.Instructions, &g.Resources, &g.PaperSlot, &g.PassageDisplay,
+			&g.Instructions, &g.Resources, &g.PassageDisplay,
 			&g.ShuffleQuestions, &g.TimeLimitSeconds); err != nil {
 			return nil, fmt.Errorf("scan group: %w", err)
 		}
@@ -205,7 +214,7 @@ func (r *Repository) GroupByID(ctx context.Context, id string) (Group, error) {
 	err := r.db.QueryRow(ctx, `SELECT `+groupFields+`
 		FROM reading_question_groups WHERE id = $1`, id).
 		Scan(&g.ID, &g.PassageID, &g.Position, &g.TypeID, &g.TypeName,
-			&g.Instructions, &g.Resources, &g.PaperSlot, &g.PassageDisplay,
+			&g.Instructions, &g.Resources, &g.PassageDisplay,
 			&g.ShuffleQuestions, &g.TimeLimitSeconds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Group{}, ErrNoPassage
@@ -231,7 +240,7 @@ func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]mod
 			FROM reading_question_groups g
 			JOIN reading_passages p ON p.id = g.passage_id AND p.is_published
 			JOIN questions q ON q.group_id = g.id AND q.is_published
-			WHERE ($1 = '' OR p.exam = $1)
+			                AND ($1 = '' OR $1 = ANY(q.supported_exams))
 			GROUP BY g.type_id
 
 			UNION ALL
@@ -283,9 +292,11 @@ func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam 
 		JOIN reading_passages p ON p.id = g.passage_id AND p.is_published
 		LEFT JOIN user_passage_exposures e
 		       ON e.user_id = $1 AND e.passage_id = p.id AND e.context = 'practice'
+		      AND ($3 = '' OR e.exam = $3)
 		WHERE g.type_id = $2
-		  AND ($3 = '' OR p.exam = $3)
-		  AND EXISTS (SELECT 1 FROM questions q WHERE q.group_id = g.id AND q.is_published)
+		  AND EXISTS (SELECT 1 FROM questions q
+		               WHERE q.group_id = g.id AND q.is_published
+		                 AND ($3 = '' OR $3 = ANY(q.supported_exams)))
 		ORDER BY e.last_seen_at ASC NULLS FIRST, random()
 		LIMIT 1`, userID, typeID, exam).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -303,67 +314,6 @@ type MockCandidate struct {
 	PassageID  string
 	SeenInMock bool
 }
-
-// PickMockPassages chooses the passages for one generated mock.
-//
-// Only passages carrying all three paper slots are eligible. A paper deals three
-// passages and takes one section from each, but which passage lands in which
-// slot is decided after they are picked — so every candidate has to be able to
-// fill any of the three. Among those, ones the learner has never sat in a mock
-// come first — that is the no-repeat rule — then ones they have not met in
-// practice either, then the ones sat longest ago.
-//
-// It returns fewer than `count` when the bank cannot fill the paper. Deciding
-// what to do about that is the service's job, not a silent truncation here.
-func (r *Repository) PickMockPassages(
-	ctx context.Context,
-	userID string,
-	exam models.ExamType,
-	count int,
-) ([]MockCandidate, error) {
-	rows, err := r.db.Query(ctx, `
-		SELECT p.id, (seen.passage_id IS NOT NULL)
-		FROM reading_passages p
-		LEFT JOIN user_passage_exposures seen
-		       ON seen.user_id = $1 AND seen.passage_id = p.id AND seen.context = 'mock'
-		LEFT JOIN user_passage_exposures practised
-		       ON practised.user_id = $1 AND practised.passage_id = p.id AND practised.context = 'practice'
-		WHERE p.is_published
-		  AND p.exam = $2
-		  AND (
-			  SELECT count(DISTINCT g.paper_slot)
-			  FROM reading_question_groups g
-			  WHERE g.passage_id = p.id
-			    AND g.paper_slot > 0
-			    AND EXISTS (SELECT 1 FROM questions q WHERE q.group_id = g.id AND q.is_published)
-		  ) = 3
-		ORDER BY (seen.passage_id IS NOT NULL),
-		         (practised.passage_id IS NOT NULL),
-		         seen.last_seen_at ASC NULLS FIRST,
-		         random()
-		LIMIT $3`, userID, exam, count)
-	if err != nil {
-		return nil, fmt.Errorf("pick mock passages: %w", err)
-	}
-	defer rows.Close()
-
-	var picked []MockCandidate
-	for rows.Next() {
-		var c MockCandidate
-		if err := rows.Scan(&c.PassageID, &c.SeenInMock); err != nil {
-			return nil, fmt.Errorf("scan mock candidate: %w", err)
-		}
-		picked = append(picked, c)
-	}
-	return picked, rows.Err()
-}
-
-// ---------------------------------------------------------------------------
-// Re-order Paragraphs
-// ---------------------------------------------------------------------------
-
-// ErrNoReorderItem means the bank holds no item this learner can be dealt.
-var ErrNoReorderItem = errors.New("no re-order item available")
 
 // PickReorderItem chooses one item for this learner, with its backing question.
 //
@@ -436,17 +386,17 @@ func (r *Repository) RecordReorderExposure(ctx context.Context, db database.DB, 
 // It is called when the content is handed over, not when it is finished with. A
 // learner who opens a mock and closes the tab has still read those passages,
 // and giving them the same three next time would defeat the point.
-func (r *Repository) RecordExposure(ctx context.Context, db database.DB, userID string, passageIDs []string, exposureContext string) error {
+func (r *Repository) RecordExposure(ctx context.Context, db database.DB, userID string, exam models.ExamType, passageIDs []string, exposureContext string) error {
 	if len(passageIDs) == 0 {
 		return nil
 	}
 
 	_, err := db.Exec(ctx, `
-		INSERT INTO user_passage_exposures (user_id, passage_id, context)
-		SELECT $1, unnest($2::text[]), $3
-		ON CONFLICT (user_id, passage_id, context) DO UPDATE
+		INSERT INTO user_passage_exposures (user_id, passage_id, exam, context)
+		SELECT $1, unnest($2::text[]), $3, $4
+		ON CONFLICT (user_id, passage_id, exam, context) DO UPDATE
 		SET seen_count   = user_passage_exposures.seen_count + 1,
-		    last_seen_at = now()`, userID, passageIDs, exposureContext)
+		    last_seen_at = now()`, userID, passageIDs, exam, exposureContext)
 	if err != nil {
 		return fmt.Errorf("record passage exposure: %w", err)
 	}
@@ -455,11 +405,11 @@ func (r *Repository) RecordExposure(ctx context.Context, db database.DB, userID 
 
 // SeenPassageIDs returns the passages this learner has met in a context. It
 // backs the "you have sat 6 of 40 passages" line, not the selection itself.
-func (r *Repository) SeenPassageIDs(ctx context.Context, userID, exposureContext string) ([]string, error) {
+func (r *Repository) SeenPassageIDs(ctx context.Context, userID string, exam models.ExamType, exposureContext string) ([]string, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT passage_id FROM user_passage_exposures
-		WHERE user_id = $1 AND context = $2
-		ORDER BY last_seen_at DESC`, userID, exposureContext)
+		WHERE user_id = $1 AND exam = $2 AND context = $3
+		ORDER BY last_seen_at DESC`, userID, exam, exposureContext)
 	if err != nil {
 		return nil, fmt.Errorf("list seen passages: %w", err)
 	}
@@ -480,30 +430,276 @@ func (r *Repository) SeenPassageIDs(ctx context.Context, userID, exposureContext
 // Mock sessions
 // ---------------------------------------------------------------------------
 
-// Blueprint is the `mocks` row a generated paper is recorded against. Generated
-// mocks still produce ordinary mock_attempts, and those reference a mock id.
+// Blueprint is the shape of one exam's generated reading paper: how many
+// passages it deals, how many questions it comes to, and which task types fill
+// each section.
+//
+// MockID is the `mocks` row the paper is recorded against, because generated
+// papers still produce ordinary mock_attempts and those reference a mock id.
 type Blueprint struct {
 	ID              string
+	MockID          string
 	ExamVersionID   string
 	Title           string
 	DurationMinutes int
+	PassageCount    int
+	TotalQuestions  int
+	Slots           []BlueprintSlot
+}
+
+// BlueprintSlot is one section of a paper, filled from one passage.
+//
+// Tasks are the sets inside it, each with its own count, because that is what a
+// section is: Questions 1-7 sentence completion, 8-13 True/False/Not Given. A
+// single total would let a section be filled entirely from whichever task set
+// the passage happens to list first.
+type BlueprintSlot struct {
+	Position int
+	Source   string
+	Tasks    []BlueprintTask
+}
+
+// BlueprintTask is one task set within a section.
+type BlueprintTask struct {
+	TypeID        string
+	QuestionCount int
+}
+
+// TypeIDs is the task types this section draws, in order.
+func (s BlueprintSlot) TypeIDs() []string {
+	ids := make([]string, len(s.Tasks))
+	for i, t := range s.Tasks {
+		ids[i] = t.TypeID
+	}
+	return ids
+}
+
+// Counts is the number of questions wanted per task, aligned with TypeIDs.
+func (s BlueprintSlot) Counts() []int {
+	counts := make([]int, len(s.Tasks))
+	for i, t := range s.Tasks {
+		counts[i] = t.QuestionCount
+	}
+	return counts
+}
+
+// QuestionCount is the whole section.
+func (s BlueprintSlot) QuestionCount() int {
+	total := 0
+	for _, t := range s.Tasks {
+		total += t.QuestionCount
+	}
+	return total
+}
+
+// SourcePassage and SourceReorder are where a slot's content comes from.
+const (
+	SourcePassage = "passage"
+	SourceReorder = "reorder"
+)
+
+// ReorderPick is one Re-order Paragraphs item chosen for a paper, with the
+// question that carries its boxes and its answer key.
+type ReorderPick struct {
+	ItemID     string
+	QuestionID string
 }
 
 func (r *Repository) GeneratedBlueprint(ctx context.Context, exam models.ExamType) (Blueprint, error) {
 	var b Blueprint
 	err := r.db.QueryRow(ctx, `
-		SELECT id, exam_version_id, title, total_duration_minutes
-		FROM mocks
-		WHERE exam = $1 AND is_generated
-		ORDER BY id
-		LIMIT 1`, exam).Scan(&b.ID, &b.ExamVersionID, &b.Title, &b.DurationMinutes)
+		SELECT b.id, m.id, m.exam_version_id, m.title, b.duration_minutes,
+		       b.passage_count, b.total_questions
+		FROM reading_mock_blueprints b
+		JOIN mocks m ON m.id = b.mock_id
+		WHERE b.exam = $1 AND b.is_active`, exam).
+		Scan(&b.ID, &b.MockID, &b.ExamVersionID, &b.Title, &b.DurationMinutes,
+			&b.PassageCount, &b.TotalQuestions)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Blueprint{}, ErrNoBlueprint
 	}
 	if err != nil {
 		return Blueprint{}, fmt.Errorf("get generated blueprint: %w", err)
 	}
+
+	slots, err := r.blueprintSlots(ctx, b.ID)
+	if err != nil {
+		return Blueprint{}, err
+	}
+	b.Slots = slots
 	return b, nil
+}
+
+func (r *Repository) blueprintSlots(ctx context.Context, blueprintID string) ([]BlueprintSlot, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT position, type_id, question_count, source
+		FROM reading_mock_blueprint_slots
+		WHERE blueprint_id = $1
+		ORDER BY position, ordinal`, blueprintID)
+	if err != nil {
+		return nil, fmt.Errorf("list blueprint slots: %w", err)
+	}
+	defer rows.Close()
+
+	var list []BlueprintSlot
+	for rows.Next() {
+		var position, count int
+		var typeID, source string
+		if err := rows.Scan(&position, &typeID, &count, &source); err != nil {
+			return nil, fmt.Errorf("scan blueprint slot: %w", err)
+		}
+
+		// Rows arrive grouped by position, so a new section is a change of
+		// position rather than a lookup.
+		if len(list) == 0 || list[len(list)-1].Position != position {
+			list = append(list, BlueprintSlot{Position: position, Source: source})
+		}
+		last := &list[len(list)-1]
+		last.Tasks = append(last.Tasks, BlueprintTask{TypeID: typeID, QuestionCount: count})
+	}
+	return list, rows.Err()
+}
+
+// SlotPassageCandidates is every passage able to fill a section for this
+// learner, best first.
+//
+// "Able to fill" is a count of eligible questions, not a shape the passage had
+// to be authored into. A passage qualifies when it carries at least as many
+// published questions of each of the section's tasks, set by this exam, as that
+// task asks for. That is what replaces the old rule, which demanded every
+// passage carry all three IELTS sections and so kept any passage without a full
+// set of eight task sets out of every paper.
+//
+// It returns the whole list rather than the best one because sections cannot be
+// filled independently: they must take different passages, and choosing the best
+// passage for an early section can leave a later one with nothing. The caller
+// assigns across all of them at once.
+//
+// Ordering is the rule practice uses: never sat first, then never met at all,
+// then longest ago, then at random.
+func (r *Repository) SlotPassageCandidates(
+	ctx context.Context,
+	userID string,
+	exam models.ExamType,
+	typeIDs []string,
+	counts []int,
+) ([]MockCandidate, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT p.id, (seen.passage_id IS NOT NULL)
+		FROM reading_passages p
+		LEFT JOIN user_passage_exposures seen
+		       ON seen.user_id = $1 AND seen.passage_id = p.id
+		      AND seen.exam = $2 AND seen.context = 'mock'
+		LEFT JOIN user_passage_exposures practised
+		       ON practised.user_id = $1 AND practised.passage_id = p.id
+		      AND practised.exam = $2 AND practised.context = 'practice'
+		WHERE p.is_published
+		  AND NOT EXISTS (
+			  -- A section is short if any one of its tasks is short, so this
+			  -- asks per task rather than over the section as a whole.
+			  SELECT 1
+			  FROM unnest($3::text[], $4::int[]) AS want(type_id, n)
+			  WHERE (
+				  SELECT count(*)
+				  FROM questions q
+				  JOIN reading_question_groups g ON g.id = q.group_id
+				  WHERE g.passage_id = p.id
+				    AND g.type_id = want.type_id
+				    AND q.is_published
+				    AND $2 = ANY(q.supported_exams)
+			  ) < want.n
+		  )
+		ORDER BY (seen.passage_id IS NOT NULL),
+		         (practised.passage_id IS NOT NULL),
+		         seen.last_seen_at ASC NULLS FIRST,
+		         random()`, userID, exam, typeIDs, counts)
+	if err != nil {
+		return nil, fmt.Errorf("list slot passages: %w", err)
+	}
+	defer rows.Close()
+
+	var list []MockCandidate
+	for rows.Next() {
+		var c MockCandidate
+		if err := rows.Scan(&c.PassageID, &c.SeenInMock); err != nil {
+			return nil, fmt.Errorf("scan slot passage: %w", err)
+		}
+		list = append(list, c)
+	}
+	return list, rows.Err()
+}
+
+// PickReorderItems chooses items for a Re-order Paragraphs slot, with the
+// question backing each one.
+//
+// Same rules as PickReorderItem, which deals one for practice: an item derived
+// from a passage the learner has already read is skipped, because they have seen
+// those sentences in the right order.
+func (r *Repository) PickReorderItems(
+	ctx context.Context,
+	userID string,
+	exam models.ExamType,
+	count int,
+) ([]ReorderPick, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT i.id, q.id
+		FROM reading_reorder_items i
+		JOIN questions q ON q.reorder_item_id = i.id AND q.is_published
+		                AND $2 = ANY(q.supported_exams)
+		LEFT JOIN user_reorder_exposures e
+		       ON e.user_id = $1 AND e.item_id = i.id AND e.context = 'mock'
+		WHERE i.is_published
+		  AND (
+			  i.source_passage_id IS NULL
+			  OR NOT EXISTS (
+				  SELECT 1 FROM user_passage_exposures seen
+				  WHERE seen.user_id = $1 AND seen.passage_id = i.source_passage_id
+			  )
+		  )
+		ORDER BY e.last_seen_at ASC NULLS FIRST, random()
+		LIMIT $3`, userID, exam, count)
+	if err != nil {
+		return nil, fmt.Errorf("pick re-order items: %w", err)
+	}
+	defer rows.Close()
+
+	var picks []ReorderPick
+	for rows.Next() {
+		var p ReorderPick
+		if err := rows.Scan(&p.ItemID, &p.QuestionID); err != nil {
+			return nil, fmt.Errorf("scan re-order pick: %w", err)
+		}
+		picks = append(picks, p)
+	}
+	return picks, rows.Err()
+}
+
+// GroupsByIDs loads groups by id, which is how a stored paper is rebuilt: the
+// paper knows its question ids, and the questions know their groups.
+func (r *Repository) GroupsByIDs(ctx context.Context, groupIDs []string) (map[string]Group, error) {
+	byID := map[string]Group{}
+	if len(groupIDs) == 0 {
+		return byID, nil
+	}
+
+	rows, err := r.db.Query(ctx, `SELECT `+groupFields+`
+		FROM reading_question_groups
+		WHERE id = ANY($1)`, groupIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list groups by id: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var g Group
+		if err := rows.Scan(&g.ID, &g.PassageID, &g.Position, &g.TypeID, &g.TypeName,
+			&g.Instructions, &g.Resources, &g.PassageDisplay,
+			&g.ShuffleQuestions, &g.TimeLimitSeconds); err != nil {
+			return nil, fmt.Errorf("scan group: %w", err)
+		}
+		byID[g.ID] = g
+	}
+	return byID, rows.Err()
 }
 
 // Session is a stored paper. QuestionIDs is the whole point of the row: it is

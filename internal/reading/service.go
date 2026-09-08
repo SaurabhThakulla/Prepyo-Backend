@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"sort"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/billing"
@@ -27,7 +28,7 @@ import (
 const (
 	TypeSentenceCompletion  = "reading-sentence-completion"
 	TypeTrueFalse           = "reading-true-false"
-	TypeFindTheWriter       = "reading-find-the-writer"
+	TypeFindTheParagraph    = "reading-find-the-paragraph"
 	TypeArrangePassage      = "reading-arrange-passage"
 	TypeYesNoNotGiven       = "reading-yes-no-not-given"
 	TypeMatchingInformation = "reading-matching-information"
@@ -47,51 +48,14 @@ const (
 	TypeReorderParagraphs = "reorder-paragraphs"
 )
 
-// MockRequiredTypes is every task type a generated paper covers, which is the
-// union of the three slots. It is reported to the client so the practice menu
-// can say which tasks a mock will test; eligibility is decided by PaperSlots,
-// not by this list.
-var MockRequiredTypes = []string{
-	TypeSentenceCompletion,
-	TypeTrueFalse,
-	TypeFindTheWriter,
-	TypeArrangePassage,
-	TypeYesNoNotGiven,
-	TypeMatchingInformation,
-}
-
-// MockPassageCount is how many passages one generated reading paper carries.
-const MockPassageCount = 3
-
-// PaperSlot is a section of a generated paper: which task types it carries and
-// how many questions that comes to.
-type PaperSlot struct {
-	Slot      int
-	Types     []string
-	Questions int
-}
-
-// PaperSlots is the shape of an IELTS Academic Reading paper: three sections,
-// forty questions, and a different mix of task types in each.
+// The shape of a paper is data, not a constant. It lives in
+// reading_mock_blueprints and reading_mock_blueprint_slots, and is read through
+// Repository.GeneratedBlueprint.
 //
-// This is what stops a paper being three passages' worth of everything. A
-// passage is authored with all eight groups so practice can reach any type on
-// it, but a paper takes one slot from each of three passages: 13 + 13 + 14.
-var PaperSlots = []PaperSlot{
-	{Slot: 1, Types: []string{TypeSentenceCompletion, TypeTrueFalse}, Questions: 13},
-	{Slot: 2, Types: []string{TypeFindTheWriter, TypeArrangePassage, TypeYesNoNotGiven}, Questions: 13},
-	{Slot: 3, Types: []string{TypeSentenceCompletion, TypeMatchingInformation, TypeYesNoNotGiven}, Questions: 14},
-}
-
-// paperSlotOrder is the slot each dealt passage fills, by its position in the
-// paper. Passage one carries section one, and so on.
-func paperSlotOrder() []int {
-	order := make([]int, len(PaperSlots))
-	for i, s := range PaperSlots {
-		order[i] = s.Slot
-	}
-	return order
-}
+// It used to be a Go var here — three sections of 13/13/14 over six task types —
+// and that made three assumptions a shared bank cannot keep: that every paper
+// has three passages, that every passage carries all three sections, and that
+// there is only one paper shape, which left PTE with no reading mock at all.
 
 var (
 	// ErrBankTooSmall means the passage bank cannot fill a paper at all. It is
@@ -180,14 +144,14 @@ func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeP
 		return models.ReadingSet{}, err
 	}
 
-	built := buildGroup(group, byGroup[group.ID])
+	built := buildGroup(group, byGroup[group.ID], p.Exam)
 	if p.Limit > 0 && p.Limit < len(built.Questions) {
 		built.Questions = built.Questions[:p.Limit]
 	}
 
 	// Recorded after the set is built, so a passage is never marked as read
 	// because of a request that failed before the learner saw anything.
-	if err := s.repo.RecordExposure(ctx, s.db, user.ID, []string{passage.ID}, ContextPractice); err != nil {
+	if err := s.repo.RecordExposure(ctx, s.db, user.ID, p.Exam, []string{passage.ID}, ContextPractice); err != nil {
 		return models.ReadingSet{}, err
 	}
 
@@ -277,40 +241,11 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		}
 	}
 
-	candidates, err := s.repo.PickMockPassages(ctx, user.ID, exam, MockPassageCount)
+	composed, err := s.compose(ctx, user.ID, exam, blueprint)
 	if err != nil {
 		return models.ReadingMockSession{}, err
 	}
-	if len(candidates) < MockPassageCount {
-		return models.ReadingMockSession{}, fmt.Errorf("%w: found %d of %d",
-			ErrBankTooSmall, len(candidates), MockPassageCount)
-	}
-
-	passageIDs := make([]string, len(candidates))
-	reused := false
-	for i, c := range candidates {
-		passageIDs[i] = c.PassageID
-		// The bank ran out of passages this learner had not sat. They get one
-		// back rather than no mock at all, and the paper says so.
-		reused = reused || c.SeenInMock
-	}
-
-	sets, err := s.buildSets(ctx, passageIDs, "", paperSlotOrder())
-	if err != nil {
-		return models.ReadingMockSession{}, err
-	}
-
-	questionIDs := []string{}
-	for _, set := range sets {
-		for _, group := range set.Groups {
-			for _, q := range group.Questions {
-				questionIDs = append(questionIDs, q.ID)
-			}
-		}
-	}
-	if len(questionIDs) == 0 {
-		return models.ReadingMockSession{}, ErrBankTooSmall
-	}
+	passageIDs, questionIDs, reorderIDs, reused := composed.PassageIDs, composed.QuestionIDs, composed.ReorderIDs, composed.Reused
 
 	// Spending the passages and recording the paper are one unit. Either the
 	// learner has a paper and those passages are used up, or neither happened.
@@ -320,13 +255,17 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 	}
 	defer tx.Rollback(ctx)
 
-	if err := s.repo.RecordExposure(ctx, tx, user.ID, passageIDs, ContextMock); err != nil {
+	if err := s.repo.RecordExposure(ctx, tx, user.ID, exam, passageIDs, ContextMock); err != nil {
+		return models.ReadingMockSession{}, err
+	}
+
+	if err := s.repo.RecordReorderExposure(ctx, tx, user.ID, reorderIDs, ContextMock); err != nil {
 		return models.ReadingMockSession{}, err
 	}
 
 	session, err := s.repo.CreateSession(ctx, tx, CreateSessionParams{
 		UserID:          user.ID,
-		MockID:          blueprint.ID,
+		MockID:          blueprint.MockID,
 		Exam:            exam,
 		ExamVersionID:   blueprint.ExamVersionID,
 		PassageIDs:      passageIDs,
@@ -351,8 +290,219 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		return models.ReadingMockSession{}, fmt.Errorf("commit reading mock: %w", err)
 	}
 
-	session.Sets = sets
-	return session.ReadingMockSession, nil
+	return s.hydrate(ctx, session)
+}
+
+// composition is one dealt paper before it is written down.
+type composition struct {
+	PassageIDs  []string
+	QuestionIDs []string
+	ReorderIDs  []string
+	Reused      bool
+}
+
+// compose deals a paper: one slot at a time, a passage that can fill it, and
+// that slot's questions from it.
+//
+// A slot is filled from whatever the passage actually carries. It does not
+// require the passage to have been authored into a particular shape, which is
+// what the old paper_slot column demanded — under that rule a passage without
+// all eight task sets on it could never appear in any paper.
+//
+// The order questions are taken in is the order they are dealt in, and that
+// order is what gets frozen into the session. Shuffling happens here, once.
+func (s *Service) compose(
+	ctx context.Context,
+	userID string,
+	exam models.ExamType,
+	blueprint Blueprint,
+) (composition, error) {
+	var out composition
+
+	assigned, err := s.assignPassages(ctx, userID, exam, blueprint)
+	if err != nil {
+		return composition{}, err
+	}
+
+	for _, slot := range blueprint.Slots {
+		if slot.Source == SourceReorder {
+			want := slot.QuestionCount()
+			picks, err := s.repo.PickReorderItems(ctx, userID, exam, want)
+			if err != nil {
+				return composition{}, err
+			}
+			if len(picks) < want {
+				return composition{}, fmt.Errorf("%w: section %d wanted %d re-order items, found %d",
+					ErrBankTooSmall, slot.Position, want, len(picks))
+			}
+			for _, pick := range picks {
+				out.ReorderIDs = append(out.ReorderIDs, pick.ItemID)
+				out.QuestionIDs = append(out.QuestionIDs, pick.QuestionID)
+			}
+			continue
+		}
+
+		candidate, ok := assigned[slot.Position]
+		if !ok {
+			return composition{}, fmt.Errorf("%w: no passage can fill section %d (%v)",
+				ErrBankTooSmall, slot.Position, slot.TypeIDs())
+		}
+
+		ids, err := s.slotQuestions(ctx, candidate.PassageID, exam, slot)
+		if err != nil {
+			return composition{}, err
+		}
+		if want := slot.QuestionCount(); len(ids) < want {
+			return composition{}, fmt.Errorf("%w: %s gave %d of %d questions for section %d",
+				ErrBankTooSmall, candidate.PassageID, len(ids), want, slot.Position)
+		}
+
+		out.PassageIDs = append(out.PassageIDs, candidate.PassageID)
+		out.QuestionIDs = append(out.QuestionIDs, ids...)
+		// The bank ran out of passages this learner had not sat. They get one
+		// back rather than no mock at all, and the paper says so.
+		out.Reused = out.Reused || candidate.SeenInMock
+	}
+
+	if len(out.QuestionIDs) == 0 {
+		return composition{}, ErrBankTooSmall
+	}
+	return out, nil
+}
+
+// assignPassages gives each passage-backed section a passage of its own.
+//
+// It is done for the whole paper at once, not section by section, because the
+// sections compete: a passage that could fill three of them can only fill one,
+// and taking the best passage for section one can leave section four with
+// nothing. That is not hypothetical — a passage carrying no multiple-answer set
+// is a perfectly good passage, and requiring every passage to carry every task
+// type is exactly the assumption this refactor removes.
+//
+// So: candidates per section, then the sections with the fewest candidates
+// first, then backtracking. Candidate order is the exposure preference, so the
+// first assignment that works is also the one practice would have chosen.
+func (s *Service) assignPassages(
+	ctx context.Context,
+	userID string,
+	exam models.ExamType,
+	blueprint Blueprint,
+) (map[int]MockCandidate, error) {
+	type section struct {
+		position   int
+		candidates []MockCandidate
+	}
+
+	var sections []section
+	for _, slot := range blueprint.Slots {
+		if slot.Source != SourcePassage {
+			continue
+		}
+		candidates, err := s.repo.SlotPassageCandidates(ctx, userID, exam, slot.TypeIDs(), slot.Counts())
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("%w: no passage can fill section %d (%v)",
+				ErrBankTooSmall, slot.Position, slot.TypeIDs())
+		}
+		sections = append(sections, section{position: slot.Position, candidates: candidates})
+	}
+
+	// Most constrained first. It is not required for correctness — the search
+	// backtracks — but it finds the answer far sooner and fails faster when
+	// there is not one.
+	sort.SliceStable(sections, func(i, j int) bool {
+		return len(sections[i].candidates) < len(sections[j].candidates)
+	})
+
+	assigned := make(map[int]MockCandidate, len(sections))
+	taken := make(map[string]bool, len(sections))
+
+	var solve func(i int) bool
+	solve = func(i int) bool {
+		if i == len(sections) {
+			return true
+		}
+		for _, candidate := range sections[i].candidates {
+			if taken[candidate.PassageID] {
+				continue
+			}
+			taken[candidate.PassageID] = true
+			assigned[sections[i].position] = candidate
+			if solve(i + 1) {
+				return true
+			}
+			delete(assigned, sections[i].position)
+			delete(taken, candidate.PassageID)
+		}
+		return false
+	}
+
+	if !solve(0) {
+		return nil, fmt.Errorf("%w: %d sections need %d different passages and the bank cannot supply them",
+			ErrBankTooSmall, len(sections), len(sections))
+	}
+	return assigned, nil
+}
+
+// slotQuestions takes one section's worth of questions from one passage: each
+// task in turn, its own count, from the task sets of that type on the passage.
+//
+// Counting per task rather than over the section is what keeps the mix right. A
+// section asking for six sentence completions and four matching-information
+// questions gets six and four, not ten of whichever set the passage lists first.
+func (s *Service) slotQuestions(
+	ctx context.Context,
+	passageID string,
+	exam models.ExamType,
+	slot BlueprintSlot,
+) ([]string, error) {
+	groups, err := s.repo.GroupsForPassages(ctx, []string{passageID}, "")
+	if err != nil {
+		return nil, err
+	}
+
+	byType := map[string][]Group{}
+	groupIDs := make([]string, 0, len(groups))
+	for _, g := range groups {
+		byType[g.TypeID] = append(byType[g.TypeID], g)
+		groupIDs = append(groupIDs, g.ID)
+	}
+
+	byGroup, err := s.questions.ByGroupIDs(ctx, groupIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, slot.QuestionCount())
+	for _, task := range slot.Tasks {
+		taken := 0
+		for _, g := range byType[task.TypeID] {
+			if taken == task.QuestionCount {
+				break
+			}
+
+			set := make([]models.Question, 0, len(byGroup[g.ID]))
+			for _, q := range byGroup[g.ID] {
+				if q.SupportsExam(exam) {
+					set = append(set, q)
+				}
+			}
+			if g.ShuffleQuestions {
+				rand.Shuffle(len(set), func(i, j int) { set[i], set[j] = set[j], set[i] })
+			}
+
+			for _, q := range set {
+				if taken == task.QuestionCount {
+					break
+				}
+				ids = append(ids, q.ID)
+				taken++
+			}
+		}
+	}
+	return ids, nil
 }
 
 // ResumeMock returns a paper the learner already holds, with the questions in
@@ -501,46 +651,132 @@ func (s *Service) SubmitMock(
 // Composition
 // ---------------------------------------------------------------------------
 
-// hydrate fills a stored session with its passages and questions, in the order
-// they were dealt. The stored question list is the authority: a paper reopened
-// tomorrow is the same paper, not a freshly shuffled one.
+// hydrate rebuilds a stored paper from the question ids it was dealt.
+//
+// Those ids are the paper. Everything else — which groups appear, which
+// passages, what order they run in — is derived from them, so a paper cannot be
+// changed by anything that happens to the bank afterwards. Adding a question to
+// a passage does not add it to a paper already dealt; changing a blueprint does
+// not re-cut one; only unpublishing a question removes it, and then it is gone
+// rather than silently replaced.
+//
+// It used to rebuild by re-running composition and then filtering the result
+// against the stored ids, which is why 000009 had to abandon every live paper
+// when the slots moved. This does not have that dependency.
 func (s *Service) hydrate(ctx context.Context, session Session) (models.ReadingMockSession, error) {
-	sets, err := s.buildSets(ctx, session.PassageIDs, "", paperSlotOrder())
+	bank, err := s.questions.ByIDs(ctx, session.QuestionIDs)
 	if err != nil {
 		return models.ReadingMockSession{}, err
 	}
 
-	order := make(map[string]int, len(session.QuestionIDs))
-	for i, id := range session.QuestionIDs {
-		order[id] = i
-	}
-	for i := range sets {
-		for j := range sets[i].Groups {
-			questions := sets[i].Groups[j].Questions
-			// A question added to the group after this paper was dealt is not
-			// on it, and one removed since is simply gone.
-			kept := questions[:0]
-			for _, q := range questions {
-				if _, ok := order[q.ID]; ok {
-					kept = append(kept, q)
-				}
-			}
-			sortByOrder(kept, order)
-			sets[i].Groups[j].Questions = kept
+	// Groups and passages in the order the paper first reaches them, so the
+	// rebuilt paper runs in dealt order rather than in id order.
+	var groupOrder []string
+	seenGroup := map[string]bool{}
+	questionsByGroup := map[string][]models.Question{}
+	standalone := []models.Question{}
+
+	for _, id := range session.QuestionIDs {
+		q, ok := bank[id]
+		if !ok {
+			continue
 		}
+		if q.GroupID == "" {
+			standalone = append(standalone, q.PublicQuestion())
+			continue
+		}
+		if !seenGroup[q.GroupID] {
+			seenGroup[q.GroupID] = true
+			groupOrder = append(groupOrder, q.GroupID)
+		}
+		questionsByGroup[q.GroupID] = append(questionsByGroup[q.GroupID], q.PublicQuestion())
+	}
+
+	groups, err := s.repo.GroupsByIDs(ctx, groupOrder)
+	if err != nil {
+		return models.ReadingMockSession{}, err
+	}
+
+	var passageOrder []string
+	seenPassage := map[string]bool{}
+	groupsByPassage := map[string][]models.ReadingGroup{}
+
+	for _, groupID := range groupOrder {
+		g, ok := groups[groupID]
+		if !ok {
+			continue
+		}
+		built := g.ReadingGroup
+		built.Questions = questionsByGroup[groupID]
+
+		if !seenPassage[g.PassageID] {
+			seenPassage[g.PassageID] = true
+			passageOrder = append(passageOrder, g.PassageID)
+		}
+		groupsByPassage[g.PassageID] = append(groupsByPassage[g.PassageID], built)
+	}
+
+	passages, err := s.repo.PassagesByIDs(ctx, passageOrder)
+	if err != nil {
+		return models.ReadingMockSession{}, err
+	}
+
+	sets := make([]models.ReadingSet, 0, len(passageOrder)+1)
+	for _, id := range passageOrder {
+		passage, ok := passages[id]
+		if !ok {
+			continue
+		}
+		set := models.ReadingSet{Passage: &passage, Groups: groupsByPassage[id]}
+		for _, g := range set.Groups {
+			set.TotalQuestions += len(g.Questions)
+		}
+		sets = append(sets, set)
+	}
+
+	// Re-order Paragraphs has no passage to hang from, so its questions come
+	// last as a set of their own. The boxes are shuffled per deal, and the
+	// shuffle is not stored, so this is where a resumed paper gets them
+	// rearranged again — the answer is the sequence, not the arrangement they
+	// happen to start in.
+	if len(standalone) > 0 {
+		sets = append(sets, reorderSet(standalone))
 	}
 
 	session.Sets = sets
 	return session.ReadingMockSession, nil
 }
 
+// reorderSet wraps standalone Re-order Paragraphs questions as one set.
+func reorderSet(list []models.Question) models.ReadingSet {
+	for i := range list {
+		options := list[i].Options
+		rand.Shuffle(len(options), func(a, b int) { options[a], options[b] = options[b], options[a] })
+	}
+
+	return models.ReadingSet{
+		Groups: []models.ReadingGroup{{
+			ID:             "rg-reorder",
+			Position:       1,
+			TypeID:         TypeReorderParagraphs,
+			TypeName:       "Re-order Paragraphs",
+			Instructions:   "The text boxes below have been placed in a random order. Restore the original order.",
+			PassageDisplay: "hidden",
+			Questions:      list,
+		}},
+		TotalQuestions: len(list),
+	}
+}
+
 // buildSets loads passages and their groups and assembles them, shuffling each
-// group that allows it. An empty typeID takes every group on the passage.
+// group that allows it. An empty typeID takes every group on the passage, and an
+// empty exam takes every question regardless of which exams set it.
 //
-// slots, when given, is the paper section each passage fills — slots[i] applies
-// to passageIDs[i] — and only that section's groups are built. A nil slots takes
-// every group, which is what practice and a single-passage read want.
-func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID string, slots []int) ([]models.ReadingSet, error) {
+// This is the read path for a single passage — /reading/passages/{id} — not the
+// composition path. A paper is composed by compose() and rebuilt by hydrate();
+// neither goes through here, because a paper is a frozen list of question ids
+// and this function answers a different question: what is on this passage.
+func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID string, exam models.ExamType) ([]models.ReadingSet, error) {
 	passages, err := s.repo.PassagesByIDs(ctx, passageIDs)
 	if err != nil {
 		return nil, err
@@ -560,19 +796,15 @@ func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID str
 		return nil, err
 	}
 
-	wantSlot := make(map[string]int, len(slots))
-	for i, slot := range slots {
-		if i < len(passageIDs) {
-			wantSlot[passageIDs[i]] = slot
-		}
-	}
-
 	built := make(map[string][]models.ReadingGroup, len(passages))
 	for _, g := range groups {
-		if slot, ok := wantSlot[g.PassageID]; ok && g.PaperSlot != slot {
+		group := buildGroup(g, byGroup[g.ID], exam)
+		// A task set this exam does not set has no questions left in it, and an
+		// empty set is not something to put on screen.
+		if len(group.Questions) == 0 {
 			continue
 		}
-		built[g.PassageID] = append(built[g.PassageID], buildGroup(g, byGroup[g.ID]))
+		built[g.PassageID] = append(built[g.PassageID], group)
 	}
 
 	// passageIDs order is the order the paper was dealt in, so it drives the
@@ -592,12 +824,21 @@ func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID str
 	return sets, nil
 }
 
-// buildGroup attaches questions to a group, with the answer key stripped and
-// the order randomised where the task allows it.
-func buildGroup(g Group, list []models.Question) models.ReadingGroup {
-	safe := make([]models.Question, len(list))
-	for i, q := range list {
-		safe[i] = q.PublicQuestion()
+// buildGroup attaches questions to a group, with the answer key stripped, the
+// questions this exam does not set left out, and the order randomised where the
+// task allows it.
+//
+// The eligibility filter is here rather than in the query because this is the
+// last place every path passes through: practice, a dealt paper and a resumed
+// one all build their sets from here. A question the exam does not set is not a
+// question the learner can be asked, whichever route reached it.
+func buildGroup(g Group, list []models.Question, exam models.ExamType) models.ReadingGroup {
+	safe := make([]models.Question, 0, len(list))
+	for _, q := range list {
+		if exam != "" && !q.SupportsExam(exam) {
+			continue
+		}
+		safe = append(safe, q.PublicQuestion())
 	}
 	if g.ShuffleQuestions {
 		rand.Shuffle(len(safe), func(i, j int) { safe[i], safe[j] = safe[j], safe[i] })
@@ -606,16 +847,6 @@ func buildGroup(g Group, list []models.Question) models.ReadingGroup {
 	group := g.ReadingGroup
 	group.Questions = safe
 	return group
-}
-
-// sortByOrder puts questions back into the dealt order. Insertion sort: a group
-// holds a handful of questions, and this keeps the dependency at zero.
-func sortByOrder(list []models.Question, order map[string]int) {
-	for i := 1; i < len(list); i++ {
-		for j := i; j > 0 && order[list[j].ID] < order[list[j-1].ID]; j-- {
-			list[j], list[j-1] = list[j-1], list[j]
-		}
-	}
 }
 
 // reviewOf returns the paper with its answer key restored, in dealt order, for

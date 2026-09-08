@@ -441,17 +441,20 @@ type ReadingParagraph struct {
 }
 
 // ReadingPassage is the text a set of reading questions is written about.
+// ReadingPassage is reusable reading content. It has no exam: the same text is
+// set by IELTS and by PTE with different tasks on it, and which exam may deal a
+// task is recorded on the questions (see Question.SupportedExams).
 type ReadingPassage struct {
 	ID            string             `json:"id"`
 	ExamVersionID string             `json:"examVersionId"`
-	Exam          ExamType           `json:"exam"`
 	Title         string             `json:"title"`
 	Subtitle      string             `json:"subtitle,omitempty"`
 	Paragraphs    []ReadingParagraph `json:"paragraphs"`
 
-	// Sources carries attributed excerpts for passages written in several
-	// voices, which is what Find the Writer questions match against. Empty for
-	// single-author passages.
+	// Sources carried the attributed excerpts Find the Writer matched against.
+	// That task was replaced by Find the Paragraph in 000019 and the column was
+	// emptied with it; the field stays so the down migration has somewhere to
+	// restore into.
 	Sources []ReadingParagraph `json:"sources,omitempty"`
 
 	WordCount  int      `json:"wordCount"`
@@ -473,10 +476,6 @@ type ReadingGroup struct {
 	// Resources is material belonging to the task rather than to the passage:
 	// the boxes of an ordering task, a summary with gaps in it.
 	Resources []ReadingParagraph `json:"resources,omitempty"`
-
-	// PaperSlot is which section of a generated paper this group belongs to,
-	// or 0 for a group that is not part of one.
-	PaperSlot int `json:"paperSlot,omitempty"`
 
 	// PassageDisplay tells the client whether to render the passage this group
 	// hangs from. "hidden" is for tasks whose text is a gapped rewrite of it:

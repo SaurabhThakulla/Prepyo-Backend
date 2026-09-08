@@ -45,7 +45,7 @@ func equal(a, b []string) bool {
 // reading question travels with more of one than most: the accepted spellings,
 // the model answer, the explanation, and the answer inside each blank.
 func TestBuildGroupStripsTheAnswerKey(t *testing.T) {
-	group := buildGroup(Group{ShuffleQuestions: false}, sampleQuestions())
+	group := buildGroup(Group{ShuffleQuestions: false}, sampleQuestions(), "")
 
 	for _, q := range group.Questions {
 		if len(q.CorrectAnswers) != 0 || q.ModelAnswer != "" || q.Explanation != "" {
@@ -66,7 +66,7 @@ func TestBuildGroupShufflesWhenTheTaskAllowsIt(t *testing.T) {
 	// whether shuffling happens at all rather than whether one draw moved.
 	moved := false
 	for range 20 {
-		if !equal(idsOf(buildGroup(Group{ShuffleQuestions: true}, sampleQuestions()).Questions), original) {
+		if !equal(idsOf(buildGroup(Group{ShuffleQuestions: true}, sampleQuestions(), "").Questions), original) {
 			moved = true
 			break
 		}
@@ -82,7 +82,7 @@ func TestBuildGroupKeepsOrderWhenTheTaskDependsOnIt(t *testing.T) {
 	original := idsOf(sampleQuestions())
 
 	for range 20 {
-		got := idsOf(buildGroup(Group{ShuffleQuestions: false}, sampleQuestions()).Questions)
+		got := idsOf(buildGroup(Group{ShuffleQuestions: false}, sampleQuestions(), "").Questions)
 		if !equal(got, original) {
 			t.Fatalf("order = %v, want the authored order %v", got, original)
 		}
@@ -99,7 +99,7 @@ func TestBuildGroupCarriesTheGroupThrough(t *testing.T) {
 			Instructions: "Which paragraph contains each of the following?",
 			Resources:    []models.ReadingParagraph{{Label: "A", Text: "box"}},
 		},
-	}, sampleQuestions())
+	}, sampleQuestions(), "")
 
 	if group.ID != "g-1" || group.PassageID != "p-1" || group.TypeID != TypeMatchingInformation {
 		t.Errorf("group identity lost: %+v", group)
@@ -109,23 +109,6 @@ func TestBuildGroupCarriesTheGroupThrough(t *testing.T) {
 	}
 	if len(group.Questions) != 8 {
 		t.Errorf("questions = %d, want 8", len(group.Questions))
-	}
-}
-
-// A paper reopened later must be the same paper. The stored question list is
-// what says so, and hydrate re-imposes it over a freshly shuffled read.
-func TestSortByOrderRestoresTheDealtOrder(t *testing.T) {
-	dealt := []string{"d", "a", "c", "b"}
-	order := map[string]int{}
-	for i, id := range dealt {
-		order[id] = i
-	}
-
-	list := []models.Question{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
-	sortByOrder(list, order)
-
-	if got := idsOf(list); !equal(got, dealt) {
-		t.Errorf("order = %v, want %v", got, dealt)
 	}
 }
 
@@ -148,65 +131,42 @@ func TestReviewOfFollowsTheDealtOrderAndRestoresAnswers(t *testing.T) {
 	}
 }
 
-// The list reported to the client and the types the seed writes have to agree,
-// or the practice menu promises a task the paper never asks.
-func TestMockRequiredTypesAreDistinct(t *testing.T) {
-	seen := map[string]bool{}
-	for _, typeID := range MockRequiredTypes {
-		if seen[typeID] {
-			t.Errorf("%s listed twice", typeID)
-		}
-		seen[typeID] = true
+// A question the exam does not set is not a question the learner can be asked,
+// whichever route reached it. buildGroup is the last place every path passes
+// through, so the filter lives there and is asserted here.
+func TestBuildGroupDropsQuestionsTheExamDoesNotSet(t *testing.T) {
+	list := []models.Question{
+		{ID: "ielts-only", SupportedExams: []models.ExamType{models.ExamIELTS}},
+		{ID: "pte-only", SupportedExams: []models.ExamType{models.ExamPTE}},
+		{ID: "both", SupportedExams: []models.ExamType{models.ExamIELTS, models.ExamPTE}},
 	}
-	if len(MockRequiredTypes) != 6 {
-		t.Errorf("required types = %d, want the 6 the seed writes", len(MockRequiredTypes))
+
+	got := idsOf(buildGroup(Group{ShuffleQuestions: false}, list, models.ExamPTE).Questions)
+	if !equal(got, []string{"pte-only", "both"}) {
+		t.Errorf("PTE set = %v, want the PTE-only and shared questions", got)
+	}
+
+	got = idsOf(buildGroup(Group{ShuffleQuestions: false}, list, models.ExamIELTS).Questions)
+	if !equal(got, []string{"ielts-only", "both"}) {
+		t.Errorf("IELTS set = %v, want the IELTS-only and shared questions", got)
+	}
+
+	// An empty exam is "no filter", which is what a direct passage read wants.
+	got = idsOf(buildGroup(Group{ShuffleQuestions: false}, list, "").Questions)
+	if len(got) != 3 {
+		t.Errorf("unfiltered set = %v, want all three", got)
 	}
 }
 
-// An IELTS Academic Reading paper is 40 questions in three sections. This is the
-// arithmetic that was wrong before slots existed: three passages carrying every
-// group came to 120 questions inside a 60 minute blueprint.
-func TestPaperSlotsMakeAFortyQuestionPaper(t *testing.T) {
-	if len(PaperSlots) != MockPassageCount {
-		t.Fatalf("slots = %d, want one per dealt passage (%d)", len(PaperSlots), MockPassageCount)
-	}
+// A question written before eligibility existed carries no supported exams, and
+// has to stay answerable under the exam it was authored for.
+func TestSupportsExamFallsBackToTheAuthoredExam(t *testing.T) {
+	legacy := models.Question{ID: "old", Exam: models.ExamIELTS}
 
-	total := 0
-	for i, slot := range PaperSlots {
-		if slot.Slot != i+1 {
-			t.Errorf("slot at index %d is numbered %d; the nth passage fills the nth slot", i, slot.Slot)
-		}
-		if len(slot.Types) == 0 {
-			t.Errorf("slot %d carries no task types", slot.Slot)
-		}
-		total += slot.Questions
+	if !legacy.SupportsExam(models.ExamIELTS) {
+		t.Error("a legacy IELTS question stopped being answerable under IELTS")
 	}
-	if total != 40 {
-		t.Errorf("paper = %d questions, want 40", total)
-	}
-}
-
-// Every type the menu promises has to appear in some section, and no section may
-// ask for a type the seed never writes.
-func TestPaperSlotsCoverExactlyTheAdvertisedTypes(t *testing.T) {
-	advertised := map[string]bool{}
-	for _, typeID := range MockRequiredTypes {
-		advertised[typeID] = true
-	}
-
-	used := map[string]bool{}
-	for _, slot := range PaperSlots {
-		for _, typeID := range slot.Types {
-			if !advertised[typeID] {
-				t.Errorf("slot %d uses %s, which is not advertised to the client", slot.Slot, typeID)
-			}
-			used[typeID] = true
-		}
-	}
-
-	for typeID := range advertised {
-		if !used[typeID] {
-			t.Errorf("%s is advertised but appears in no section, so a paper never tests it", typeID)
-		}
+	if legacy.SupportsExam(models.ExamPTE) {
+		t.Error("a legacy IELTS question became answerable under PTE")
 	}
 }

@@ -70,12 +70,35 @@ func (h *Handler) types(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// What a generated mock for this exam will ask for, so the client can show
+	// which tasks a mock covers rather than hardcoding a list. It comes from the
+	// blueprint, so IELTS and PTE each describe their own paper.
+	//
+	// A missing blueprint is not an error here: the practice menu still works
+	// for an exam that has no generated mock, it just has nothing to say about
+	// one.
+	required := []string{}
+	passageCount := 0
+	if blueprint, err := h.repo.GeneratedBlueprint(r.Context(), exam); err == nil {
+		passageCount = blueprint.PassageCount
+		seen := map[string]bool{}
+		for _, slot := range blueprint.Slots {
+			for _, typeID := range slot.TypeIDs() {
+				if !seen[typeID] {
+					seen[typeID] = true
+					required = append(required, typeID)
+				}
+			}
+		}
+	} else if !errors.Is(err, ErrNoBlueprint) {
+		httpx.Internal(w, h.log, "reading.types.blueprint", err)
+		return
+	}
+
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"types": list,
-		// What a generated mock will ask for, so the client can show which
-		// types are covered by a mock rather than hardcoding the list.
-		"mockRequiredTypes": MockRequiredTypes,
-		"mockPassageCount":  MockPassageCount,
+		"types":             list,
+		"mockRequiredTypes": required,
+		"mockPassageCount":  passageCount,
 	})
 }
 
@@ -101,7 +124,7 @@ func (h *Handler) listPassages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seen, err := h.repo.SeenPassageIDs(r.Context(), user.ID, ContextMock)
+	seen, err := h.repo.SeenPassageIDs(r.Context(), user.ID, exam, ContextMock)
 	if err != nil {
 		httpx.Internal(w, h.log, "reading.listPassages.seen", err)
 		return
@@ -122,7 +145,15 @@ func (h *Handler) listPassages(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getPassage(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "passageID")
 
-	sets, err := h.svc.buildSets(r.Context(), []string{id}, r.URL.Query().Get("typeId"), nil)
+	user := reqctx.MustUser(r.Context())
+
+	exam, ok := examFor(r.URL.Query().Get("exam"), user)
+	if !ok {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE or IELTS.")
+		return
+	}
+
+	sets, err := h.svc.buildSets(r.Context(), []string{id}, r.URL.Query().Get("typeId"), exam)
 	if err != nil {
 		httpx.Internal(w, h.log, "reading.getPassage", err)
 		return
