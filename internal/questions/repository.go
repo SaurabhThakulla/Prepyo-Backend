@@ -23,7 +23,8 @@ const selectFields = `
 	COALESCE(image_url, ''), prep_time_seconds, time_limit_seconds,
 	COALESCE(options, '[]'::jsonb), COALESCE(correct_answers, '[]'::jsonb),
 	COALESCE(blanks, '[]'::jsonb), COALESCE(model_answer, ''), COALESCE(explanation, ''),
-	difficulty, tags, points, COALESCE(group_id, ''), COALESCE(figure_data, '')`
+	difficulty, tags, points, COALESCE(group_id, ''), COALESCE(figure_data, ''),
+	supported_exams`
 
 type Repository struct {
 	db database.DB
@@ -60,7 +61,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question,
 	// with no boxes.
 	const where = `
 		WHERE is_published
-		  AND ($1 = '' OR exam = $1)
+		  AND ($1 = '' OR $1 = ANY(supported_exams))
 		  AND ($2 = '' OR skill = $2)
 		  AND ($3 = '' OR type_id = $3)
 		  AND ($4 OR (passage_id IS NULL AND reorder_item_id IS NULL))`
@@ -192,5 +193,6 @@ func fieldsOf(q *models.Question) []any {
 		&q.ImageURL, &q.PrepTimeSeconds, &q.TimeLimitSeconds,
 		&q.Options, &q.CorrectAnswers, &q.Blanks, &q.ModelAnswer, &q.Explanation,
 		&q.Difficulty, &q.Tags, &q.Points, &q.GroupID, &q.FigureData,
+		&q.SupportedExams,
 	}
 }

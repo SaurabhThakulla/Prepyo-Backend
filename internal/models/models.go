@@ -334,6 +334,12 @@ type Question struct {
 	Tags       []string `json:"tags"`
 	Points     int      `json:"points"`
 
+	// SupportedExams is which exams set this question. It lives on the question
+	// rather than on its passage because a passage is shared and a question is
+	// not: one text can carry an IELTS True/False set and a PTE gap-fill, and
+	// only the questions can say which is which.
+	SupportedExams []ExamType `json:"supportedExams,omitempty"`
+
 	// Answer key. Never serialised: PublicQuestion drops these before the
 	// question reaches a learner, so the browser cannot read the answers.
 	CorrectAnswers []string `json:"-"`
@@ -343,6 +349,23 @@ type Question struct {
 	// FigureData describes the chart behind an image in words, for the
 	// evaluator only. The learner is shown ImageURL and never this.
 	FigureData string `json:"-"`
+}
+
+// SupportsExam reports whether this question may be answered under an exam.
+//
+// A question with no supported exams recorded falls back to the exam it was
+// authored for. That is what keeps every row written before eligibility existed
+// answerable, and it is why the fallback is here rather than in each caller.
+func (q Question) SupportsExam(exam ExamType) bool {
+	if len(q.SupportedExams) == 0 {
+		return q.Exam == exam
+	}
+	for _, e := range q.SupportedExams {
+		if e == exam {
+			return true
+		}
+	}
+	return false
 }
 
 // PublicQuestion is the question as a learner sees it while answering: no

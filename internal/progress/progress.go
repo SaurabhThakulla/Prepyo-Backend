@@ -66,8 +66,7 @@ func (s *Service) Estimate(ctx context.Context, db database.DB, user models.User
 	err = db.QueryRow(ctx, `
 		SELECT COALESCE(sum(a.score), 0), COALESCE(sum(a.max_score), 0), count(*)
 		FROM practice_attempts a
-		JOIN questions q ON q.id = a.question_id
-		WHERE a.user_id = $1 AND q.exam = $2 AND a.created_at > $3`,
+		WHERE a.user_id = $1 AND a.exam = $2 AND a.created_at > $3`,
 		user.ID, user.TargetExam, time.Now().Add(-recentWindow)).Scan(&earned, &max, &attempts)
 	if err != nil {
 		return models.ScoreEstimate{}, fmt.Errorf("read practice totals: %w", err)
@@ -139,7 +138,7 @@ func (s *Service) Skills(ctx context.Context, db database.DB, user models.User) 
 		SELECT q.skill, count(*), COALESCE(sum(a.score), 0), COALESCE(sum(a.max_score), 0)
 		FROM practice_attempts a
 		JOIN questions q ON q.id = a.question_id
-		WHERE a.user_id = $1 AND q.exam = $2 AND a.created_at > $3
+		WHERE a.user_id = $1 AND a.exam = $2 AND a.created_at > $3
 		GROUP BY q.skill`,
 		user.ID, user.TargetExam, time.Now().Add(-recentWindow))
 	if err != nil {
@@ -211,7 +210,7 @@ func (s *Service) bankCoverage(ctx context.Context, db database.DB, user models.
 
 	rows, err := db.Query(ctx, `
 		SELECT skill, count(*) FROM questions
-		 WHERE is_published AND exam = $1
+		 WHERE is_published AND $1 = ANY(supported_exams)
 		 GROUP BY skill`, user.TargetExam)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read bank size: %w", err)
@@ -232,7 +231,7 @@ func (s *Service) bankCoverage(ctx context.Context, db database.DB, user models.
 	done, err := db.Query(ctx, `
 		SELECT q.skill, count(DISTINCT q.id)
 		  FROM questions q
-		 WHERE q.exam = $2
+		 WHERE $2 = ANY(q.supported_exams)
 		   AND (EXISTS (SELECT 1 FROM practice_attempts a
 		                 WHERE a.question_id = q.id AND a.user_id = $1)
 		     OR EXISTS (SELECT 1 FROM ai_evaluations e

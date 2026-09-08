@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/billing"
+	"github.com/prepyo/backend/internal/exams"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/mistakes"
 	"github.com/prepyo/backend/internal/models"
@@ -28,6 +29,7 @@ type Handler struct {
 	repo      *Repository
 	questions *questions.Repository
 	mistakes  *mistakes.Repository
+	exams     *exams.Repository
 	xp        *gamification.Service
 	billing   *billing.Service
 	referrals ReferralsService
@@ -39,6 +41,7 @@ func NewHandler(
 	repo *Repository,
 	questionRepo *questions.Repository,
 	mistakeRepo *mistakes.Repository,
+	examRepo *exams.Repository,
 	xp *gamification.Service,
 	billingService *billing.Service,
 	referrals ReferralsService,
@@ -49,6 +52,7 @@ func NewHandler(
 		repo:      repo,
 		questions: questionRepo,
 		mistakes:  mistakeRepo,
+		exams:     examRepo,
 		xp:        xp,
 		billing:   billingService,
 		referrals: referrals,
@@ -112,6 +116,34 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The exam comes from the request, defaulting to the learner's own target.
+	//
+	// It used to come from the question, and it cannot any more: a question on a
+	// shared passage may be answerable under either exam, so the question no
+	// longer knows which one the learner was working under. Everything the
+	// attempt is later read by — progress, the mistake bank — keys off this.
+	exam, ok := examFor(sub.Exam, user)
+	if !ok {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE or IELTS.")
+		return
+	}
+
+	// A question that is not set by this exam cannot be answered under it.
+	// Without this an IELTS-only True/False set could be submitted with
+	// exam=PTE and land in that learner's PTE progress.
+	if !question.SupportsExam(exam) {
+		httpx.Error(w, http.StatusUnprocessableEntity, httpx.CodeBadRequest,
+			"That question is not part of the "+string(exam)+" syllabus.")
+		return
+	}
+
+	// The version that scores the attempt follows the exam, not the question.
+	version, err := h.exams.Current(ctx, exam)
+	if err != nil {
+		httpx.Internal(w, h.log, "practice.submit.examVersion", err)
+		return
+	}
+
 	result, ok := scoring.Grade(question, sub)
 	if !ok {
 		// No grader for this task type. Failing here is deliberate: awarding
@@ -154,7 +186,8 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	attempt, err := h.repo.Save(ctx, tx, SaveParams{
 		UserID:             user.ID,
 		QuestionID:         question.ID,
-		ExamVersionID:      question.ExamVersionID,
+		Exam:               exam,
+		ExamVersionID:      version.ID,
 		IsCorrect:          result.IsCorrect,
 		Score:              result.Score,
 		MaxScore:           result.MaxScore,
@@ -172,6 +205,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		if err := h.mistakes.Record(ctx, tx, mistakes.RecordParams{
 			UserID:          user.ID,
 			QuestionID:      question.ID,
+			Exam:            exam,
 			ErrorTag:        result.ErrorTag,
 			UserResponse:    result.UserDisplay,
 			CorrectResponse: result.CorrectDisplay,
@@ -235,4 +269,17 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		"streak":    streak,
 		"missions":  missions,
 	})
+}
+
+// examFor is the exam a submission was made under: the one it names, or the
+// learner's target when it names none.
+//
+// Same rule as reading.examFor. Both exist because a client that knows which
+// exam the learner is sitting should be able to say so, and one that does not
+// should still work.
+func examFor(raw models.ExamType, user models.User) (models.ExamType, bool) {
+	if strings.TrimSpace(string(raw)) == "" {
+		return user.TargetExam, true
+	}
+	return raw, raw.Valid()
 }
