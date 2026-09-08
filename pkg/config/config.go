@@ -45,17 +45,9 @@ type Config struct {
 	AdminEmail    string
 	AdminPassword string
 
-	// Issue reporting. SMTPUser doubles as the From address.
-	SMTPUser      string
-	SMTPPassword  string
-	ReportEmailTo string
-
 	// WebDistDir is the optional directory path to frontend production build assets.
 	WebDistDir string
 }
-
-// ReportingEnabled reports whether issue reporting credentials are configured.
-func (c Config) ReportingEnabled() bool { return c.SMTPUser != "" && c.SMTPPassword != "" }
 
 // AdminLoginEnabled reports whether the admin password endpoint has a
 // credential to check against. When false it returns 503 rather than comparing
@@ -112,10 +104,6 @@ func Load() (*Config, error) {
 
 		AdminEmail:    strings.ToLower(stringOr("ADMIN_EMAIL", "admin@prepyo.online")),
 		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
-
-		SMTPUser:      os.Getenv("GMAIL_USER"),
-		SMTPPassword:  os.Getenv("GMAIL_APP_PASSWORD"),
-		ReportEmailTo: stringOr("REPORT_EMAIL_TO", "sauravthakulla683@gmail.com"),
 
 		WebDistDir: os.Getenv("WEB_DIST_DIR"),
 	}

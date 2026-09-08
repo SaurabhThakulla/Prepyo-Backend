@@ -1,39 +1,39 @@
-// Package report handles issue reporting by emailing user feedback.
+// Package report records the issues learners raise from inside the app.
+//
+// Reports used to be emailed through Gmail. That made every report depend on
+// SMTP credentials being present and correct, and left no record of anything:
+// a failed send, or an inbox nobody opened, and the report simply did not
+// exist. They are rows now, and the admin dashboard works through them.
 package report
 
 import (
-	"crypto/tls"
+	"context"
 	"fmt"
 	"log/slog"
-	"mime"
-	"net"
 	"net/http"
-	"net/smtp"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
 )
 
 const (
-	maxMessage  = 4000
-	maxPath     = 200
-	smtpHost    = "smtp.gmail.com"
-	smtpAddr    = smtpHost + ":465"
-	sendTimeout = 15 * time.Second
+	// maxMessage is generous: a learner describing a scoring problem writes
+	// more than a sentence, and truncating loses the detail that makes the
+	// report worth having.
+	maxMessage = 4000
+	maxPath    = 300
 )
 
 type Handler struct {
-	smtpUser     string
-	smtpPassword string
-	to           string
-	log          *slog.Logger
+	db  *pgxpool.Pool
+	log *slog.Logger
 }
 
-func NewHandler(smtpUser, smtpPassword, to string, log *slog.Logger) *Handler {
-	return &Handler{smtpUser: smtpUser, smtpPassword: smtpPassword, to: to, log: log}
+func NewHandler(db *pgxpool.Pool, log *slog.Logger) *Handler {
+	return &Handler{db: db, log: log}
 }
 
 func (h *Handler) Routes() chi.Router {
@@ -65,7 +65,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		message = message[:maxMessage]
 	}
 
-	path := req.Path
+	path := strings.TrimSpace(req.Path)
 	if path == "" {
 		path = "unknown"
 	}
@@ -73,103 +73,24 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		path = path[:maxPath]
 	}
 
-	if h.smtpUser == "" || h.smtpPassword == "" {
-		h.log.Error("issue report dropped: GMAIL_USER / GMAIL_APP_PASSWORD are not set")
-		httpx.Error(w, http.StatusInternalServerError, httpx.CodeNotConfigured,
-			"Reporting is not switched on in this environment yet.")
+	if err := h.store(r.Context(), user.ID, path, message); err != nil {
+		httpx.Internal(w, h.log, "report.submit", err)
 		return
 	}
 
-	if err := h.send(user.Name, user.Email, path, message); err != nil {
-		h.log.Error("failed to send issue report", "op", "report.submit", "error", err)
-		httpx.Error(w, http.StatusBadGateway, httpx.CodeSendFailed,
-			"We could not send that just now. Please try again in a moment.")
-		return
-	}
+	h.log.Info("issue reported", "user", user.Email, "path", path)
 
-	httpx.JSON(w, http.StatusOK, nil)
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"message": "Thanks — your report is with the team.",
+	})
 }
 
-// send composes and delivers the issue report email.
-func (h *Handler) send(name, email, path, message string) error {
-	name = sanitizeHeader(name)
-	email = sanitizeHeader(email)
-	if name == "" {
-		name = "Learner"
-	}
-
-	subject := mime.QEncoding.Encode("utf-8", "Prepyo issue report from "+name)
-
-	headers := []string{
-		fmt.Sprintf("From: Prepyo Reports <%s>", h.smtpUser),
-		fmt.Sprintf("To: %s", h.to),
-		fmt.Sprintf("Reply-To: %s", email),
-		fmt.Sprintf("Subject: %s", subject),
-		fmt.Sprintf("Date: %s", time.Now().Format(time.RFC1123Z)),
-		"MIME-Version: 1.0",
-		`Content-Type: text/plain; charset="UTF-8"`,
-	}
-
-	body := strings.Join([]string{
-		fmt.Sprintf("From: %s <%s>", name, email),
-		"Page: " + path,
-		"Time: " + time.Now().UTC().Format(time.RFC3339),
-		"",
-		message,
-	}, "\r\n")
-
-	// SMTP wants CRLF line endings, and a blank line between headers and body.
-	msg := strings.Join(headers, "\r\n") + "\r\n\r\n" + strings.ReplaceAll(body, "\n", "\r\n")
-
-	return h.deliver([]byte(msg))
-}
-
-// deliver establishes a TLS SMTP connection with timeout and transmits the message.
-func (h *Handler) deliver(msg []byte) error {
-	conn, err := tls.DialWithDialer(
-		&net.Dialer{Timeout: sendTimeout},
-		"tcp", smtpAddr,
-		&tls.Config{ServerName: smtpHost},
-	)
+func (h *Handler) store(ctx context.Context, userID, path, message string) error {
+	_, err := h.db.Exec(ctx, `
+		INSERT INTO issue_reports (user_id, path, message)
+		VALUES ($1, $2, $3)`, userID, path, message)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", smtpAddr, err)
+		return fmt.Errorf("insert issue report: %w", err)
 	}
-	// Bounds the rest of the exchange, not just the dial.
-	_ = conn.SetDeadline(time.Now().Add(sendTimeout))
-
-	client, err := smtp.NewClient(conn, smtpHost)
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("smtp handshake: %w", err)
-	}
-	defer client.Close()
-
-	if err := client.Auth(smtp.PlainAuth("", h.smtpUser, h.smtpPassword, smtpHost)); err != nil {
-		return fmt.Errorf("smtp auth: %w", err)
-	}
-	if err := client.Mail(h.smtpUser); err != nil {
-		return fmt.Errorf("smtp from: %w", err)
-	}
-	if err := client.Rcpt(h.to); err != nil {
-		return fmt.Errorf("smtp rcpt: %w", err)
-	}
-
-	wc, err := client.Data()
-	if err != nil {
-		return fmt.Errorf("smtp data: %w", err)
-	}
-	if _, err := wc.Write(msg); err != nil {
-		wc.Close()
-		return fmt.Errorf("smtp write: %w", err)
-	}
-	if err := wc.Close(); err != nil {
-		return fmt.Errorf("smtp close body: %w", err)
-	}
-
-	return client.Quit()
-}
-
-// sanitizeHeader strips carriage returns and newlines to prevent header injection.
-func sanitizeHeader(v string) string {
-	return strings.TrimSpace(strings.NewReplacer("\r", "", "\n", "").Replace(v))
+	return nil
 }

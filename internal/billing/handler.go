@@ -2,7 +2,9 @@ package billing
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -63,6 +65,10 @@ type checkoutRequest struct {
 	PlanID         string `json:"planId"`
 	PaymentGateway string `json:"paymentGateway"`
 	TransactionID  string `json:"transactionId"`
+	// ProofImage is the learner's screenshot of the transfer, as a data URL
+	// from the file picker. It is what an admin looks at when deciding whether
+	// the money arrived.
+	ProofImage string `json:"proofImage"`
 }
 
 func (h *Handler) checkout(w http.ResponseWriter, r *http.Request) {
@@ -102,24 +108,79 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, err := h.service.ConfirmPayment(r.Context(), h.db, ConfirmPaymentParams{
+	proof, proofType, err := decodeProof(req.ProofImage)
+	if err != nil {
+		httpx.ValidationError(w, map[string]string{"proofImage": err.Error()})
+		return
+	}
+
+	// The plan is NOT granted here. This used to hand out a subscription the
+	// moment a learner typed any transaction id, with nothing checking that the
+	// id was real or that money had arrived. The request now waits as 'pending'
+	// until an admin approves it — see internal/admin.reviewPayment, which is
+	// the only thing that grants a plan.
+	if err := h.service.RequestPayment(r.Context(), h.db, RequestPaymentParams{
 		UserID:         user.ID,
-		PlanID:         plan.ID,
+		Plan:           plan,
 		PaymentGateway: gw,
 		TransactionID:  txID,
-		AmountNPR:      plan.PriceNPR,
-	})
-	if err != nil {
+		ProofImage:     proof,
+		ProofImageType: proofType,
+	}); err != nil {
+		if errors.Is(err, ErrDuplicateTransaction) {
+			httpx.Error(w, http.StatusConflict, httpx.CodeConflict,
+				"That transaction has already been submitted. We are reviewing it.")
+			return
+		}
 		httpx.Internal(w, h.log, "billing.confirm", err)
+		return
+	}
+
+	state, err := h.service.State(r.Context(), h.db, user)
+	if err != nil {
+		httpx.Internal(w, h.log, "billing.confirm.state", err)
 		return
 	}
 
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"success":      true,
+		"pending":      true,
 		"subscription": state,
-		"message":      "Payment confirmed successfully! Bonus days have been applied.",
+		"message":      "Payment submitted. We will activate your plan once it is checked, usually within a few hours.",
 	})
 }
+
+// decodeProof reads the data URL the file picker produced.
+//
+// Optional: a learner who cannot screenshot should still be able to submit,
+// and an admin can ask for it. When present it must be an image and small
+// enough that a payment row stays cheap to read.
+func decodeProof(raw string) ([]byte, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, "", nil
+	}
+
+	prefix, encoded, found := strings.Cut(raw, ",")
+	if !found || !strings.HasPrefix(prefix, "data:image/") {
+		return nil, "", errors.New("Attach an image of the payment.")
+	}
+
+	mime, _, _ := strings.Cut(strings.TrimPrefix(prefix, "data:"), ";")
+
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, "", errors.New("That image could not be read. Try another screenshot.")
+	}
+	if len(decoded) > maxProofBytes {
+		return nil, "", errors.New("That image is too large. Please keep it under 4 MB.")
+	}
+	return decoded, mime, nil
+}
+
+// maxProofBytes caps the screenshot. Payment rows are listed in the admin
+// queue, and an unbounded blob per row makes that listing expensive.
+const maxProofBytes = 4 << 20
 
 type webhookPayload struct {
 	UserID         string `json:"userId"`

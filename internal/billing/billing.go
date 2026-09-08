@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/gamification"
@@ -338,4 +339,56 @@ func planIsActive(user models.User) bool {
 		return false
 	}
 	return user.PlanValidUntil.After(time.Now())
+}
+
+// ErrDuplicateTransaction means the learner has already submitted that
+// transaction id. The unique index is what catches it, so two taps of the same
+// button cannot become two requests for the same money.
+var ErrDuplicateTransaction = errors.New("transaction already submitted")
+
+type RequestPaymentParams struct {
+	UserID         string
+	Plan           models.Plan
+	PaymentGateway string
+	TransactionID  string
+	ProofImage     []byte
+	ProofImageType string
+}
+
+// RequestPayment records a purchase waiting for review.
+//
+// It writes the entitlement it is asking for — the plan and the days — but
+// grants nothing. Storing the days now means an approval months later gives
+// what was advertised at the time of payment, not whatever the plan has since
+// become.
+func (s *Service) RequestPayment(ctx context.Context, pool *pgxpool.Pool, p RequestPaymentParams) error {
+	baseDays := p.Plan.DurationDays
+	if baseDays <= 0 && p.Plan.DurationMonths > 0 {
+		baseDays = p.Plan.DurationMonths * 30
+	}
+	effectiveDays := baseDays + p.Plan.BonusDays
+
+	var proof []byte
+	var proofType *string
+	if len(p.ProofImage) > 0 {
+		proof = p.ProofImage
+		proofType = &p.ProofImageType
+	}
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO subscription_payments
+			(user_id, plan_id, payment_gateway, transaction_id, amount_npr, status,
+			 base_days, bonus_days, effective_days, proof_image, proof_image_type)
+		VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)`,
+		p.UserID, p.Plan.ID, p.PaymentGateway, p.TransactionID, p.Plan.PriceNPR,
+		baseDays, p.Plan.BonusDays, effectiveDays, proof, proofType)
+
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrDuplicateTransaction
+		}
+		return fmt.Errorf("record payment request: %w", err)
+	}
+	return nil
 }

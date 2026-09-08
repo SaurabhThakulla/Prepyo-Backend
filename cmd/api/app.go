@@ -113,7 +113,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		notificationHandler: notifications.NewHandler(notificationRepo, log),
 		billingHandler:      billing.NewHandler(pool, planRepo, billingService, log),
 		referralHandler:     referrals.NewHandler(referralService, log),
-		reportHandler:       report.NewHandler(cfg.SMTPUser, cfg.SMTPPassword, cfg.ReportEmailTo, log),
+		reportHandler:       report.NewHandler(pool, log),
 		adminHandler:        admin.NewHandler(pool, log),
 	}
 }
