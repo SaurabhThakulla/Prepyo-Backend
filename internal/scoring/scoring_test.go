@@ -223,3 +223,37 @@ func TestDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestGradeSentenceCompletionAcceptsAChosenOption(t *testing.T) {
+	q := models.Question{
+		TypeID:         "reading-sentence-completion",
+		Points:         1,
+		CorrectAnswers: []string{"flavour", "flavor"},
+		Options: []models.QuestionOption{
+			{ID: "flavour", Text: "flavour"},
+			{ID: "colour", Text: "colour"},
+			{ID: "aroma", Text: "aroma"},
+			{ID: "texture", Text: "texture"},
+		},
+	}
+
+	got, ok := Grade(q, models.AnswerSubmission{SelectedOptions: []string{"flavour"}})
+	if !ok {
+		t.Fatal("Grade() returned ok=false for a sentence completion question")
+	}
+	if !got.IsCorrect {
+		t.Errorf("choosing the right option scored %v, want correct", got)
+	}
+
+	wrong, _ := Grade(q, models.AnswerSubmission{SelectedOptions: []string{"aroma"}})
+	if wrong.IsCorrect {
+		t.Error("choosing a distractor was marked correct")
+	}
+
+	// Typing still works: the options are an additional route to the answer,
+	// not a replacement for the one the seeded questions were written against.
+	typed, _ := Grade(q, models.AnswerSubmission{TextResponse: "flavor"})
+	if !typed.IsCorrect {
+		t.Error("an accepted alternative spelling typed in was marked wrong")
+	}
+}
