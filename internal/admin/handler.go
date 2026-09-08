@@ -30,12 +30,15 @@ func NewHandler(db *pgxpool.Pool, log *slog.Logger) *Handler {
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/metrics", h.metrics)
+	r.Get("/users", h.users)
+	r.Patch("/users/{id}/role", h.setUserRole)
 	return r
 }
 
 type metrics struct {
 	Questions        int `json:"questions"`
 	Mocks            int `json:"mocks"`
+	TotalUsers       int `json:"totalUsers"`
 	Learners         int `json:"learners"`
 	ActiveLast7Days  int `json:"activeLast7Days"`
 	PracticeAttempts int `json:"practiceAttempts"`
@@ -74,6 +77,7 @@ func (h *Handler) read(ctx context.Context) (metrics, error) {
 		SELECT
 			(SELECT count(*) FROM questions WHERE is_published),
 			(SELECT count(*) FROM mocks),
+			(SELECT count(*) FROM users),
 			(SELECT count(*) FROM users WHERE role <> 'admin'),
 			(SELECT count(DISTINCT user_id) FROM practice_attempts WHERE created_at > now() - interval '7 days'),
 			(SELECT count(*) FROM practice_attempts),
@@ -83,7 +87,7 @@ func (h *Handler) read(ctx context.Context) (metrics, error) {
 			(SELECT COALESCE(sum(prompt_tokens), 0) FROM ai_evaluations),
 			(SELECT COALESCE(sum(completion_tokens), 0) FROM ai_evaluations),
 			(SELECT COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms), 0)::int FROM ai_evaluations)`,
-	).Scan(&m.Questions, &m.Mocks, &m.Learners, &m.ActiveLast7Days, &m.PracticeAttempts,
+	).Scan(&m.Questions, &m.Mocks, &m.TotalUsers, &m.Learners, &m.ActiveLast7Days, &m.PracticeAttempts,
 		&m.MockAttempts, &m.Evaluations, &m.EvaluationsToday, &m.PromptTokens,
 		&m.CompletionTokens, &m.MedianLatencyMS)
 	if err != nil {
