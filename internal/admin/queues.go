@@ -240,7 +240,7 @@ func (h *Handler) reviewPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	granted, err := h.applyPaymentReview(r.Context(), paymentID, actor.ID, req)
+	granted, queued, err := h.applyPaymentReview(r.Context(), paymentID, actor.ID, req)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound,
@@ -252,18 +252,24 @@ func (h *Handler) reviewPayment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.log.Info("admin reviewed a payment",
-		"actor", actor.Email, "payment", paymentID, "approved", req.Approve, "grantedDays", granted)
+		"actor", actor.Email, "payment", paymentID, "approved", req.Approve,
+		"grantedDays", granted, "queued", queued)
 
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"approved":    req.Approve,
 		"grantedDays": granted,
+		// queued means the learner already had a live plan, so this one starts
+		// when that ends rather than replacing it.
+		"queued": queued,
 	})
 }
 
-func (h *Handler) applyPaymentReview(ctx context.Context, paymentID, actorID string, req reviewPaymentRequest) (int, error) {
+// applyPaymentReview returns the days granted and whether the plan had to wait
+// behind one that is still running.
+func (h *Handler) applyPaymentReview(ctx context.Context, paymentID, actorID string, req reviewPaymentRequest) (int, bool, error) {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("begin review tx: %w", err)
+		return 0, false, fmt.Errorf("begin review tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -277,7 +283,7 @@ func (h *Handler) applyPaymentReview(ctx context.Context, paymentID, actorID str
 		WHERE id = $1 AND status = 'pending'
 		FOR UPDATE`, paymentID).Scan(&userID, &planID, &days)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	status := "failed"
@@ -295,36 +301,53 @@ func (h *Handler) applyPaymentReview(ctx context.Context, paymentID, actorID str
 		SET status = $2, reviewed_by = $3, reviewed_at = now(), review_note = $4,
 		    processed_at = CASE WHEN $2 = 'success' THEN now() ELSE processed_at END
 		WHERE id = $1`, paymentID, status, actorID, note); err != nil {
-		return 0, fmt.Errorf("update payment status: %w", err)
+		return 0, false, fmt.Errorf("update payment status: %w", err)
 	}
 
 	if !req.Approve {
 		if err := tx.Commit(ctx); err != nil {
-			return 0, fmt.Errorf("commit rejection: %w", err)
+			return 0, false, fmt.Errorf("commit rejection: %w", err)
 		}
-		return 0, nil
+		return 0, false, nil
 	}
 
-	// Same shape as a purchase: the period starts today, the expiry extends
-	// from whatever was left, and the role follows the plan so the tier is not
-	// left behind by the grant.
+	// Overwriting the user's plan here is what downgraded anyone who bought a
+	// cheaper plan while a better one was still running. A live plan is left
+	// alone and the purchase waits its turn instead.
+	var liveUntil *time.Time
+	if err := tx.QueryRow(ctx,
+		`SELECT plan_valid_until FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&liveUntil); err != nil {
+		return 0, false, fmt.Errorf("read current plan: %w", err)
+	}
+
+	if liveUntil != nil && liveUntil.After(time.Now()) {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO queued_plans (user_id, plan_id, days, payment_id, status)
+			VALUES ($1, $2, $3, $4, 'queued')`, userID, planID, days, paymentID); err != nil {
+			return 0, false, fmt.Errorf("queue plan: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, false, fmt.Errorf("commit queued approval: %w", err)
+		}
+		return days, true, nil
+	}
+
+	// Nothing running, so it starts today.
 	if _, err := tx.Exec(ctx, `
 		UPDATE users
 		SET plan_id = $2,
 		    plan_started_at = CURRENT_DATE,
-		    -- make_interval keeps the day count an integer. Concatenating it into
-		    -- a string forces the parameter to text, which pgx cannot encode.
-		    plan_valid_until = COALESCE(GREATEST(plan_valid_until, CURRENT_DATE), CURRENT_DATE) + make_interval(days => $3),
+		    plan_valid_until = CURRENT_DATE + make_interval(days => $3),
 		    role = CASE WHEN role = 'admin' THEN 'admin' ELSE $4 END,
 		    updated_at = now()
 		WHERE id = $1`, userID, planID, days, roleForPlanID(planID)); err != nil {
-		return 0, fmt.Errorf("grant plan: %w", err)
+		return 0, false, fmt.Errorf("grant plan: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit approval: %w", err)
+		return 0, false, fmt.Errorf("commit approval: %w", err)
 	}
-	return days, nil
+	return days, false, nil
 }
 
 // roleForPlanID is planForRole read the other way.

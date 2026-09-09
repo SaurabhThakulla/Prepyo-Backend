@@ -37,6 +37,8 @@ func (h *Handler) Routes(requireUser func(http.Handler) http.Handler) chi.Router
 		private.Get("/", h.state)
 		private.Post("/checkout", h.checkout)
 		private.Post("/confirm", h.confirm)
+		private.Get("/queued", h.queued)
+		private.Post("/queued/{id}/activate", h.activateQueued)
 	})
 	return r
 }
@@ -219,5 +221,51 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 		"received":     true,
 		"applied":      true,
 		"subscription": state,
+	})
+}
+
+
+// queued lists the plans this learner has bought that have not started yet.
+func (h *Handler) queued(w http.ResponseWriter, r *http.Request) {
+	user := reqctx.MustUser(r.Context())
+
+	list, err := h.service.QueuedPlans(r.Context(), h.db, user.ID)
+	if err != nil {
+		httpx.Internal(w, h.log, "billing.queued", err)
+		return
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{"queued": list})
+}
+
+// activateQueued brings a waiting plan forward at the learner's request.
+//
+// The days left on the current plan are lost, which is why this is a deliberate
+// action with its own endpoint rather than something that happens on purchase.
+func (h *Handler) activateQueued(w http.ResponseWriter, r *http.Request) {
+	user := reqctx.MustUser(r.Context())
+
+	updated, err := h.service.ActivateQueuedPlan(r.Context(), h.db, user.ID, chi.URLParam(r, "id"))
+	switch {
+	case errors.Is(err, ErrQueuedPlanNotFound):
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound,
+			"That plan is not waiting to start any more.")
+		return
+	case err != nil:
+		httpx.Internal(w, h.log, "billing.activateQueued", err)
+		return
+	}
+
+	state, err := h.service.State(r.Context(), h.db, updated)
+	if err != nil {
+		httpx.Internal(w, h.log, "billing.activateQueued.state", err)
+		return
+	}
+
+	h.log.Info("learner activated a queued plan", "user", user.Email, "plan", state.PlanID)
+
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"subscription": state,
+		"message":      "Your new plan is active now.",
 	})
 }

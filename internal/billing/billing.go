@@ -392,3 +392,106 @@ func (s *Service) RequestPayment(ctx context.Context, pool *pgxpool.Pool, p Requ
 	}
 	return nil
 }
+
+// QueuedPlan is a paid plan waiting for the current one to end.
+type QueuedPlan struct {
+	ID        string `json:"id"`
+	PlanID    string `json:"planId"`
+	PlanName  string `json:"planName"`
+	Days      int    `json:"days"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// QueuedPlans lists what a learner has bought and not yet started.
+func (s *Service) QueuedPlans(ctx context.Context, db database.DB, userID string) ([]QueuedPlan, error) {
+	rows, err := db.Query(ctx, `
+		SELECT q.id, q.plan_id, p.name, q.days, q.created_at
+		FROM queued_plans q
+		JOIN plans p ON p.id = q.plan_id
+		WHERE q.user_id = $1 AND q.status = 'queued'
+		ORDER BY q.created_at`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list queued plans: %w", err)
+	}
+	defer rows.Close()
+
+	list := make([]QueuedPlan, 0, 2)
+	for rows.Next() {
+		var item QueuedPlan
+		var created time.Time
+		if err := rows.Scan(&item.ID, &item.PlanID, &item.PlanName, &item.Days, &created); err != nil {
+			return nil, fmt.Errorf("scan queued plan: %w", err)
+		}
+		item.CreatedAt = created.Format(time.RFC3339)
+		list = append(list, item)
+	}
+	return list, rows.Err()
+}
+
+// ErrQueuedPlanNotFound means the row is gone, already started, or belongs to
+// somebody else. One error for all three: the caller may only act on their own
+// queue, and saying which it was would confirm another learner's row exists.
+var ErrQueuedPlanNotFound = errors.New("queued plan not found")
+
+// ActivateQueuedPlan starts a waiting plan now, ending the current one.
+//
+// Whatever was left of the running plan is forfeited — the new plan's expiry is
+// counted from today, not added to what remained. That is a real loss, so it
+// only ever happens because the learner asked: nothing calls this on their
+// behalf.
+func (s *Service) ActivateQueuedPlan(ctx context.Context, pool *pgxpool.Pool, userID, queuedID string) (models.User, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return models.User{}, fmt.Errorf("begin activation tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var planID string
+	var days int
+	err = tx.QueryRow(ctx, `
+		SELECT plan_id, days FROM queued_plans
+		WHERE id = $1 AND user_id = $2 AND status = 'queued'
+		FOR UPDATE`, queuedID, userID).Scan(&planID, &days)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.User{}, ErrQueuedPlanNotFound
+	}
+	if err != nil {
+		return models.User{}, fmt.Errorf("read queued plan: %w", err)
+	}
+
+	// The updated row comes back from the write. Reporting the caller's copy
+	// instead would answer with the plan they had a moment ago, which is the
+	// one this call just replaced.
+	var updated models.User
+	err = tx.QueryRow(ctx, `
+		UPDATE users
+		SET plan_id = $2,
+		    plan_started_at = CURRENT_DATE,
+		    plan_valid_until = CURRENT_DATE + make_interval(days => $3),
+		    role = CASE WHEN role = 'admin' THEN 'admin' ELSE $4 END,
+		    updated_at = now()
+		WHERE id = $1
+		RETURNING id, email, name, role, target_exam, target_score, exam_date, nepal_region,
+		          xp, streak_days, streak_last_active_date, timezone, plan_id, plan_started_at,
+		          plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at`,
+		userID, planID, days, models.RoleForPlan(planID)).
+		Scan(&updated.ID, &updated.Email, &updated.Name, &updated.Role, &updated.TargetExam,
+			&updated.TargetScore, &updated.ExamDate, &updated.NepalRegion, &updated.XP,
+			&updated.StreakDays, &updated.StreakLastActiveDate, &updated.Timezone,
+			&updated.PlanID, &updated.PlanStartedAt, &updated.PlanValidUntil,
+			&updated.ReferralCode, &updated.BonusMockTests, &updated.BonusProDays, &updated.CreatedAt)
+	if err != nil {
+		return models.User{}, fmt.Errorf("activate plan: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE queued_plans SET status = 'activated', activated_at = now()
+		WHERE id = $1`, queuedID); err != nil {
+		return models.User{}, fmt.Errorf("mark queued plan activated: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.User{}, fmt.Errorf("commit activation: %w", err)
+	}
+	return updated, nil
+}

@@ -245,6 +245,16 @@ func (a *app) reconcileRoles(ctx context.Context) {
 	defer ticker.Stop()
 
 	run := func() {
+		// Queued plans start first: a plan that came due this tick should be
+		// live before roles are derived from plan state, or the learner drops
+		// to the free tier until the next pass.
+		started, err := a.userRepo.ActivateQueuedPlans(ctx)
+		if err != nil {
+			a.log.Error("queued plan activation failed", "error", err)
+		} else if started > 0 {
+			a.log.Info("activated queued plans", "count", started)
+		}
+
 		changed, err := a.userRepo.ReconcileRoles(ctx)
 		if err != nil {
 			a.log.Error("role reconcile failed", "error", err)
