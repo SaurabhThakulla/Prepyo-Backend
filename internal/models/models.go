@@ -473,6 +473,8 @@ type ReadingGroup struct {
 	TypeID           string             `json:"typeId"`
 	TypeName         string             `json:"typeName"`
 	Instructions     string             `json:"instructions"`
+	// BoxTitle heads the box a summary-completion set is printed in.
+	BoxTitle         string             `json:"boxTitle,omitempty"`
 	Resources        []ReadingParagraph `json:"resources,omitempty"`
 	PassageDisplay   string             `json:"passageDisplay"`
 	TimeLimitSeconds int                `json:"timeLimitSeconds,omitempty"`

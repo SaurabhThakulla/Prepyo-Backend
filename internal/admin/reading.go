@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -40,6 +41,16 @@ const (
 	styleParagraph
 	// styleText: free text, optionally with word choices.
 	styleText
+	// styleBlanks: the answer key is per gap inside a gapped text the question
+	// carries itself, rather than one answer for the question as a whole.
+	styleBlanks
+	styleResource
+)
+
+var (
+	examsBoth  = []string{"PTE", "IELTS"}
+	examsPTE   = []string{"PTE"}
+	examsIELTS = []string{"IELTS"}
 )
 
 type readingTypeSpec struct {
@@ -50,6 +61,22 @@ type readingTypeSpec struct {
 	multi bool
 	// fixedOptions is the answer set for verdict tasks, in display order.
 	fixedOptions []questionOption
+	// wordBank says the gaps are filled from one list shared by the whole
+	// group, with more words in it than gaps, rather than from choices of
+	// their own.
+	wordBank bool
+	exams    []string
+	display  string
+	shuffle  bool
+}
+
+func (s readingTypeSpec) setsExam(exam string) bool {
+	for _, allowed := range s.exams {
+		if allowed == exam {
+			return true
+		}
+	}
+	return false
 }
 
 type questionOption struct {
@@ -59,28 +86,60 @@ type questionOption struct {
 
 // supportedTypes is every reading task this endpoint can author.
 //
-// Re-order Paragraphs and the two PTE gap-fills are deliberately absent: their
-// answers live in shapes this form does not carry — ordered item rows and
-// per-blank keys — so accepting them here would store something the grader
-// cannot read. They stay with the migrations until the form grows to match.
+// Re-order Paragraphs is deliberately absent: an item is not a passage task —
+// it lives in reading_reorder_items with its own boxes — so it is authored
+// through createReorderItem rather than here.
 var supportedTypes = map[string]readingTypeSpec{
-	"reading-mcq-single":          {name: "Multiple Choice, Single Answer", style: styleChoice},
-	"reading-mcq-multiple":        {name: "Multiple Choice, Multiple Answers", style: styleChoice, multi: true},
-	"reading-sentence-completion": {name: "Sentence Completion", style: styleText, multi: true},
-	"reading-find-the-paragraph":  {name: "Find the Paragraph", style: styleParagraph},
+	"fill-in-blanks-rw": {
+		name: "Reading & Writing: Fill in the Blanks", style: styleBlanks,
+		exams: examsPTE, display: "hidden",
+	},
+	"fill-in-blanks-r": {
+		name: "Reading: Fill in the Blanks", style: styleBlanks, wordBank: true,
+		exams: examsPTE, display: "hidden",
+	},
+	"reading-mcq-single": {
+		name: "Multiple Choice, Single Answer", style: styleChoice,
+		exams: examsBoth, display: "full", shuffle: true,
+	},
+	"reading-mcq-multiple": {
+		name: "Multiple Choice, Multiple Answers", style: styleChoice, multi: true,
+		exams: examsBoth, display: "full", shuffle: true,
+	},
+	"reading-sentence-completion": {
+		name: "Sentence Completion", style: styleText, multi: true,
+		exams: examsIELTS, display: "full",
+	},
+	"reading-find-the-paragraph": {
+		name: "Find the Paragraph", style: styleParagraph,
+		exams: examsBoth, display: "full", shuffle: true,
+	},
 	"reading-matching-information": {
 		name: "Matching Information", style: styleParagraph,
+		exams: examsBoth, display: "full", shuffle: true,
 	},
-	"reading-true-false": {name: "True / False / Not Given", style: styleVerdict, fixedOptions: []questionOption{
-		{ID: "TRUE", Text: "True"},
-		{ID: "FALSE", Text: "False"},
-		{ID: "NOT_GIVEN", Text: "Not Given"},
-	}},
-	"reading-yes-no-not-given": {name: "Yes / No / Not Given", style: styleVerdict, fixedOptions: []questionOption{
-		{ID: "YES", Text: "Yes"},
-		{ID: "NO", Text: "No"},
-		{ID: "NOT_GIVEN", Text: "Not Given"},
-	}},
+	"reading-arrange-passage": {
+		name: "Arrange the Passage", style: styleResource,
+		exams: examsIELTS, display: "full",
+	},
+	"reading-true-false": {
+		name: "True / False / Not Given", style: styleVerdict,
+		exams: examsBoth, display: "full", shuffle: true,
+		fixedOptions: []questionOption{
+			{ID: "TRUE", Text: "True"},
+			{ID: "FALSE", Text: "False"},
+			{ID: "NOT_GIVEN", Text: "Not Given"},
+		},
+	},
+	"reading-yes-no-not-given": {
+		name: "Yes / No / Not Given", style: styleVerdict,
+		exams: examsBoth, display: "full", shuffle: true,
+		fixedOptions: []questionOption{
+			{ID: "YES", Text: "Yes"},
+			{ID: "NO", Text: "No"},
+			{ID: "NOT_GIVEN", Text: "Not Given"},
+		},
+	},
 }
 
 type newQuestion struct {
@@ -94,13 +153,96 @@ type newQuestion struct {
 	CorrectAnswers []string `json:"correctAnswers"`
 	Explanation    string   `json:"explanation"`
 	Points         int      `json:"points"`
+	// ContextPassage is the gapped text a fill-in-the-blanks question carries,
+	// with each gap written as [[b1]], [[b2]] …
+	ContextPassage string `json:"contextPassage"`
+	// Blanks is the answer key for those gaps, one entry per marker.
+	Blanks []newBlank `json:"blanks"`
+}
+
+// newBlank is one gap in a gapped text. Options belong to the dropdown kinds;
+// a word-bank task leaves them empty and answers from the group's list.
+type newBlank struct {
+	ID            string   `json:"id"`
+	Options       []string `json:"options"`
+	CorrectAnswer string   `json:"correctAnswer"`
 }
 
 type newGroup struct {
-	TypeID           string        `json:"typeId"`
-	Instructions     string        `json:"instructions"`
+	TypeID       string `json:"typeId"`
+	Instructions string `json:"instructions"`
+	// BoxTitle heads the box a summary set is printed in, the way a real paper
+	// titles one. Empty for tasks that are not printed in a box.
+	BoxTitle         string        `json:"boxTitle"`
 	TimeLimitSeconds int           `json:"timeLimitSeconds"`
 	Questions        []newQuestion `json:"questions"`
+	// WordBank is the draggable list a Reading gap-fill answers from, shared
+	// by every question in the group.
+	WordBank []string `json:"wordBank"`
+	Exams    []string `json:"exams"`
+	Boxes    []string `json:"boxes"`
+}
+
+func resolveExams(spec readingTypeSpec, wanted []string, fallback string) ([]string, string) {
+	chosen := make([]string, 0, 2)
+	seen := map[string]bool{}
+	for _, raw := range wanted {
+		exam := strings.ToUpper(strings.TrimSpace(raw))
+		if exam == "" || seen[exam] {
+			continue
+		}
+		if exam != string(models.ExamPTE) && exam != string(models.ExamIELTS) {
+			return nil, fmt.Sprintf("%q is not an exam. Use PTE or IELTS.", raw)
+		}
+		seen[exam] = true
+		chosen = append(chosen, exam)
+	}
+	if len(chosen) == 0 {
+		if spec.setsExam(fallback) {
+			chosen = []string{fallback}
+		} else {
+			chosen = spec.exams
+		}
+	}
+	for _, exam := range chosen {
+		if !spec.setsExam(exam) {
+			return nil, fmt.Sprintf("%s does not set %s.", exam, spec.name)
+		}
+	}
+	ordered := make([]string, 0, len(chosen))
+	for _, exam := range examsBoth {
+		if seenExam(chosen, exam) {
+			ordered = append(ordered, exam)
+		}
+	}
+	return ordered, ""
+}
+
+func seenExam(list []string, exam string) bool {
+	for _, entry := range list {
+		if entry == exam {
+			return true
+		}
+	}
+	return false
+}
+
+func boxesOf(names []string) ([]resource, map[string]bool, string) {
+	boxes := make([]resource, 0, len(names))
+	labels := map[string]bool{}
+	for _, name := range names {
+		text := strings.TrimSpace(name)
+		if text == "" {
+			continue
+		}
+		label := paragraphLabel(len(boxes))
+		labels[label] = true
+		boxes = append(boxes, resource{Label: "Paragraph " + label, Text: text})
+	}
+	if len(boxes) < 2 {
+		return nil, nil, "Write at least two boxes for the learner to order."
+	}
+	return boxes, labels, ""
 }
 
 type newPassage struct {
@@ -218,9 +360,9 @@ func (p newPassage) normalise() ([]paragraph, map[string]string) {
 		problems["body"] = "Paste the passage text."
 	}
 
-	if len(p.Groups) == 0 {
-		problems["groups"] = "Add at least one question set."
-	}
+	// A passage may be created empty and filled with task sets afterwards, which
+	// is how the admin screen works: write the text, then add sets to it one at
+	// a time. Nothing reaches a learner until it is published.
 
 	return paragraphs, problems
 }
@@ -300,80 +442,157 @@ func (h *Handler) insertPassage(ctx context.Context, req newPassage, paragraphs 
 		return "", fmt.Errorf("insert passage: %w", err)
 	}
 
-	for gi, group := range req.Groups {
-		spec, ok := supportedTypes[group.TypeID]
-		if !ok {
-			return "", validationError{fields: map[string]string{
-				fmt.Sprintf("groups.%d.typeId", gi): "This task type cannot be authored here yet.",
-			}}
-		}
-		if len(group.Questions) == 0 {
-			return "", validationError{fields: map[string]string{
-				fmt.Sprintf("groups.%d.questions", gi): "Add at least one question.",
-			}}
-		}
+	versions, err := examVersions(ctx, tx)
+	if err != nil {
+		return "", err
+	}
 
-		groupID := newContentID("group", fmt.Sprintf("%s-%d", passageID, gi+1))
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO reading_question_groups
-				(id, passage_id, position, type_id, type_name, instructions,
-				 shuffle_questions, time_limit_seconds)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			groupID, passageID, gi+1, group.TypeID, spec.name,
-			strings.TrimSpace(group.Instructions),
-			// Authored sets read in the order they were written; shuffling a
-			// sentence-completion paragraph would scramble the prose.
-			spec.style != styleText, group.TimeLimitSeconds,
-		); err != nil {
-			return "", fmt.Errorf("insert question group: %w", err)
-		}
-
-		for qi, question := range group.Questions {
-			options, answers, problem := resolveAnswers(spec, question, labels)
-			if problem != "" {
-				return "", validationError{fields: map[string]string{
-					fmt.Sprintf("groups.%d.questions.%d", gi, qi): problem,
-				}}
-			}
-
-			optionsJSON, err := json.Marshal(options)
-			if err != nil {
-				return "", fmt.Errorf("encode options: %w", err)
-			}
-			answersJSON, err := json.Marshal(answers)
-			if err != nil {
-				return "", fmt.Errorf("encode answers: %w", err)
-			}
-
-			points := question.Points
-			if points <= 0 {
-				points = 10
-			}
-
-			// supported_exams is how one passage can serve both papers. An
-			// authored question belongs to the exam it was written for, and the
-			// column must not be empty.
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO questions
-					(id, exam_version_id, exam, supported_exams, skill, type_id, type_name, title, prompt,
-					 options, correct_answers, explanation, difficulty, points,
-					 time_limit_seconds, is_published, passage_id, group_id, group_position)
-				VALUES ($1, $2, $3, $4, 'reading', $5, $6, $7, $8, $9, $10, $11, $12, $13, 0, $14, $15, $16, $17)`,
-				newContentID("q", fmt.Sprintf("%s-%d", groupID, qi+1)), versionID, req.Exam,
-				[]string{req.Exam},
-				group.TypeID, spec.name, strings.TrimSpace(req.Title), strings.TrimSpace(question.Prompt),
-				optionsJSON, answersJSON, strings.TrimSpace(question.Explanation), difficulty, points,
-				req.Publish, passageID, groupID, qi+1,
-			); err != nil {
-				return "", fmt.Errorf("insert question: %w", err)
-			}
-		}
+	if _, err := writeGroups(ctx, tx, groupContext{
+		passageID:     passageID,
+		versionID:     versionID,
+		exam:          req.Exam,
+		versions:      versions,
+		title:         req.Title,
+		difficulty:    difficulty,
+		publish:       req.Publish,
+		labels:        labels,
+		startPosition: 1,
+	}, req.Groups); err != nil {
+		return "", err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("commit passage tx: %w", err)
 	}
 	return passageID, nil
+}
+
+// blankMarker matches the [[b1]] gaps a gapped text is written with.
+var blankMarker = regexp.MustCompile(`\[\[(b[0-9]+)\]\]`)
+
+// storedBlank is one entry of the per-gap key questions.blanks holds.
+type storedBlank struct {
+	ID            string   `json:"id"`
+	Options       []string `json:"options,omitempty"`
+	CorrectAnswer string   `json:"correctAnswer"`
+}
+
+// resource is one labelled item belonging to a task rather than to the passage,
+// the shape reading_question_groups.resources holds.
+type resource struct {
+	Label string `json:"label"`
+	Text  string `json:"text"`
+}
+
+// wordBankOf turns the author's list into the group's own material, and the
+// lookup the answer keys are checked against.
+//
+// Lettered when the paper prints the list to be chosen from by letter — a
+// summary completed from a list of words A-H — and numbered when it is a heap
+// of draggable words with no letters on them, which is the PTE gap-fill.
+func wordBankOf(words []string, lettered bool) ([]resource, map[string]bool, string) {
+	bank := make([]resource, 0, len(words))
+	known := map[string]bool{}
+	for _, word := range words {
+		word = strings.TrimSpace(word)
+		if word == "" {
+			continue
+		}
+		if known[strings.ToLower(word)] {
+			return nil, nil, fmt.Sprintf("Word %q is listed twice.", word)
+		}
+		known[strings.ToLower(word)] = true
+
+		label := fmt.Sprintf("w%d", len(bank)+1)
+		if lettered {
+			label = paragraphLabel(len(bank))
+		}
+		bank = append(bank, resource{Label: label, Text: word})
+	}
+	return bank, known, ""
+}
+
+// resolveBlanks checks a gapped text against its answer key.
+//
+// The rule the grader depends on is that the two match exactly: a key entry
+// with no marker grades a gap the learner never saw, and a marker with no key
+// can never be answered correctly.
+func resolveBlanks(spec readingTypeSpec, q newQuestion, bank map[string]bool) (string, []storedBlank, string) {
+	if strings.TrimSpace(q.Prompt) == "" {
+		return "", nil, "Write the instruction line for this text."
+	}
+
+	text := strings.TrimSpace(q.ContextPassage)
+	if text == "" {
+		return "", nil, "Paste the gapped text, writing each gap as [[b1]], [[b2]] …"
+	}
+
+	markers := blankMarker.FindAllStringSubmatch(text, -1)
+	if len(markers) == 0 {
+		return "", nil, "Mark at least one gap, written as [[b1]]."
+	}
+
+	order := make([]string, 0, len(markers))
+	seen := map[string]bool{}
+	for _, match := range markers {
+		if seen[match[1]] {
+			return "", nil, fmt.Sprintf("Gap [[%s]] appears twice in the text.", match[1])
+		}
+		seen[match[1]] = true
+		order = append(order, match[1])
+	}
+
+	keyed := make(map[string]newBlank, len(q.Blanks))
+	for _, blank := range q.Blanks {
+		id := strings.TrimSpace(blank.ID)
+		if !seen[id] {
+			return "", nil, fmt.Sprintf("There is an answer for [[%s]], but no such gap in the text.", id)
+		}
+		keyed[id] = blank
+	}
+
+	blanks := make([]storedBlank, 0, len(order))
+	for _, id := range order {
+		blank, ok := keyed[id]
+		if !ok {
+			return "", nil, fmt.Sprintf("Gap [[%s]] has no answer.", id)
+		}
+		answer := strings.TrimSpace(blank.CorrectAnswer)
+		if answer == "" {
+			return "", nil, fmt.Sprintf("Gap [[%s]] has no answer.", id)
+		}
+
+		if spec.wordBank {
+			if !bank[strings.ToLower(answer)] {
+				return "", nil, fmt.Sprintf("Gap [[%s]] is answered %q, which is not in the word list.", id, answer)
+			}
+			blanks = append(blanks, storedBlank{ID: id, CorrectAnswer: answer})
+			continue
+		}
+
+		options := make([]string, 0, len(blank.Options))
+		known := map[string]bool{}
+		for _, option := range blank.Options {
+			option = strings.TrimSpace(option)
+			if option == "" {
+				continue
+			}
+			if known[option] {
+				return "", nil, fmt.Sprintf("Gap [[%s]] lists %q twice.", id, option)
+			}
+			known[option] = true
+			options = append(options, option)
+		}
+		if len(options) < 2 {
+			return "", nil, fmt.Sprintf("Gap [[%s]] needs at least two choices.", id)
+		}
+		if !known[answer] {
+			return "", nil, fmt.Sprintf("Gap [[%s]] is answered %q, which is not one of its choices.", id, answer)
+		}
+		blanks = append(blanks, storedBlank{ID: id, Options: options, CorrectAnswer: answer})
+	}
+
+	return text, blanks, ""
 }
 
 // resolveAnswers turns what the author typed into the options and answer key
@@ -413,9 +632,12 @@ func resolveAnswers(spec readingTypeSpec, q newQuestion, labels map[string]bool)
 		}
 		return spec.fixedOptions, []string{id}, ""
 
-	case styleParagraph:
+	case styleParagraph, styleResource:
 		for _, answer := range answers {
 			if !labels[strings.ToUpper(answer)] {
+				if spec.style == styleResource {
+					return nil, nil, fmt.Sprintf("Box %q is not one of this set's boxes.", answer)
+				}
 				return nil, nil, fmt.Sprintf("Paragraph %q is not in this passage.", answer)
 			}
 		}
@@ -523,4 +745,471 @@ func newContentID(prefix, seed string) string {
 	buf := make([]byte, 4)
 	_, _ = rand.Read(buf)
 	return fmt.Sprintf("%s-%s-%s", prefix, slug, hex.EncodeToString(buf))
+}
+
+// ---------------------------------------------------------------------------
+// Re-order Paragraphs
+// ---------------------------------------------------------------------------
+
+// A re-order item is not a passage task. It carries its own boxes, and the
+// order they are written in is the answer key, so it is authored here rather
+// than as a group on a passage.
+type newReorderItem struct {
+	Exam  string `json:"exam"`
+	Title string `json:"title"`
+	// Boxes in their correct order, which is what makes them the key.
+	Boxes            []string `json:"boxes"`
+	Prompt           string   `json:"prompt"`
+	Explanation      string   `json:"explanation"`
+	SourcePassageID  string   `json:"sourcePassageId"`
+	Topic            string   `json:"topic"`
+	Difficulty       string   `json:"difficulty"`
+	Tags             []string `json:"tags"`
+	TimeLimitSeconds int      `json:"timeLimitSeconds"`
+	Publish          bool     `json:"publish"`
+}
+
+// minReorderBoxes mirrors reading_reorder_items_enough_boxes: the scorer counts
+// adjacent pairs, so fewer than three boxes is not a task.
+const minReorderBoxes = 3
+
+func (i newReorderItem) normalise() ([]paragraph, map[string]string) {
+	problems := map[string]string{}
+
+	if i.Exam != string(models.ExamPTE) && i.Exam != string(models.ExamIELTS) {
+		problems["exam"] = "Choose PTE or IELTS."
+	}
+	if strings.TrimSpace(i.Title) == "" {
+		problems["title"] = "Give the item a title."
+	}
+	switch i.Difficulty {
+	case "", "easy", "medium", "hard":
+	default:
+		problems["difficulty"] = "Difficulty must be easy, medium or hard."
+	}
+
+	boxes := make([]paragraph, 0, len(i.Boxes))
+	for _, box := range i.Boxes {
+		text := strings.TrimSpace(box)
+		if text == "" {
+			continue
+		}
+		boxes = append(boxes, paragraph{Label: paragraphLabel(len(boxes)), Text: text})
+	}
+	if len(boxes) < minReorderBoxes {
+		problems["boxes"] = fmt.Sprintf("Write at least %d boxes, in their correct order.", minReorderBoxes)
+	}
+
+	return boxes, problems
+}
+
+func (h *Handler) createReorderItem(w http.ResponseWriter, r *http.Request) {
+	actor := reqctx.MustUser(r.Context())
+
+	var req newReorderItem
+	if !httpx.DecodeLimit(w, r, &req, h.log, "admin.createReorderItem", 1<<20) {
+		return
+	}
+
+	boxes, problems := req.normalise()
+	if len(problems) > 0 {
+		httpx.ValidationError(w, problems)
+		return
+	}
+
+	id, err := h.insertReorderItem(r.Context(), req, boxes)
+	if err != nil {
+		var invalid validationError
+		if errors.As(err, &invalid) {
+			httpx.ValidationError(w, invalid.fields)
+			return
+		}
+		httpx.Internal(w, h.log, "admin.createReorderItem", err)
+		return
+	}
+
+	h.log.Info("admin created a re-order item",
+		"actor", actor.Email, "item", id, "exam", req.Exam,
+		"boxes", len(boxes), "published", req.Publish)
+
+	httpx.JSON(w, http.StatusCreated, map[string]any{
+		"item": map[string]any{
+			"id":        id,
+			"title":     strings.TrimSpace(req.Title),
+			"exam":      req.Exam,
+			"boxes":     len(boxes),
+			"published": req.Publish,
+		},
+	})
+}
+
+func (h *Handler) insertReorderItem(ctx context.Context, req newReorderItem, boxes []paragraph) (string, error) {
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin reorder tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var versionID string
+	err = tx.QueryRow(ctx,
+		`SELECT id FROM exam_versions WHERE exam = $1 AND is_current`, req.Exam).Scan(&versionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", validationError{fields: map[string]string{
+			"exam": "That exam has no current version configured.",
+		}}
+	}
+	if err != nil {
+		return "", fmt.Errorf("find current exam version: %w", err)
+	}
+
+	// A source passage is what stops an item being dealt to someone who has
+	// already read the text it was cut from, so a wrong id is worth catching
+	// here rather than as a foreign key error.
+	var sourcePassage *string
+	if trimmed := strings.TrimSpace(req.SourcePassageID); trimmed != "" {
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM reading_passages WHERE id = $1)`, trimmed).Scan(&exists); err != nil {
+			return "", fmt.Errorf("check source passage: %w", err)
+		}
+		if !exists {
+			return "", validationError{fields: map[string]string{
+				"sourcePassageId": "No passage has that id.",
+			}}
+		}
+		sourcePassage = &trimmed
+	}
+
+	boxesJSON, err := json.Marshal(boxes)
+	if err != nil {
+		return "", fmt.Errorf("encode boxes: %w", err)
+	}
+
+	options := make([]questionOption, len(boxes))
+	order := make([]string, len(boxes))
+	for i, box := range boxes {
+		options[i] = questionOption{ID: box.Label, Text: box.Text}
+		order[i] = box.Label
+	}
+	optionsJSON, err := json.Marshal(options)
+	if err != nil {
+		return "", fmt.Errorf("encode boxes as options: %w", err)
+	}
+	orderJSON, err := json.Marshal(order)
+	if err != nil {
+		return "", fmt.Errorf("encode box order: %w", err)
+	}
+
+	difficulty := req.Difficulty
+	if difficulty == "" {
+		difficulty = "medium"
+	}
+	timeLimit := req.TimeLimitSeconds
+	if timeLimit <= 0 {
+		timeLimit = 300
+	}
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		prompt = "The text boxes below have been placed in a random order. Restore the original order."
+	}
+
+	itemID := newContentID("ro", req.Title)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO reading_reorder_items
+			(id, exam_version_id, exam, title, paragraphs, source_passage_id,
+			 topic, word_count, difficulty, tags, is_published)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		itemID, versionID, req.Exam, strings.TrimSpace(req.Title), boxesJSON, sourcePassage,
+		strings.TrimSpace(req.Topic), wordCount(boxes), difficulty,
+		normaliseTags(req.Tags), req.Publish,
+	); err != nil {
+		return "", fmt.Errorf("insert reorder item: %w", err)
+	}
+
+	// Points are the number of adjacent pairs, matching the seeded items:
+	// scoring.gradeReorder marks each neighbour a learner gets right.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO questions
+			(id, exam_version_id, exam, supported_exams, skill, type_id, type_name, title, prompt,
+			 options, correct_answers, explanation, difficulty, points,
+			 time_limit_seconds, is_published, reorder_item_id)
+		VALUES ($1, $2, $3, $4, 'reading', 'reorder-paragraphs', 'Re-order Paragraphs', $5, $6,
+		        $7, $8, $9, $10, $11, $12, $13, $14)`,
+		"q-"+itemID, versionID, req.Exam, []string{req.Exam},
+		strings.TrimSpace(req.Title), prompt,
+		optionsJSON, orderJSON, strings.TrimSpace(req.Explanation), difficulty,
+		len(boxes)-1, timeLimit, req.Publish, itemID,
+	); err != nil {
+		return "", fmt.Errorf("insert reorder question: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit reorder tx: %w", err)
+	}
+	return itemID, nil
+}
+
+// groupContext is what writing a task set needs to know about the passage it
+// hangs on: everything a group and its questions inherit rather than carry.
+type groupContext struct {
+	passageID     string
+	versionID     string
+	exam          string
+	versions      map[string]string
+	title         string
+	difficulty    string
+	publish       bool
+	labels        map[string]bool
+	startPosition int
+}
+
+func (gc groupContext) versionFor(exam string) string {
+	if id, ok := gc.versions[exam]; ok {
+		return id
+	}
+	return gc.versionID
+}
+
+func examVersions(ctx context.Context, tx pgx.Tx) (map[string]string, error) {
+	rows, err := tx.Query(ctx, `SELECT exam, id FROM exam_versions WHERE is_current`)
+	if err != nil {
+		return nil, fmt.Errorf("load exam versions: %w", err)
+	}
+	defer rows.Close()
+
+	versions := map[string]string{}
+	for rows.Next() {
+		var exam, id string
+		if err := rows.Scan(&exam, &id); err != nil {
+			return nil, fmt.Errorf("scan exam version: %w", err)
+		}
+		versions[exam] = id
+	}
+	return versions, rows.Err()
+}
+
+// errNoPassage is returned when task sets are addressed to a passage that is
+// not there.
+var errNoPassage = errors.New("no such passage")
+
+// writeGroups inserts task sets and their questions, and returns how many
+// questions it wrote.
+//
+// Shared by the two ways sets arrive: with a passage as it is created, and
+// added to one that already exists.
+func writeGroups(ctx context.Context, tx pgx.Tx, gc groupContext, groups []newGroup) (int, error) {
+	written := 0
+	for gi, group := range groups {
+		spec, ok := supportedTypes[group.TypeID]
+		if !ok {
+			return 0, validationError{fields: map[string]string{
+				fmt.Sprintf("groups.%d.typeId", gi): "This task type cannot be authored here yet.",
+			}}
+		}
+		if len(group.Questions) == 0 {
+			return 0, validationError{fields: map[string]string{
+				fmt.Sprintf("groups.%d.questions", gi): "Add at least one question.",
+			}}
+		}
+
+		exams, problem := resolveExams(spec, group.Exams, gc.exam)
+		if problem != "" {
+			return 0, validationError{fields: map[string]string{
+				fmt.Sprintf("groups.%d.exams", gi): problem,
+			}}
+		}
+
+		// A summary completed from a list is chosen from by letter; a PTE
+		// gap-fill drags unlettered words.
+		bank, bankLookup, problem := wordBankOf(group.WordBank, spec.style == styleText)
+		if problem != "" {
+			return 0, validationError{fields: map[string]string{
+				fmt.Sprintf("groups.%d.wordBank", gi): problem,
+			}}
+		}
+		if spec.wordBank && len(bank) == 0 {
+			return 0, validationError{fields: map[string]string{
+				fmt.Sprintf("groups.%d.wordBank", gi): "List the words that can be dragged into the gaps.",
+			}}
+		}
+
+		var boxes []resource
+		boxLabels := map[string]bool{}
+		if spec.style == styleResource {
+			boxes, boxLabels, problem = boxesOf(group.Boxes)
+			if problem != "" {
+				return 0, validationError{fields: map[string]string{
+					fmt.Sprintf("groups.%d.boxes", gi): problem,
+				}}
+			}
+		}
+
+		// The list belongs to the set, not to each gap: the paper prints it once
+		// above the box. Dropping it was silent before — the author's list
+		// vanished and every gap became a typed answer.
+		resources := []resource{}
+		switch {
+		case spec.style == styleResource:
+			resources = boxes
+		case spec.wordBank || len(bank) > 0:
+			resources = bank
+		}
+		resourcesJSON, err := json.Marshal(resources)
+		if err != nil {
+			return 0, fmt.Errorf("encode group resources: %w", err)
+		}
+
+		// A gap-fill group that rendered the passage would show the learner the
+		// ungapped original, which is the answer key in prose.
+		display := spec.display
+		if display == "" {
+			display = "full"
+		}
+
+		groupID := newContentID("group", fmt.Sprintf("%s-%d", gc.passageID, gc.startPosition+gi))
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO reading_question_groups
+				(id, passage_id, position, type_id, type_name, instructions, box_title,
+				 resources, passage_display, shuffle_questions, time_limit_seconds)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			groupID, gc.passageID, gc.startPosition+gi, group.TypeID, spec.name,
+			strings.TrimSpace(group.Instructions), strings.TrimSpace(group.BoxTitle),
+			resourcesJSON, display,
+			// Authored sets read in the order they were written; shuffling a
+			// sentence-completion paragraph, or gapped texts that track the
+			// passage top to bottom, would scramble the prose.
+			spec.shuffle, group.TimeLimitSeconds,
+		); err != nil {
+			return 0, fmt.Errorf("insert question group: %w", err)
+		}
+
+		for qi, question := range group.Questions {
+			var optionsJSON, answersJSON, blanksJSON []byte
+			var contextPassage *string
+
+			if spec.style == styleBlanks {
+				text, blanks, problem := resolveBlanks(spec, question, bankLookup)
+				if problem != "" {
+					return 0, validationError{fields: map[string]string{
+						fmt.Sprintf("groups.%d.questions.%d", gi, qi): problem,
+					}}
+				}
+				blanksJSON, err = json.Marshal(blanks)
+				if err != nil {
+					return 0, fmt.Errorf("encode blanks: %w", err)
+				}
+				contextPassage = &text
+			} else {
+				// Gaps completed from the set's list offer that list, so the key
+				// is checked against it and the learner chooses rather than
+				// guessing the exact wording.
+				if spec.style == styleText && len(bank) > 0 && len(question.Options) == 0 {
+					for _, entry := range bank {
+						question.Options = append(question.Options, entry.Text)
+					}
+				}
+				answerLabels := gc.labels
+				if spec.style == styleResource {
+					answerLabels = boxLabels
+				}
+				options, answers, problem := resolveAnswers(spec, question, answerLabels)
+				if problem != "" {
+					return 0, validationError{fields: map[string]string{
+						fmt.Sprintf("groups.%d.questions.%d", gi, qi): problem,
+					}}
+				}
+
+				optionsJSON, err = json.Marshal(options)
+				if err != nil {
+					return 0, fmt.Errorf("encode options: %w", err)
+				}
+				answersJSON, err = json.Marshal(answers)
+				if err != nil {
+					return 0, fmt.Errorf("encode answers: %w", err)
+				}
+			}
+
+			points := question.Points
+			if points <= 0 {
+				points = 10
+			}
+
+			// supported_exams is how one passage can serve both papers. An
+			// authored question belongs to the exam it was written for, and the
+			// column must not be empty.
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO questions
+					(id, exam_version_id, exam, supported_exams, skill, type_id, type_name, title, prompt,
+					 options, correct_answers, blanks, context_passage, explanation, difficulty, points,
+					 time_limit_seconds, is_published, passage_id, group_id, group_position)
+				VALUES ($1, $2, $3, $4, 'reading', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, $16, $17, $18, $19)`,
+				newContentID("q", fmt.Sprintf("%s-%d", groupID, qi+1)), gc.versionFor(exams[0]), exams[0],
+				exams,
+				group.TypeID, spec.name, strings.TrimSpace(gc.title), strings.TrimSpace(question.Prompt),
+				optionsJSON, answersJSON, blanksJSON, contextPassage,
+				strings.TrimSpace(question.Explanation), gc.difficulty, points,
+				gc.publish, gc.passageID, groupID, qi+1,
+			); err != nil {
+				return 0, fmt.Errorf("insert question: %w", err)
+			}
+			written++
+		}
+	}
+
+	return written, nil
+}
+
+// insertGroups adds task sets to a passage that already exists, continuing its
+// numbering rather than restarting it.
+//
+// Everything a set inherits — the exam version, the difficulty, whether it is
+// published, the paragraph labels a matching answer names — is read from the
+// passage rather than sent again, so a set cannot contradict the passage it
+// hangs on.
+func (h *Handler) insertGroups(ctx context.Context, passageID string, groups []newGroup) (int, error) {
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin groups tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var gc groupContext
+	var paragraphsJSON []byte
+	err = tx.QueryRow(ctx, `
+		SELECT p.id, p.exam_version_id, v.exam, p.title, p.difficulty, p.is_published, p.paragraphs,
+		       coalesce((SELECT max(position) FROM reading_question_groups WHERE passage_id = p.id), 0) + 1
+		FROM reading_passages p
+		JOIN exam_versions v ON v.id = p.exam_version_id
+		WHERE p.id = $1`, passageID).
+		Scan(&gc.passageID, &gc.versionID, &gc.exam, &gc.title, &gc.difficulty, &gc.publish,
+			&paragraphsJSON, &gc.startPosition)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, errNoPassage
+	}
+	if err != nil {
+		return 0, fmt.Errorf("load passage for groups: %w", err)
+	}
+
+	var paragraphs []paragraph
+	if err := json.Unmarshal(paragraphsJSON, &paragraphs); err != nil {
+		return 0, fmt.Errorf("decode paragraphs: %w", err)
+	}
+	gc.labels = make(map[string]bool, len(paragraphs))
+	for _, para := range paragraphs {
+		gc.labels[para.Label] = true
+	}
+
+	if gc.versions, err = examVersions(ctx, tx); err != nil {
+		return 0, err
+	}
+
+	written, err := writeGroups(ctx, tx, gc, groups)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit groups tx: %w", err)
+	}
+	return written, nil
 }

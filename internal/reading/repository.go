@@ -144,7 +144,7 @@ func scanPassage(row pgx.Row) (models.ReadingPassage, error) {
 // ---------------------------------------------------------------------------
 
 const groupFields = `
-	id, passage_id, position, type_id, type_name, instructions, resources,
+	id, passage_id, position, type_id, type_name, instructions, box_title, resources,
 	passage_display, shuffle_questions, time_limit_seconds`
 
 // Group represents a stored reading question group.
@@ -173,7 +173,7 @@ func (r *Repository) GroupsForPassages(ctx context.Context, passageIDs []string,
 	for rows.Next() {
 		var g Group
 		if err := rows.Scan(&g.ID, &g.PassageID, &g.Position, &g.TypeID, &g.TypeName,
-			&g.Instructions, &g.Resources, &g.PassageDisplay,
+			&g.Instructions, &g.BoxTitle, &g.Resources, &g.PassageDisplay,
 			&g.ShuffleQuestions, &g.TimeLimitSeconds); err != nil {
 			return nil, fmt.Errorf("scan group: %w", err)
 		}
@@ -188,7 +188,7 @@ func (r *Repository) GroupByID(ctx context.Context, id string) (Group, error) {
 	err := r.db.QueryRow(ctx, `SELECT `+groupFields+`
 		FROM reading_question_groups WHERE id = $1`, id).
 		Scan(&g.ID, &g.PassageID, &g.Position, &g.TypeID, &g.TypeName,
-			&g.Instructions, &g.Resources, &g.PassageDisplay,
+			&g.Instructions, &g.BoxTitle, &g.Resources, &g.PassageDisplay,
 			&g.ShuffleQuestions, &g.TimeLimitSeconds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Group{}, ErrNoPassage
@@ -612,7 +612,7 @@ func (r *Repository) GroupsByIDs(ctx context.Context, groupIDs []string) (map[st
 	for rows.Next() {
 		var g Group
 		if err := rows.Scan(&g.ID, &g.PassageID, &g.Position, &g.TypeID, &g.TypeName,
-			&g.Instructions, &g.Resources, &g.PassageDisplay,
+			&g.Instructions, &g.BoxTitle, &g.Resources, &g.PassageDisplay,
 			&g.ShuffleQuestions, &g.TimeLimitSeconds); err != nil {
 			return nil, fmt.Errorf("scan group: %w", err)
 		}
