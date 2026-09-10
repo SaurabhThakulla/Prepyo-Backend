@@ -112,11 +112,11 @@ var supportedTypes = map[string]readingTypeSpec{
 	},
 	"reading-find-the-paragraph": {
 		name: "Find the Paragraph", style: styleParagraph,
-		exams: examsBoth, display: "full", shuffle: true,
+		exams: examsIELTS, display: "full", shuffle: true,
 	},
 	"reading-matching-information": {
 		name: "Matching Information", style: styleParagraph,
-		exams: examsBoth, display: "full", shuffle: true,
+		exams: examsIELTS, display: "full", shuffle: true,
 	},
 	"reading-arrange-passage": {
 		name: "Arrange the Passage", style: styleResource,
@@ -124,7 +124,7 @@ var supportedTypes = map[string]readingTypeSpec{
 	},
 	"reading-true-false": {
 		name: "True / False / Not Given", style: styleVerdict,
-		exams: examsBoth, display: "full", shuffle: true,
+		exams: examsIELTS, display: "full", shuffle: true,
 		fixedOptions: []questionOption{
 			{ID: "TRUE", Text: "True"},
 			{ID: "FALSE", Text: "False"},
@@ -133,7 +133,7 @@ var supportedTypes = map[string]readingTypeSpec{
 	},
 	"reading-yes-no-not-given": {
 		name: "Yes / No / Not Given", style: styleVerdict,
-		exams: examsBoth, display: "full", shuffle: true,
+		exams: examsIELTS, display: "full", shuffle: true,
 		fixedOptions: []questionOption{
 			{ID: "YES", Text: "Yes"},
 			{ID: "NO", Text: "No"},
@@ -776,8 +776,8 @@ const minReorderBoxes = 3
 func (i newReorderItem) normalise() ([]paragraph, map[string]string) {
 	problems := map[string]string{}
 
-	if i.Exam != string(models.ExamPTE) && i.Exam != string(models.ExamIELTS) {
-		problems["exam"] = "Choose PTE or IELTS."
+	if i.Exam != string(models.ExamPTE) {
+		problems["exam"] = "Only PTE sets Re-order Paragraphs."
 	}
 	if strings.TrimSpace(i.Title) == "" {
 		problems["title"] = "Give the item a title."

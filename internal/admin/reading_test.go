@@ -458,3 +458,57 @@ func TestResolveExamsFallsBackToTheTaskWhenThePassageDoesNotSetIt(t *testing.T) 
 		t.Errorf("exams = %v, want [PTE] taken from the task itself", exams)
 	}
 }
+
+func TestTaskTypesFollowTheExamMatrix(t *testing.T) {
+	want := map[string][]string{
+		"reading-mcq-single":           {"PTE", "IELTS"},
+		"reading-mcq-multiple":         {"PTE", "IELTS"},
+		"fill-in-blanks-rw":            {"PTE"},
+		"fill-in-blanks-r":             {"PTE"},
+		"reading-true-false":           {"IELTS"},
+		"reading-yes-no-not-given":     {"IELTS"},
+		"reading-find-the-paragraph":   {"IELTS"},
+		"reading-matching-information": {"IELTS"},
+		"reading-arrange-passage":      {"IELTS"},
+		"reading-sentence-completion":  {"IELTS"},
+	}
+
+	for id, spec := range supportedTypes {
+		expected, ok := want[id]
+		if !ok {
+			t.Errorf("%s is authorable but the exam matrix does not list it", id)
+			continue
+		}
+		if len(spec.exams) != len(expected) {
+			t.Errorf("%s is set by %v, want %v", id, spec.exams, expected)
+			continue
+		}
+		for i, exam := range expected {
+			if spec.exams[i] != exam {
+				t.Errorf("%s is set by %v, want %v", id, spec.exams, expected)
+				break
+			}
+		}
+	}
+	for id := range want {
+		if _, ok := supportedTypes[id]; !ok {
+			t.Errorf("the exam matrix lists %s, but it cannot be authored", id)
+		}
+	}
+}
+
+func TestOnlyPTESetsReorderParagraphs(t *testing.T) {
+	item := newReorderItem{
+		Exam:  "IELTS",
+		Title: "Ordering check",
+		Boxes: []string{"one", "two", "three"},
+	}
+	if _, problems := item.normalise(); problems["exam"] == "" {
+		t.Error("an IELTS re-order item was accepted")
+	}
+
+	item.Exam = "PTE"
+	if _, problems := item.normalise(); len(problems) > 0 {
+		t.Errorf("a PTE re-order item was refused: %v", problems)
+	}
+}
