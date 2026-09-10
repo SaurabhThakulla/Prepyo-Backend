@@ -106,7 +106,7 @@ func TestPassagesCarryNoExam(t *testing.T) {
 	// rp-time-01 was authored for PTE. An IELTS learner must reach it, because
 	// 000027 put IELTS tasks on it.
 	ieltsGroup, err := repo.PickPracticeGroup(ctx, newLearner(t, pool, models.ExamIELTS).ID,
-		models.ExamIELTS, TypeMatchingInformation)
+		models.ExamIELTS, []string{TypeMatchingInformation})
 	if err != nil {
 		t.Fatalf("pick IELTS matching information: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestPassagesCarryNoExam(t *testing.T) {
 
 	// And a PTE learner must reach the passages that were authored for IELTS.
 	pteGroup, err := repo.PickPracticeGroup(ctx, newLearner(t, pool, models.ExamPTE).ID,
-		models.ExamPTE, TypeMCQSingle)
+		models.ExamPTE, []string{TypeMCQSingle})
 	if err != nil {
 		t.Fatalf("pick PTE multiple choice: %v", err)
 	}
@@ -421,4 +421,78 @@ func dealtOrder(session models.ReadingMockSession) []string {
 		}
 	}
 	return ids
+}
+
+// A dashboard heading can cover more than one server type, and practice deals
+// the whole family from one passage. Dealing a single group meant a learner who
+// chose Multiple Choice met the single-answer questions and never saw the
+// multiple-answer ones sitting on the same passage.
+func TestPracticeDealsEveryGroupOfTheFamily(t *testing.T) {
+	pool := testPool(t)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+
+	family := []string{TypeMCQSingle, TypeMCQMultiple}
+
+	// Not every passage carries both variants, so the passage under test is the
+	// one the assertion is actually about rather than whichever the shuffle
+	// happened to deal.
+	var passageID string
+	if err := pool.QueryRow(ctx, `
+		SELECT passage_id FROM reading_question_groups
+		WHERE type_id = ANY($1)
+		GROUP BY passage_id
+		HAVING count(DISTINCT type_id) = 2
+		LIMIT 1`, family).Scan(&passageID); err != nil {
+		t.Skipf("no passage carries both multiple-choice types: %v", err)
+	}
+
+	whole, err := repo.GroupsForPassages(ctx, []string{passageID}, family)
+	if err != nil {
+		t.Fatalf("load the family: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, g := range whole {
+		seen[g.TypeID] = true
+		if g.PassageID != passageID {
+			t.Errorf("group %s belongs to %s, not the passage asked for", g.ID, g.PassageID)
+		}
+	}
+	if !seen[TypeMCQSingle] || !seen[TypeMCQMultiple] {
+		t.Errorf("dealt types %v, want both multiple-choice types", seen)
+	}
+
+	// Asking for one type still deals only that type, which is what a mock slot
+	// relies on.
+	single, err := repo.GroupsForPassages(ctx, []string{passageID}, []string{TypeMCQSingle})
+	if err != nil {
+		t.Fatalf("load one type: %v", err)
+	}
+	for _, g := range single {
+		if g.TypeID != TypeMCQSingle {
+			t.Errorf("asked for %s, got %s", TypeMCQSingle, g.TypeID)
+		}
+	}
+	if len(single) >= len(whole) {
+		t.Errorf("one type returned %d groups and the family %d; the filter is not narrowing", len(single), len(whole))
+	}
+
+	// No filter at all is still every group on the passage.
+	all, err := repo.GroupsForPassages(ctx, []string{passageID}, nil)
+	if err != nil {
+		t.Fatalf("load every group: %v", err)
+	}
+	if len(all) <= len(whole) {
+		t.Errorf("unfiltered returned %d groups, want more than the %d in the family", len(all), len(whole))
+	}
+
+	// The anchor a learner is dealt still belongs to the family they chose.
+	anchor, err := repo.PickPracticeGroup(ctx, newLearner(t, pool, models.ExamPTE).ID, models.ExamPTE, family)
+	if err != nil {
+		t.Fatalf("pick multiple choice: %v", err)
+	}
+	if anchor.TypeID != TypeMCQSingle && anchor.TypeID != TypeMCQMultiple {
+		t.Errorf("anchor type = %s, want one of the family", anchor.TypeID)
+	}
 }

@@ -154,16 +154,17 @@ type Group struct {
 }
 
 // GroupsForPassages loads the groups on several passages, in passage order then
-// position order. An empty typeID means every group.
-func (r *Repository) GroupsForPassages(ctx context.Context, passageIDs []string, typeID string) ([]Group, error) {
+// position order. An empty typeIDs means every group.
+func (r *Repository) GroupsForPassages(ctx context.Context, passageIDs []string, typeIDs []string) ([]Group, error) {
 	if len(passageIDs) == 0 {
 		return nil, nil
 	}
 
 	rows, err := r.db.Query(ctx, `SELECT `+groupFields+`
 		FROM reading_question_groups
-		WHERE passage_id = ANY($1) AND ($2 = '' OR type_id = $2)
-		ORDER BY passage_id, position`, passageIDs, typeID)
+		WHERE passage_id = ANY($1)
+		  AND (coalesce(cardinality($2::text[]), 0) = 0 OR type_id = ANY($2))
+		ORDER BY passage_id, position`, passageIDs, typeIDs)
 	if err != nil {
 		return nil, fmt.Errorf("list groups: %w", err)
 	}
@@ -246,9 +247,13 @@ func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]mod
 // Selection
 // ---------------------------------------------------------------------------
 
-// PickPracticeGroup chooses one group of the requested type for this learner,
+// PickPracticeGroup chooses one group of the requested types for this learner,
 // prioritizing unpractised passages then least-recently seen passages.
-func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam models.ExamType, typeID string) (Group, error) {
+//
+// The group it returns is an anchor rather than the whole sitting: practice
+// deals every set of the requested types that the chosen passage carries, so
+// a heading covering two task types hands over both.
+func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam models.ExamType, typeIDs []string) (Group, error) {
 	var id string
 	err := r.db.QueryRow(ctx, `
 		SELECT g.id
@@ -257,12 +262,12 @@ func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam 
 		LEFT JOIN user_passage_exposures e
 		       ON e.user_id = $1 AND e.passage_id = p.id AND e.context = 'practice'
 		      AND ($3 = '' OR e.exam = $3)
-		WHERE g.type_id = $2
+		WHERE g.type_id = ANY($2)
 		  AND EXISTS (SELECT 1 FROM questions q
 		               WHERE q.group_id = g.id AND q.is_published
 		                 AND ($3 = '' OR $3 = ANY(q.supported_exams)))
 		ORDER BY e.last_seen_at ASC NULLS FIRST, random()
-		LIMIT 1`, userID, typeID, exam).Scan(&id)
+		LIMIT 1`, userID, typeIDs, exam).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Group{}, ErrNoPassage
 	}

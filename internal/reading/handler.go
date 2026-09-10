@@ -139,7 +139,12 @@ func (h *Handler) getPassage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sets, err := h.svc.buildSets(r.Context(), []string{id}, r.URL.Query().Get("typeId"), exam)
+	var wanted []string
+	if typeID := strings.TrimSpace(r.URL.Query().Get("typeId")); typeID != "" {
+		wanted = []string{typeID}
+	}
+
+	sets, err := h.svc.buildSets(r.Context(), []string{id}, wanted, exam)
 	if err != nil {
 		httpx.Internal(w, h.log, "reading.getPassage", err)
 		return
@@ -153,9 +158,10 @@ func (h *Handler) getPassage(w http.ResponseWriter, r *http.Request) {
 }
 
 type practiceRequest struct {
-	Exam   string `json:"exam,omitempty"`
-	TypeID string `json:"typeId"`
-	Limit  int    `json:"limit,omitempty"`
+	Exam    string   `json:"exam,omitempty"`
+	TypeID  string   `json:"typeId"`
+	TypeIDs []string `json:"typeIds,omitempty"`
+	Limit   int      `json:"limit,omitempty"`
 }
 
 // practice deals one task set of the chosen type.
@@ -164,7 +170,7 @@ func (h *Handler) practice(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req, h.log, "reading.practice") {
 		return
 	}
-	if strings.TrimSpace(req.TypeID) == "" {
+	if strings.TrimSpace(req.TypeID) == "" && len(req.TypeIDs) == 0 {
 		httpx.ValidationError(w, map[string]string{"typeId": "Choose a task type to practise."})
 		return
 	}
@@ -181,9 +187,10 @@ func (h *Handler) practice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	set, err := h.svc.PracticeSet(r.Context(), user, PracticeParams{
-		Exam:   exam,
-		TypeID: req.TypeID,
-		Limit:  req.Limit,
+		Exam:    exam,
+		TypeID:  req.TypeID,
+		TypeIDs: req.TypeIDs,
+		Limit:   req.Limit,
 	})
 	if err != nil {
 		if errors.Is(err, ErrNoPassage) {

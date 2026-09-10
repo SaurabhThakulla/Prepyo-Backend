@@ -109,46 +109,70 @@ type PracticeParams struct {
 	Exam models.ExamType
 	// TypeID is the task the learner chose to work on.
 	TypeID string
+	// TypeIDs is the whole family behind that choice. A dashboard heading can
+	// stand for more than one server type — Multiple Choice is one heading and
+	// two types — and practice deals all of them together rather than making
+	// the learner meet half the questions and never see the rest.
+	TypeIDs []string
 	// Limit trims the set to the first questions after shuffling. Zero deals
 	// the whole group, which is the normal case.
 	Limit int
 }
 
-// PracticeSet deals one task set of the requested type for a learner.
+// PracticeSet deals every set of the requested types that one passage carries.
+//
+// A mock is composed slot by slot and takes a fixed count from each type, which
+// is why it builds its own sets. Practice is the opposite: the learner picked a
+// task and wants all of it that this passage has.
 func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeParams) (models.ReadingSet, error) {
-	if p.TypeID == TypeReorderParagraphs {
-		return s.practiceReorder(ctx, user, p.Exam)
+	types := p.TypeIDs
+	if len(types) == 0 && p.TypeID != "" {
+		types = []string{p.TypeID}
+	}
+	for _, id := range types {
+		if id == TypeReorderParagraphs {
+			return s.practiceReorder(ctx, user, p.Exam)
+		}
 	}
 
-	group, err := s.repo.PickPracticeGroup(ctx, user.ID, p.Exam, p.TypeID)
+	anchor, err := s.repo.PickPracticeGroup(ctx, user.ID, p.Exam, types)
 	if err != nil {
 		return models.ReadingSet{}, err
 	}
 
-	passage, err := s.repo.PassageByID(ctx, group.PassageID)
+	sets, err := s.buildSets(ctx, []string{anchor.PassageID}, types, p.Exam)
 	if err != nil {
 		return models.ReadingSet{}, err
 	}
+	if len(sets) == 0 || len(sets[0].Groups) == 0 {
+		return models.ReadingSet{}, ErrNoPassage
+	}
+	set := sets[0]
 
-	byGroup, err := s.questions.ByGroupIDs(ctx, []string{group.ID})
-	if err != nil {
+	// A limit trims the sitting as a whole, so a capped set still reads as
+	// consecutive questions rather than the first few of every group.
+	if p.Limit > 0 && p.Limit < set.TotalQuestions {
+		remaining := p.Limit
+		kept := make([]models.ReadingGroup, 0, len(set.Groups))
+		for _, group := range set.Groups {
+			if remaining <= 0 {
+				break
+			}
+			if len(group.Questions) > remaining {
+				group.Questions = group.Questions[:remaining]
+			}
+			remaining -= len(group.Questions)
+			kept = append(kept, group)
+		}
+		set.Groups = kept
+		set.TotalQuestions = p.Limit
+	}
+
+	if err := s.repo.RecordExposure(ctx, s.db, user.ID, p.Exam, []string{anchor.PassageID}, ContextPractice); err != nil {
 		return models.ReadingSet{}, err
 	}
 
-	built := buildGroup(group, byGroup[group.ID], p.Exam)
-	if p.Limit > 0 && p.Limit < len(built.Questions) {
-		built.Questions = built.Questions[:p.Limit]
-	}
-
-	if err := s.repo.RecordExposure(ctx, s.db, user.ID, p.Exam, []string{passage.ID}, ContextPractice); err != nil {
-		return models.ReadingSet{}, err
-	}
-
-	return models.ReadingSet{
-		Passage:        &passage,
-		Groups:         []models.ReadingGroup{built},
-		TotalQuestions: len(built.Questions),
-	}, nil
+	return set, nil
 }
 
 // practiceReorder deals one Re-order Paragraphs item as a set with no passage.
@@ -399,7 +423,7 @@ func (s *Service) slotQuestions(
 	exam models.ExamType,
 	slot BlueprintSlot,
 ) ([]string, error) {
-	groups, err := s.repo.GroupsForPassages(ctx, []string{passageID}, "")
+	groups, err := s.repo.GroupsForPassages(ctx, []string{passageID}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -677,14 +701,14 @@ func reorderSet(list []models.Question) models.ReadingSet {
 	}
 }
 
-// buildSets loads passages and groups for display, filtering by typeID and exam.
-func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeID string, exam models.ExamType) ([]models.ReadingSet, error) {
+// buildSets loads passages and groups for display, filtering by type and exam.
+func (s *Service) buildSets(ctx context.Context, passageIDs []string, typeIDs []string, exam models.ExamType) ([]models.ReadingSet, error) {
 	passages, err := s.repo.PassagesByIDs(ctx, passageIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	groups, err := s.repo.GroupsForPassages(ctx, passageIDs, typeID)
+	groups, err := s.repo.GroupsForPassages(ctx, passageIDs, typeIDs)
 	if err != nil {
 		return nil, err
 	}
