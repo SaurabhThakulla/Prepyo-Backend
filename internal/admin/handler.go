@@ -39,6 +39,11 @@ func (h *Handler) Routes() chi.Router {
 	r.Patch("/reading/passages/{id}/publish", h.setPublished)
 	r.Delete("/reading/passages/{id}", h.deletePassage)
 	r.Post("/reading/reorder-items", h.createReorderItem)
+	r.Get("/questions/types", h.questionTypes)
+	r.Get("/questions", h.authoredQuestions)
+	r.Post("/questions", h.createQuestion)
+	r.Patch("/questions/{id}/publish", h.setQuestionPublished)
+	r.Delete("/questions/{id}", h.deleteQuestion)
 
 	r.Get("/reports", h.reports)
 	r.Patch("/reports/{id}/resolve", h.resolveReport)
