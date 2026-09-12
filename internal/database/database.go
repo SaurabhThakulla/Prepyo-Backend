@@ -37,6 +37,12 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	cfg.MaxConnLifetime = time.Hour
 	cfg.MaxConnIdleTime = 5 * time.Minute
 
+	// Connection poolers like PgBouncer (e.g., Supabase port 6543) do not support
+	// cached prepared statements across multiplexed connections.
+	if cfg.ConnConfig.DefaultQueryExecMode == pgx.QueryExecModeCacheStatement {
+		cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open pool: %w", err)
