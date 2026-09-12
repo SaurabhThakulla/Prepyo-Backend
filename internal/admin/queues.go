@@ -118,6 +118,7 @@ type paymentRequest struct {
 	UserID        string `json:"userId"`
 	UserName      string `json:"userName"`
 	UserEmail     string `json:"userEmail"`
+	PhoneNumber   string `json:"phoneNumber,omitempty"`
 	PlanID        string `json:"planId"`
 	PlanName      string `json:"planName"`
 	Gateway       string `json:"gateway"`
@@ -146,7 +147,7 @@ func (h *Handler) payments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.Query(r.Context(), `
-		SELECT p.id, p.user_id, u.name, COALESCE(u.email, ''), p.plan_id, pl.name,
+		SELECT p.id, p.user_id, u.name, COALESCE(u.email, ''), COALESCE(p.phone_number, ''), p.plan_id, pl.name,
 		       p.payment_gateway, p.transaction_id, p.amount_npr, p.status,
 		       p.effective_days, p.proof_image IS NOT NULL, p.review_note,
 		       p.created_at, p.reviewed_at
@@ -166,7 +167,7 @@ func (h *Handler) payments(w http.ResponseWriter, r *http.Request) {
 		var item paymentRequest
 		var created time.Time
 		var reviewed *time.Time
-		if err := rows.Scan(&item.ID, &item.UserID, &item.UserName, &item.UserEmail,
+		if err := rows.Scan(&item.ID, &item.UserID, &item.UserName, &item.UserEmail, &item.PhoneNumber,
 			&item.PlanID, &item.PlanName, &item.Gateway, &item.TransactionID,
 			&item.AmountNPR, &item.Status, &item.EffectiveDays, &item.HasProof,
 			&item.ReviewNote, &created, &reviewed); err != nil {

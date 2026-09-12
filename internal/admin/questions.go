@@ -656,3 +656,208 @@ func (h *Handler) deleteQuestion(w http.ResponseWriter, r *http.Request) {
 	h.log.Info("admin deleted a question", "actor", actor.Email, "question", id)
 	httpx.JSON(w, http.StatusOK, map[string]any{"deleted": id})
 }
+
+type authoredQuestionDetail struct {
+	ID               string     `json:"id"`
+	Exam             string     `json:"exam"`
+	Skill            string     `json:"skill"`
+	TypeID           string     `json:"typeId"`
+	TypeName         string     `json:"typeName"`
+	Title            string     `json:"title"`
+	Prompt           string     `json:"prompt"`
+	ContextPassage   string     `json:"contextPassage"`
+	AudioURL         string     `json:"audioUrl"`
+	AudioTranscript  string     `json:"audioTranscript"`
+	ImageURL         string     `json:"imageUrl"`
+	FigureData       string     `json:"figureData"`
+	Options          []string   `json:"options"`
+	CorrectAnswers   []string   `json:"correctAnswers"`
+	Blanks           []newBlank `json:"blanks"`
+	ModelAnswer      string     `json:"modelAnswer"`
+	Explanation      string     `json:"explanation"`
+	Difficulty       string     `json:"difficulty"`
+	Tags             []string   `json:"tags"`
+	PrepTimeSeconds  int        `json:"prepTimeSeconds"`
+	TimeLimitSeconds int        `json:"timeLimitSeconds"`
+	Points           int        `json:"points"`
+	IsPublished      bool       `json:"isPublished"`
+	InMock           bool       `json:"inMock"`
+}
+
+func (h *Handler) authoredQuestion(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var (
+		q                      authoredQuestionDetail
+		optionsRaw, correctRaw []byte
+		blanksRaw              []byte
+	)
+	err := h.db.QueryRow(r.Context(), `
+		SELECT q.id, q.exam, q.skill, q.type_id, q.type_name, q.title, q.prompt,
+		       coalesce(q.context_passage, ''), coalesce(q.audio_url, ''), coalesce(q.audio_transcript, ''),
+		       coalesce(q.image_url, ''), coalesce(q.figure_data, ''),
+		       q.options, q.correct_answers, q.blanks,
+		       coalesce(q.model_answer, ''), coalesce(q.explanation, ''), q.difficulty, q.tags,
+		       q.prep_time_seconds, q.time_limit_seconds, q.points, q.is_published,
+		       EXISTS (SELECT 1 FROM mock_sections ms WHERE q.id = ANY(ms.question_ids))
+		FROM questions q
+		WHERE q.id = $1 AND `+authoredScope, id).
+		Scan(&q.ID, &q.Exam, &q.Skill, &q.TypeID, &q.TypeName, &q.Title, &q.Prompt,
+			&q.ContextPassage, &q.AudioURL, &q.AudioTranscript, &q.ImageURL, &q.FigureData,
+			&optionsRaw, &correctRaw, &blanksRaw,
+			&q.ModelAnswer, &q.Explanation, &q.Difficulty, &q.Tags,
+			&q.PrepTimeSeconds, &q.TimeLimitSeconds, &q.Points, &q.IsPublished, &q.InMock)
+	if errors.Is(err, pgx.ErrNoRows) {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "No authored question has that id.")
+		return
+	}
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.authoredQuestion", err)
+		return
+	}
+
+	stored := []questionOption{}
+	if len(optionsRaw) > 0 {
+		if err := json.Unmarshal(optionsRaw, &stored); err != nil {
+			httpx.Internal(w, h.log, "admin.authoredQuestion.options", err)
+			return
+		}
+	}
+	textByID := make(map[string]string, len(stored))
+	q.Options = []string{}
+	for _, option := range stored {
+		textByID[option.ID] = option.Text
+		q.Options = append(q.Options, option.Text)
+	}
+
+	answerIDs := []string{}
+	if len(correctRaw) > 0 {
+		if err := json.Unmarshal(correctRaw, &answerIDs); err != nil {
+			httpx.Internal(w, h.log, "admin.authoredQuestion.answers", err)
+			return
+		}
+	}
+	q.CorrectAnswers = []string{}
+	for _, answer := range answerIDs {
+		if text, ok := textByID[answer]; ok {
+			q.CorrectAnswers = append(q.CorrectAnswers, text)
+			continue
+		}
+		q.CorrectAnswers = append(q.CorrectAnswers, answer)
+	}
+
+	blanks := []storedBlank{}
+	if len(blanksRaw) > 0 {
+		if err := json.Unmarshal(blanksRaw, &blanks); err != nil {
+			httpx.Internal(w, h.log, "admin.authoredQuestion.blanks", err)
+			return
+		}
+	}
+	q.Blanks = []newBlank{}
+	for _, blank := range blanks {
+		q.Blanks = append(q.Blanks, newBlank{
+			ID:            blank.ID,
+			Options:       blank.Options,
+			CorrectAnswer: blank.CorrectAnswer,
+		})
+	}
+	if q.Tags == nil {
+		q.Tags = []string{}
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{"question": q})
+}
+
+func (h *Handler) updateQuestion(w http.ResponseWriter, r *http.Request) {
+	actor := reqctx.MustUser(r.Context())
+	id := chi.URLParam(r, "id")
+
+	var req newAuthoredQuestion
+	if !httpx.DecodeLimit(w, r, &req, h.log, "admin.updateQuestion", 1<<20) {
+		return
+	}
+
+	q, problems := req.normalise()
+	if len(problems) > 0 {
+		httpx.ValidationError(w, problems)
+		return
+	}
+
+	if err := h.saveAuthoredQuestion(r.Context(), id, q); err != nil {
+		var invalid validationError
+		if errors.As(err, &invalid) {
+			httpx.ValidationError(w, invalid.fields)
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "No authored question has that id.")
+			return
+		}
+		httpx.Internal(w, h.log, "admin.updateQuestion", err)
+		return
+	}
+
+	h.log.Info("admin edited a question",
+		"actor", actor.Email, "question", id, "exam", q.spec.Exam,
+		"type", q.spec.TypeID, "published", q.publish)
+
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"question": map[string]any{
+			"id":          id,
+			"exam":        q.spec.Exam,
+			"typeName":    q.spec.TypeName,
+			"title":       q.title,
+			"isPublished": q.publish,
+		},
+	})
+}
+
+func (h *Handler) saveAuthoredQuestion(ctx context.Context, id string, q authoredQuestion) error {
+	var versionID string
+	err := h.db.QueryRow(ctx,
+		`SELECT id FROM exam_versions WHERE exam = $1 AND is_current`, q.spec.Exam).Scan(&versionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return validationError{fields: map[string]string{
+			"exam": "That exam has no current version configured.",
+		}}
+	}
+	if err != nil {
+		return fmt.Errorf("find current exam version: %w", err)
+	}
+
+	options, err := jsonOrNull(q.options)
+	if err != nil {
+		return fmt.Errorf("encode options: %w", err)
+	}
+	correct, err := jsonOrNull(q.correctAnswers)
+	if err != nil {
+		return fmt.Errorf("encode answers: %w", err)
+	}
+	blanks, err := jsonOrNull(q.blanks)
+	if err != nil {
+		return fmt.Errorf("encode blanks: %w", err)
+	}
+
+	tag, err := h.db.Exec(ctx, `
+		UPDATE questions SET
+			exam_version_id = $2, exam = $3, supported_exams = $4, skill = $5, type_id = $6, type_name = $7,
+			title = $8, prompt = $9, context_passage = $10, audio_url = $11, audio_transcript = $12,
+			image_url = $13, figure_data = $14, prep_time_seconds = $15, time_limit_seconds = $16,
+			options = $17, correct_answers = $18, blanks = $19, model_answer = $20, explanation = $21,
+			difficulty = $22, tags = $23, points = $24, is_published = $25
+		WHERE id = $1 AND `+authoredScope,
+		id, versionID, q.spec.Exam, []string{q.spec.Exam}, q.spec.Skill, q.spec.TypeID, q.spec.TypeName,
+		q.title, q.prompt,
+		textOrNull(q.contextPassage), textOrNull(q.audioURL), textOrNull(q.audioTranscript),
+		textOrNull(q.imageURL), textOrNull(q.figureData),
+		q.prepSeconds, q.timeLimitSeconds, options, correct, blanks,
+		textOrNull(q.modelAnswer), textOrNull(q.explanation), q.difficulty, q.tags, q.points, q.publish,
+	)
+	if err != nil {
+		return fmt.Errorf("update question: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}

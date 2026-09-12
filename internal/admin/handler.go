@@ -42,6 +42,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/questions/types", h.questionTypes)
 	r.Get("/questions", h.authoredQuestions)
 	r.Post("/questions", h.createQuestion)
+	r.Get("/questions/{id}", h.authoredQuestion)
+	r.Put("/questions/{id}", h.updateQuestion)
 	r.Patch("/questions/{id}/publish", h.setQuestionPublished)
 	r.Delete("/questions/{id}", h.deleteQuestion)
 

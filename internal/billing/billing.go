@@ -351,6 +351,7 @@ type RequestPaymentParams struct {
 	Plan           models.Plan
 	PaymentGateway string
 	TransactionID  string
+	PhoneNumber    string
 	ProofImage     []byte
 	ProofImageType string
 }
@@ -377,10 +378,10 @@ func (s *Service) RequestPayment(ctx context.Context, pool *pgxpool.Pool, p Requ
 
 	_, err := pool.Exec(ctx, `
 		INSERT INTO subscription_payments
-			(user_id, plan_id, payment_gateway, transaction_id, amount_npr, status,
+			(user_id, plan_id, payment_gateway, transaction_id, phone_number, amount_npr, status,
 			 base_days, bonus_days, effective_days, proof_image, proof_image_type)
-		VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)`,
-		p.UserID, p.Plan.ID, p.PaymentGateway, p.TransactionID, p.Plan.PriceNPR,
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11)`,
+		p.UserID, p.Plan.ID, p.PaymentGateway, p.TransactionID, p.PhoneNumber, p.Plan.PriceNPR,
 		baseDays, p.Plan.BonusDays, effectiveDays, proof, proofType)
 
 	if err != nil {

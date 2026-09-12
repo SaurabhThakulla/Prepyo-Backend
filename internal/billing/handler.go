@@ -67,6 +67,7 @@ type checkoutRequest struct {
 	PlanID         string `json:"planId"`
 	PaymentGateway string `json:"paymentGateway"`
 	TransactionID  string `json:"transactionId"`
+	PhoneNumber    string `json:"phoneNumber"`
 	// ProofImage is the learner's screenshot of the transfer, as a data URL
 	// from the file picker. It is what an admin looks at when deciding whether
 	// the money arrived.
@@ -110,9 +111,24 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	phone := strings.TrimSpace(req.PhoneNumber)
+	if phone == "" {
+		httpx.ValidationError(w, map[string]string{"phoneNumber": "Phone number is required."})
+		return
+	}
+
+	if strings.TrimSpace(req.ProofImage) == "" {
+		httpx.ValidationError(w, map[string]string{"proofImage": "Payment screenshot is required."})
+		return
+	}
+
 	proof, proofType, err := decodeProof(req.ProofImage)
 	if err != nil {
 		httpx.ValidationError(w, map[string]string{"proofImage": err.Error()})
+		return
+	}
+	if len(proof) == 0 {
+		httpx.ValidationError(w, map[string]string{"proofImage": "Payment screenshot is required."})
 		return
 	}
 
@@ -126,6 +142,7 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 		Plan:           plan,
 		PaymentGateway: gw,
 		TransactionID:  txID,
+		PhoneNumber:    phone,
 		ProofImage:     proof,
 		ProofImageType: proofType,
 	}); err != nil {
@@ -160,7 +177,7 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 func decodeProof(raw string) ([]byte, string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, "", nil
+		return nil, "", errors.New("Payment screenshot is required.")
 	}
 
 	prefix, encoded, found := strings.Cut(raw, ",")
