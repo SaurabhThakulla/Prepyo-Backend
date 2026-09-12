@@ -61,6 +61,14 @@ type User struct {
 
 	AvatarUpdatedAt *time.Time
 	CoverUpdatedAt  *time.Time
+
+	OnboardingCompletedAt *time.Time
+	StudyGoal             string
+	Destination           string
+	PriorAttempt          string
+	PreviousScore         *float64
+	FocusSkill            string
+	DailyMinutes          *int
 }
 
 const (
@@ -145,6 +153,14 @@ type UserProfile struct {
 	CoverUpdatedAt  *time.Time         `json:"coverUpdatedAt,omitempty"`
 	Estimate        *ScoreEstimate     `json:"estimate,omitempty"`
 	Subscription    *SubscriptionState `json:"subscription,omitempty"`
+
+	OnboardingCompletedAt *time.Time `json:"onboardingCompletedAt"`
+	StudyGoal             string     `json:"studyGoal,omitempty"`
+	Destination           string     `json:"destination,omitempty"`
+	PriorAttempt          string     `json:"priorAttempt,omitempty"`
+	PreviousScore         *float64   `json:"previousScore,omitempty"`
+	FocusSkill            string     `json:"focusSkill,omitempty"`
+	DailyMinutes          *int       `json:"dailyMinutes,omitempty"`
 }
 
 // XPPerLevel is the width of one level. Levels start at 1.
@@ -178,6 +194,14 @@ func NewUserProfile(u User) UserProfile {
 
 		AvatarUpdatedAt: u.AvatarUpdatedAt,
 		CoverUpdatedAt:  u.CoverUpdatedAt,
+
+		OnboardingCompletedAt: u.OnboardingCompletedAt,
+		StudyGoal:             u.StudyGoal,
+		Destination:           u.Destination,
+		PriorAttempt:          u.PriorAttempt,
+		PreviousScore:         u.PreviousScore,
+		FocusSkill:            u.FocusSkill,
+		DailyMinutes:          u.DailyMinutes,
 	}
 	if u.ExamDate != nil {
 		profile.ExamDate = u.ExamDate.Format(time.DateOnly)

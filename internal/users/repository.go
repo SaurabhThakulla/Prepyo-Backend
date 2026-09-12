@@ -24,7 +24,9 @@ var (
 		id, COALESCE(email, ''), name, role, target_exam, target_score, exam_date,
 		nepal_region, xp, streak_days, streak_last_active_date, timezone,
 		plan_id, plan_started_at, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at,
-		avatar_updated_at, cover_updated_at, COALESCE(google_sub, '')`
+		avatar_updated_at, cover_updated_at, COALESCE(google_sub, ''), onboarding_completed_at,
+		COALESCE(study_goal, ''), COALESCE(destination, ''), COALESCE(prior_attempt, ''), previous_score,
+		COALESCE(focus_skill, ''), daily_minutes`
 )
 
 type Repository struct {
@@ -100,6 +102,15 @@ type UpdateProfileParams struct {
 	ExamDate    *time.Time
 	NepalRegion *string
 	Timezone    *string
+
+	StudyGoal     *string
+	Destination   *string
+	PriorAttempt  *string
+	PreviousScore *float64
+	FocusSkill    *string
+	DailyMinutes  *int
+
+	CompleteOnboarding bool
 }
 
 func (r *Repository) UpdateProfile(ctx context.Context, userID string, p UpdateProfileParams) (models.User, error) {
@@ -113,10 +124,19 @@ func (r *Repository) UpdateProfile(ctx context.Context, userID string, p UpdateP
 			exam_date    = COALESCE($5, exam_date),
 			nepal_region = COALESCE($6, nepal_region),
 			timezone     = COALESCE($7, timezone),
+			onboarding_completed_at = CASE WHEN $8 THEN COALESCE(onboarding_completed_at, now())
+			                               ELSE onboarding_completed_at END,
+			study_goal     = COALESCE($9, study_goal),
+			destination    = COALESCE($10, destination),
+			prior_attempt  = COALESCE($11, prior_attempt),
+			previous_score = CASE WHEN $11 = 'first' THEN NULL ELSE COALESCE($12, previous_score) END,
+			focus_skill    = COALESCE($13, focus_skill),
+			daily_minutes  = COALESCE($14, daily_minutes),
 			updated_at   = now()
 		WHERE id = $1
 		RETURNING `+selectUserFields,
-		userID, p.Name, p.TargetExam, p.TargetScore, p.ExamDate, p.NepalRegion, p.Timezone)
+		userID, p.Name, p.TargetExam, p.TargetScore, p.ExamDate, p.NepalRegion, p.Timezone, p.CompleteOnboarding,
+		p.StudyGoal, p.Destination, p.PriorAttempt, p.PreviousScore, p.FocusSkill, p.DailyMinutes)
 
 	return r.scanOne(row, "update profile")
 }
@@ -163,6 +183,8 @@ func scanUser(row pgx.Row) (models.User, error) {
 		&u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanStartedAt, &u.PlanValidUntil,
 		&u.ReferralCode, &u.BonusMockTests, &u.BonusProDays,
 		&u.CreatedAt, &u.AvatarUpdatedAt, &u.CoverUpdatedAt, &u.GoogleSub,
+		&u.OnboardingCompletedAt,
+		&u.StudyGoal, &u.Destination, &u.PriorAttempt, &u.PreviousScore, &u.FocusSkill, &u.DailyMinutes,
 	)
 	return u, err
 }

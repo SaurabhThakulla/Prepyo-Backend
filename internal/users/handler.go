@@ -194,6 +194,15 @@ type updateRequest struct {
 	ExamDate    *string  `json:"examDate"`
 	NepalRegion *string  `json:"nepalRegion"`
 	Timezone    *string  `json:"timezone"`
+
+	StudyGoal     *string  `json:"studyGoal"`
+	Destination   *string  `json:"destination"`
+	PriorAttempt  *string  `json:"priorAttempt"`
+	PreviousScore *float64 `json:"previousScore"`
+	FocusSkill    *string  `json:"focusSkill"`
+	DailyMinutes  *int     `json:"dailyMinutes"`
+
+	CompleteOnboarding bool `json:"completeOnboarding"`
 }
 
 // update changes onboarding and goal fields.
@@ -212,6 +221,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		TargetScore: req.TargetScore,
 		NepalRegion: trimmed(req.NepalRegion),
 		Timezone:    trimmed(req.Timezone),
+
+		CompleteOnboarding: req.CompleteOnboarding,
 	}
 	problems := map[string]string{}
 
@@ -223,6 +234,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		exam := models.ExamType(*req.TargetExam)
 		if !exam.Valid() {
 			problems["targetExam"] = "Choose PTE or IELTS."
+		} else if !examChangeAllowed(user, exam) {
+			problems["targetExam"] = "Your exam is fixed once you have chosen it."
 		} else {
 			params.TargetExam = &exam
 		}
@@ -243,17 +256,18 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	exam := user.TargetExam
+	if params.TargetExam != nil {
+		exam = *params.TargetExam
+	}
+
 	// A target outside the exam's own scale would make every gap calculation
 	// nonsense, so it is rejected here rather than stored.
-	if req.TargetScore != nil {
-		exam := user.TargetExam
-		if params.TargetExam != nil {
-			exam = *params.TargetExam
-		}
-		if !validTargetScore(exam, *req.TargetScore) {
-			problems["targetScore"] = "That score is outside the range for this exam."
-		}
+	if req.TargetScore != nil && !validTargetScore(exam, *req.TargetScore) {
+		problems["targetScore"] = "That score is outside the range for this exam."
 	}
+
+	applyOnboardingAnswers(req, exam, &params, problems)
 
 	if len(problems) > 0 {
 		httpx.ValidationError(w, problems)
@@ -271,6 +285,68 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, http.StatusOK, map[string]any{"user": models.NewUserProfile(updated)})
+}
+
+var (
+	studyGoals   = map[string]bool{"university": true, "migration": true, "work": true, "other": true}
+	destinations = map[string]bool{
+		"australia": true, "uk": true, "canada": true, "usa": true, "new-zealand": true, "other": true,
+	}
+)
+
+func applyOnboardingAnswers(req updateRequest, exam models.ExamType, params *UpdateProfileParams, problems map[string]string) {
+	if req.StudyGoal != nil {
+		if studyGoals[*req.StudyGoal] {
+			params.StudyGoal = req.StudyGoal
+		} else {
+			problems["studyGoal"] = "Choose one of the listed goals."
+		}
+	}
+
+	if req.Destination != nil {
+		if destinations[*req.Destination] {
+			params.Destination = req.Destination
+		} else {
+			problems["destination"] = "Choose one of the listed destinations."
+		}
+	}
+
+	if req.PriorAttempt != nil {
+		switch *req.PriorAttempt {
+		case "first", "retake":
+			params.PriorAttempt = req.PriorAttempt
+		default:
+			problems["priorAttempt"] = "Say whether this is your first attempt."
+		}
+	}
+
+	if req.PreviousScore != nil {
+		if validTargetScore(exam, *req.PreviousScore) {
+			params.PreviousScore = req.PreviousScore
+		} else {
+			problems["previousScore"] = "That score is outside the range for this exam."
+		}
+	}
+
+	if req.FocusSkill != nil {
+		if models.SkillType(*req.FocusSkill).Valid() {
+			params.FocusSkill = req.FocusSkill
+		} else {
+			problems["focusSkill"] = "Choose speaking, writing, reading or listening."
+		}
+	}
+
+	if req.DailyMinutes != nil {
+		if *req.DailyMinutes >= 5 && *req.DailyMinutes <= 480 {
+			params.DailyMinutes = req.DailyMinutes
+		} else {
+			problems["dailyMinutes"] = "Pick between 5 minutes and 8 hours a day."
+		}
+	}
+}
+
+func examChangeAllowed(user models.User, next models.ExamType) bool {
+	return next == user.TargetExam || user.Role == models.RoleAdmin || user.OnboardingCompletedAt == nil
 }
 
 func validTargetScore(exam models.ExamType, score float64) bool {
