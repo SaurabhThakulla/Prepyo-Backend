@@ -7,6 +7,7 @@ package mocks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -134,15 +135,20 @@ type SaveAttemptParams struct {
 }
 
 func (r *Repository) SaveAttempt(ctx context.Context, db database.DB, p SaveAttemptParams) (models.MockAttempt, error) {
+	skillScoresJSON, err := json.Marshal(p.SkillScores)
+	if err != nil {
+		return models.MockAttempt{}, fmt.Errorf("marshal skill scores: %w", err)
+	}
+
 	var a models.MockAttempt
-	err := db.QueryRow(ctx, `
+	err = db.QueryRow(ctx, `
 		INSERT INTO mock_attempts (
 			user_id, mock_id, exam_version_id, exam, user_score, skill_scores,
 			total_correct, total_questions, duration_seconds)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, mock_id, exam_version_id, exam, user_score, skill_scores,
 		          total_correct, total_questions, duration_seconds, completed_at`,
-		p.UserID, p.MockID, p.ExamVersionID, p.Exam, p.UserScore, p.SkillScores,
+		p.UserID, p.MockID, p.ExamVersionID, p.Exam, p.UserScore, string(skillScoresJSON),
 		p.TotalCorrect, p.TotalQuestions, p.DurationSeconds,
 	).Scan(&a.ID, &a.MockID, &a.ExamVersionID, &a.Exam, &a.UserScore, &a.SkillScores,
 		&a.TotalCorrect, &a.TotalQuestions, &a.DurationSeconds, &a.CompletedAt)

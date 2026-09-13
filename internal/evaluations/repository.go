@@ -9,6 +9,7 @@ package evaluations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -50,7 +51,16 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 		questionID = &p.QuestionID
 	}
 
-	err := db.QueryRow(ctx, `
+	criteriaJSON, err := json.Marshal(e.Criteria)
+	if err != nil {
+		return models.Evaluation{}, fmt.Errorf("marshal criteria: %w", err)
+	}
+	feedbackJSON, err := json.Marshal(e.SentenceFeedback)
+	if err != nil {
+		return models.Evaluation{}, fmt.Errorf("marshal sentence feedback: %w", err)
+	}
+
+	err = db.QueryRow(ctx, `
 		INSERT INTO ai_evaluations (
 			user_id, question_id, exam, skill, evaluation_version, request_fingerprint,
 			estimated_score, score_confidence, summary, criteria, strengths, weaknesses,
@@ -59,8 +69,8 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		RETURNING `+selectFields,
 		p.UserID, questionID, e.Exam, e.Skill, e.EvaluationVersion, p.Fingerprint,
-		e.EstimatedScore, e.ScoreConfidence, e.Summary, e.Criteria, e.Strengths, e.Weaknesses,
-		e.SentenceFeedback, e.ModelRewrite, e.Transcript, p.Usage.Provider, p.Usage.Model, p.Usage.PromptVersion,
+		e.EstimatedScore, e.ScoreConfidence, e.Summary, string(criteriaJSON), e.Strengths, e.Weaknesses,
+		string(feedbackJSON), e.ModelRewrite, e.Transcript, p.Usage.Provider, p.Usage.Model, p.Usage.PromptVersion,
 		p.Usage.PromptTokens, p.Usage.CompletionTokens, p.Usage.LatencyMS,
 	).Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion, &e.EstimatedScore,
 		&e.ScoreConfidence, &e.Summary, &e.Criteria, &e.Strengths, &e.Weaknesses,
