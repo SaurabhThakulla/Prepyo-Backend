@@ -85,3 +85,35 @@ func TestMistakesHandlerRequiresPremium(t *testing.T) {
 		})
 	}
 }
+
+func TestMistakesAnalyticsRequiresPremium(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo := NewRepository(&dummyDB{})
+	handler := NewHandler(nil, repo, nil, log)
+	routes := handler.Routes()
+
+	future := time.Now().Add(48 * time.Hour)
+
+	// Freemium user -> 403 Forbidden
+	reqFree := httptest.NewRequest(http.MethodGet, "/analytics?period=weekly", nil)
+	reqFree = reqFree.WithContext(reqctx.WithUser(reqFree.Context(), models.User{
+		ID: "free-user", PlanID: "free", Role: models.RoleSuru,
+	}))
+	recFree := httptest.NewRecorder()
+	routes.ServeHTTP(recFree, reqFree)
+	if recFree.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for free user on /analytics, got %d", recFree.Code)
+	}
+
+	// Premium user -> passes middleware to handler (dummyDB returns error -> 500)
+	reqPro := httptest.NewRequest(http.MethodGet, "/analytics?period=weekly", nil)
+	reqPro = reqPro.WithContext(reqctx.WithUser(reqPro.Context(), models.User{
+		ID: "pro-user", PlanID: "pro", Role: models.RoleTaiyari, PlanValidUntil: &future,
+	}))
+	recPro := httptest.NewRecorder()
+	routes.ServeHTTP(recPro, reqPro)
+	if recPro.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (reached handler) for pro user on /analytics, got %d", recPro.Code)
+	}
+}
+

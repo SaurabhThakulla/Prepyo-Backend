@@ -29,9 +29,30 @@ func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Use(h.requirePremium)
 	r.Get("/", h.list)
+	r.Get("/analytics", h.analytics)
 	r.Post("/{mistakeID}/resolve", h.resolve)
 	return r
 }
+
+func (h *Handler) analytics(w http.ResponseWriter, r *http.Request) {
+	user := reqctx.MustUser(r.Context())
+	query := r.URL.Query()
+
+	summary, err := h.repo.Analytics(r.Context(), AnalyticsParams{
+		UserID: user.ID,
+		Exam:   models.ExamType(query.Get("exam")),
+		Period: query.Get("period"),
+	})
+	if err != nil {
+		httpx.Internal(w, h.log, "mistakes.analytics", err)
+		return
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"analytics": summary,
+	})
+}
+
 
 func (h *Handler) requirePremium(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

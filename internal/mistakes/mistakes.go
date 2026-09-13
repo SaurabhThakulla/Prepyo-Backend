@@ -116,3 +116,179 @@ func (r *Repository) Resolve(ctx context.Context, db database.DB, userID, mistak
 	}
 	return nil
 }
+
+type AnalyticsParams struct {
+	UserID string
+	Exam   models.ExamType
+	Period string // "weekly", "monthly", "lifetime"
+}
+
+type TimelinePoint struct {
+	Label    string `json:"label"`
+	Date     string `json:"date"`
+	Count    int    `json:"count"`
+	Resolved int    `json:"resolved"`
+}
+
+type TagStat struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
+}
+
+type AnalyticsSummary struct {
+	Period      string                   `json:"period"`
+	Total       int                      `json:"total"`
+	Unresolved  int                      `json:"unresolved"`
+	Resolved    int                      `json:"resolved"`
+	RepeatCount int                      `json:"repeatCount"`
+	BySkill     map[models.SkillType]int `json:"bySkill"`
+	ByTag       []TagStat                `json:"byTag"`
+	Timeline    []TimelinePoint          `json:"timeline"`
+}
+
+func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (AnalyticsSummary, error) {
+	period := p.Period
+	if period != "monthly" && period != "lifetime" {
+		period = "weekly"
+	}
+
+	summary := AnalyticsSummary{
+		Period:   period,
+		BySkill:  map[models.SkillType]int{},
+		ByTag:    []TagStat{},
+		Timeline: []TimelinePoint{},
+	}
+
+	// 1. Overall stats
+	const statsQuery = `
+		SELECT
+			count(*) as total,
+			count(*) FILTER (WHERE NOT m.resolved) as unresolved,
+			count(*) FILTER (WHERE m.resolved) as resolved,
+			count(*) FILTER (WHERE m.failed_count > 1) as repeat_count
+		FROM mistakes m
+		WHERE m.user_id = $1
+		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
+		  AND (
+		      ($3 = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
+		      ($3 = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '29 days') OR
+		      ($3 = 'lifetime')
+		  )`
+
+	if err := r.db.QueryRow(ctx, statsQuery, p.UserID, p.Exam, period).Scan(
+		&summary.Total, &summary.Unresolved, &summary.Resolved, &summary.RepeatCount,
+	); err != nil {
+		return summary, fmt.Errorf("read mistake stats: %w", err)
+	}
+
+	// 2. Breakdown by skill
+	const skillQuery = `
+		SELECT q.skill, count(m.id)
+		FROM mistakes m
+		JOIN questions q ON q.id = m.question_id
+		WHERE m.user_id = $1
+		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
+		  AND (
+		      ($3 = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
+		      ($3 = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '29 days') OR
+		      ($3 = 'lifetime')
+		  )
+		GROUP BY q.skill`
+
+	skillRows, err := r.db.Query(ctx, skillQuery, p.UserID, p.Exam, period)
+	if err == nil {
+		for skillRows.Next() {
+			var skill models.SkillType
+			var count int
+			if err := skillRows.Scan(&skill, &count); err == nil {
+				summary.BySkill[skill] = count
+			}
+		}
+		skillRows.Close()
+	}
+
+	// 3. Top tags
+	const tagQuery = `
+		SELECT m.error_tag, count(m.id)
+		FROM mistakes m
+		WHERE m.user_id = $1
+		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
+		  AND m.error_tag <> ''
+		  AND (
+		      ($3 = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
+		      ($3 = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '29 days') OR
+		      ($3 = 'lifetime')
+		  )
+		GROUP BY m.error_tag
+		ORDER BY count(m.id) DESC
+		LIMIT 5`
+
+	tagRows, err := r.db.Query(ctx, tagQuery, p.UserID, p.Exam, period)
+	if err == nil {
+		for tagRows.Next() {
+			var tag string
+			var count int
+			if err := tagRows.Scan(&tag, &count); err == nil {
+				summary.ByTag = append(summary.ByTag, TagStat{Tag: tag, Count: count})
+			}
+		}
+		tagRows.Close()
+	}
+
+	// 4. Timeline points
+	var timelineQuery string
+	switch period {
+	case "monthly":
+		timelineQuery = `
+			SELECT to_char(d, 'DD Mon') as label, to_char(d, 'YYYY-MM-DD') as date_str,
+			       count(m.id) as count,
+			       count(m.id) FILTER (WHERE m.resolved) as resolved
+			FROM generate_series(CURRENT_DATE - INTERVAL '29 days', CURRENT_DATE, '1 day'::interval) d
+			LEFT JOIN (
+			    SELECT m.id, m.resolved, m.last_attempted_at FROM mistakes m
+			    WHERE m.user_id = $1 AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
+			) m ON m.last_attempted_at::date = d::date
+			GROUP BY d
+			ORDER BY d`
+	case "lifetime":
+		timelineQuery = `
+			SELECT to_char(d, 'Mon YY') as label, to_char(d, 'YYYY-MM') as date_str,
+			       count(m.id) as count,
+			       count(m.id) FILTER (WHERE m.resolved) as resolved
+			FROM generate_series(date_trunc('month', CURRENT_DATE - INTERVAL '5 months'), date_trunc('month', CURRENT_DATE), '1 month'::interval) d
+			LEFT JOIN (
+			    SELECT m.id, m.resolved, m.last_attempted_at FROM mistakes m
+			    WHERE m.user_id = $1 AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
+			) m ON date_trunc('month', m.last_attempted_at) = d
+			GROUP BY d
+			ORDER BY d`
+	default: // weekly
+		timelineQuery = `
+			SELECT to_char(d, 'Dy') as label, to_char(d, 'YYYY-MM-DD') as date_str,
+			       count(m.id) as count,
+			       count(m.id) FILTER (WHERE m.resolved) as resolved
+			FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, '1 day'::interval) d
+			LEFT JOIN (
+			    SELECT m.id, m.resolved, m.last_attempted_at FROM mistakes m
+			    WHERE m.user_id = $1 AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
+			) m ON m.last_attempted_at::date = d::date
+			GROUP BY d
+			ORDER BY d`
+	}
+
+	timeRows, err := r.db.Query(ctx, timelineQuery, p.UserID, p.Exam)
+	if err != nil {
+		return summary, fmt.Errorf("read mistake timeline: %w", err)
+	}
+	defer timeRows.Close()
+
+	for timeRows.Next() {
+		var pt TimelinePoint
+		if err := timeRows.Scan(&pt.Label, &pt.Date, &pt.Count, &pt.Resolved); err == nil {
+			summary.Timeline = append(summary.Timeline, pt)
+		}
+	}
+
+	return summary, nil
+}
+
