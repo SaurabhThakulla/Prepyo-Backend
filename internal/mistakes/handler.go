@@ -61,7 +61,7 @@ func (h *Handler) requirePremium(next http.Handler) http.Handler {
 			httpx.Error(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "Please sign in to continue.")
 			return
 		}
-		if !user.IsAdmin() && !user.HasActivePaidPlan() {
+		if !user.IsAdmin() && (!user.HasActivePaidPlan() || user.Role == models.RoleSuru || user.PlanID == "free") {
 			httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "Mistake bank is only available for premium members. Please upgrade your plan.")
 			return
 		}

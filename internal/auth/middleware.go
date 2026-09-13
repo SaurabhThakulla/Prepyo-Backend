@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
 )
@@ -61,7 +62,7 @@ func (s *Service) RequirePremium(next http.Handler) http.Handler {
 			httpx.Error(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "Please sign in to continue.")
 			return
 		}
-		if !user.IsAdmin() && !user.HasActivePaidPlan() {
+		if !user.IsAdmin() && (!user.HasActivePaidPlan() || user.Role == models.RoleSuru || user.PlanID == "free") {
 			httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "Mistake bank is only available for premium members. Please upgrade your plan.")
 			return
 		}
