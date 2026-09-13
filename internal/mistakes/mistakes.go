@@ -54,6 +54,7 @@ type ListParams struct {
 	Exam           models.ExamType
 	Skill          models.SkillType
 	UnresolvedOnly bool
+	Period         string
 	Limit          int
 	Offset         int
 }
@@ -63,14 +64,18 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, 
 		WHERE m.user_id = $1
 		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
 		  AND ($3 = '' OR LOWER(q.skill) = LOWER($3))
-		  AND (NOT $4 OR NOT m.resolved)`
-
+		  AND (NOT $4 OR NOT m.resolved)
+		  AND (
+		      ($5 = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
+		      ($5 = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '29 days') OR
+		      ($5 = 'lifetime' OR $5 = '')
+		  )`
 
 	var total int
 	err := r.db.QueryRow(ctx, `
 		SELECT count(*) FROM mistakes m
 		JOIN questions q ON q.id = m.question_id`+filter,
-		p.UserID, p.Exam, p.Skill, p.UnresolvedOnly).Scan(&total)
+		p.UserID, p.Exam, p.Skill, p.UnresolvedOnly, p.Period).Scan(&total)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count mistakes: %w", err)
 	}
@@ -82,8 +87,9 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, 
 		FROM mistakes m
 		JOIN questions q ON q.id = m.question_id`+filter+`
 		ORDER BY m.resolved, m.failed_count DESC, m.last_attempted_at DESC
-		LIMIT $5 OFFSET $6`,
-		p.UserID, p.Exam, p.Skill, p.UnresolvedOnly, p.Limit, p.Offset)
+		LIMIT $6 OFFSET $7`,
+		p.UserID, p.Exam, p.Skill, p.UnresolvedOnly, p.Period, p.Limit, p.Offset)
+
 	if err != nil {
 		return nil, 0, fmt.Errorf("list mistakes: %w", err)
 	}

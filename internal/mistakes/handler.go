@@ -80,9 +80,11 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		Exam:           models.ExamType(query.Get("exam")),
 		Skill:          models.SkillType(query.Get("skill")),
 		UnresolvedOnly: query.Get("unresolved") == "true",
+		Period:         query.Get("period"),
 		Limit:          page.Limit,
 		Offset:         page.Offset,
 	})
+
 	if err != nil {
 		httpx.Internal(w, h.log, "mistakes.list", err)
 		return
