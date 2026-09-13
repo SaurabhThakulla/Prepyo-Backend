@@ -34,8 +34,9 @@ func testPool(t *testing.T) *pgxpool.Pool {
 func testService(t *testing.T, pool *pgxpool.Pool) *Service {
 	t.Helper()
 	return NewService(pool, NewRepository(pool), questions.NewRepository(pool),
-		mocks.NewRepository(pool), exams.NewRepository(pool), gamification.NewService(), nil)
+		mocks.NewRepository(pool), exams.NewRepository(pool), gamification.NewService(), nil, nil)
 }
+
 
 // newLearner makes a throwaway user and removes them, and everything that
 // cascades from them, when the test ends.

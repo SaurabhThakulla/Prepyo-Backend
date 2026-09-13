@@ -27,10 +27,27 @@ func NewHandler(db *pgxpool.Pool, repo *Repository, xp *gamification.Service, lo
 // Routes are all private; the caller mounts them behind RequireUser.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
+	r.Use(h.requirePremium)
 	r.Get("/", h.list)
 	r.Post("/{mistakeID}/resolve", h.resolve)
 	return r
 }
+
+func (h *Handler) requirePremium(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := reqctx.User(r.Context())
+		if !ok {
+			httpx.Error(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "Please sign in to continue.")
+			return
+		}
+		if !user.IsAdmin() && !user.HasActivePaidPlan() {
+			httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "Mistake bank is only available for premium members. Please upgrade your plan.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	user := reqctx.MustUser(r.Context())

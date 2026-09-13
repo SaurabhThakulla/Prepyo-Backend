@@ -88,7 +88,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	progressService := progress.NewService(examRepo)
 	gateway := ai.NewGateway(cfg, log)
 	evaluationService := evaluations.NewService(pool, evaluationRepo, questionRepo, examRepo, billingService, gateway, xpService)
-	readingService := reading.NewService(pool, readingRepo, questionRepo, mockRepo, examRepo, xpService, billingService)
+	readingService := reading.NewService(pool, readingRepo, questionRepo, mockRepo, examRepo, xpService, billingService, mistakeRepo)
 
 	return &app{
 		cfg:         cfg,
@@ -103,7 +103,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		questionHandler:     questions.NewHandler(questionRepo, log),
 		readingHandler:      reading.NewHandler(readingService, readingRepo, log),
 		practiceHandler:     practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, examRepo, xpService, billingService, referralService, log),
-		mockHandler:         mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, referralService, log),
+		mockHandler:         mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, mistakeRepo, referralService, log),
 		mistakeHandler:      mistakes.NewHandler(pool, mistakeRepo, xpService, log),
 		evaluationHandler:   evaluations.NewHandler(evaluationService, evaluationRepo, log),
 		aiHandler:           ai.NewHandler(gateway, log),
@@ -157,7 +157,8 @@ func (a *app) router() http.Handler {
 			private.Mount("/reading", a.readingHandler.Routes())
 			private.Mount("/practice", a.practiceHandler.Routes())
 			private.Mount("/mocks", a.mockHandler.Routes())
-			private.Mount("/mistakes", a.mistakeHandler.Routes())
+			private.With(a.authService.RequirePremium).
+				Mount("/mistakes", a.mistakeHandler.Routes())
 			private.Mount("/progress", a.progressHandler.Routes())
 			private.Mount("/gamification", a.gamificationHandler.Routes())
 			private.Mount("/leaderboards", a.leaderboardHandler.Routes())

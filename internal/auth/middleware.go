@@ -52,3 +52,20 @@ func (s *Service) RequireAdmin(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// RequirePremium allows only accounts with an active paid plan or admin access through. Mount it after RequireUser.
+func (s *Service) RequirePremium(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := reqctx.User(r.Context())
+		if !ok {
+			httpx.Error(w, http.StatusUnauthorized, httpx.CodeUnauthorized, "Please sign in to continue.")
+			return
+		}
+		if !user.IsAdmin() && !user.HasActivePaidPlan() {
+			httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "Mistake bank is only available for premium members. Please upgrade your plan.")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+

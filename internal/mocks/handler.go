@@ -11,6 +11,7 @@ import (
 	"github.com/prepyo/backend/internal/billing"
 	"github.com/prepyo/backend/internal/exams"
 	"github.com/prepyo/backend/internal/gamification"
+	"github.com/prepyo/backend/internal/mistakes"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/reqctx"
@@ -29,6 +30,7 @@ type Handler struct {
 	exams     *exams.Repository
 	xp        *gamification.Service
 	billing   *billing.Service
+	mistakes  *mistakes.Repository
 	referrals ReferralsService
 	log       *slog.Logger
 }
@@ -40,6 +42,7 @@ func NewHandler(
 	examRepo *exams.Repository,
 	xp *gamification.Service,
 	billing *billing.Service,
+	mistakeRepo *mistakes.Repository,
 	referrals ReferralsService,
 	log *slog.Logger,
 ) *Handler {
@@ -50,10 +53,12 @@ func NewHandler(
 		exams:     examRepo,
 		xp:        xp,
 		billing:   billing,
+		mistakes:  mistakeRepo,
 		referrals: referrals,
 		log:       log,
 	}
 }
+
 
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
@@ -234,7 +239,33 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.mistakes != nil {
+		for _, answer := range req.Answers {
+			question, ok := bank[answer.QuestionID]
+			if !ok {
+				continue
+			}
+			if !scoring.Deterministic(question.Skill) {
+				continue
+			}
+			gradedRes, ok := scoring.Grade(question, answer)
+			if !ok || gradedRes.IsCorrect {
+				continue
+			}
+			_ = h.mistakes.Record(ctx, tx, mistakes.RecordParams{
+				UserID:          user.ID,
+				QuestionID:      question.ID,
+				Exam:            mock.Exam,
+				ErrorTag:        gradedRes.ErrorTag,
+				UserResponse:    gradedRes.UserDisplay,
+				CorrectResponse: gradedRes.CorrectDisplay,
+				Explanation:     question.Explanation,
+			})
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
+
 		httpx.Internal(w, h.log, "mocks.submit.commit", err)
 		return
 	}

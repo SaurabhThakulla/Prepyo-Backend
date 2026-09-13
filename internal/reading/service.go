@@ -11,6 +11,7 @@ import (
 	"github.com/prepyo/backend/internal/billing"
 	"github.com/prepyo/backend/internal/exams"
 	"github.com/prepyo/backend/internal/gamification"
+	"github.com/prepyo/backend/internal/mistakes"
 	"github.com/prepyo/backend/internal/mocks"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/questions"
@@ -79,6 +80,7 @@ type Service struct {
 	exams     *exams.Repository
 	xp        *gamification.Service
 	billing   *billing.Service
+	mistakes  *mistakes.Repository
 }
 
 func NewService(
@@ -89,6 +91,7 @@ func NewService(
 	examRepo *exams.Repository,
 	xp *gamification.Service,
 	billingService *billing.Service,
+	mistakeRepo *mistakes.Repository,
 ) *Service {
 	return &Service{
 		db:        db,
@@ -98,8 +101,10 @@ func NewService(
 		exams:     examRepo,
 		xp:        xp,
 		billing:   billingService,
+		mistakes:  mistakeRepo,
 	}
 }
+
 
 // ---------------------------------------------------------------------------
 // Practice
@@ -575,7 +580,33 @@ func (s *Service) SubmitMock(
 		return MockResult{}, err
 	}
 
+	if s.mistakes != nil {
+		for _, answer := range answers {
+			question, ok := bank[answer.QuestionID]
+			if !ok {
+				continue
+			}
+			if !scoring.Deterministic(question.Skill) {
+				continue
+			}
+			gradedRes, ok := scoring.Grade(question, answer)
+			if !ok || gradedRes.IsCorrect {
+				continue
+			}
+			_ = s.mistakes.Record(ctx, tx, mistakes.RecordParams{
+				UserID:          user.ID,
+				QuestionID:      question.ID,
+				Exam:            session.Exam,
+				ErrorTag:        gradedRes.ErrorTag,
+				UserResponse:    gradedRes.UserDisplay,
+				CorrectResponse: gradedRes.CorrectDisplay,
+				Explanation:     question.Explanation,
+			})
+		}
+	}
+
 	closed, err := s.repo.CloseSession(ctx, tx, session.ID, StatusSubmitted, &attempt.ID)
+
 	if err != nil {
 		return MockResult{}, err
 	}

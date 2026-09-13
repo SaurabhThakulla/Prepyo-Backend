@@ -61,9 +61,10 @@ type ListParams struct {
 func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, int, error) {
 	const filter = `
 		WHERE m.user_id = $1
-		  AND ($2 = '' OR m.exam = $2)
-		  AND ($3 = '' OR q.skill = $3)
+		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
+		  AND ($3 = '' OR LOWER(q.skill) = LOWER($3))
 		  AND (NOT $4 OR NOT m.resolved)`
+
 
 	var total int
 	err := r.db.QueryRow(ctx, `
