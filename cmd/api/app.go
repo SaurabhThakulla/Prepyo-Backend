@@ -215,7 +215,13 @@ func (a *app) health(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeInternal, "Database unreachable.")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"status": "healthy"})
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"status":        "healthy",
+		"version":       "2026-09-14-ai-fallback",
+		"aiConfigured":  a.cfg.AIEnabled(),
+		"aiBaseURL":     a.cfg.AIBaseURL,
+		"tutoringModel": a.cfg.AIModels.Tutoring,
+	})
 }
 
 // requestLogger logs incoming HTTP requests with latency and status.
