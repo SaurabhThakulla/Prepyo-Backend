@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/prepyo/backend/pkg/config"
@@ -138,49 +139,98 @@ type chatResponse struct {
 	} `json:"error"`
 }
 
+func fallbackCandidates(primary string, isAudio bool) []string {
+	primary = strings.TrimSpace(primary)
+	var pool []string
+	if isAudio {
+		pool = []string{primary, "gemini-3.7-flash", "gemini-3.6-flash"}
+	} else {
+		pool = []string{primary, "gpt-5.6-luna", "claude-sonnet-5", "gpt-5.5", "gemini-3.7-flash"}
+	}
+
+	seen := make(map[string]bool)
+	var result []string
+	for _, m := range pool {
+		m = strings.TrimSpace(m)
+		if m == "" || strings.Contains(strings.ToLower(m), "gemini-3.8") || seen[m] {
+			continue
+		}
+		seen[m] = true
+		result = append(result, m)
+	}
+	if len(result) == 0 {
+		if isAudio {
+			result = []string{"gemini-3.7-flash"}
+		} else {
+			result = []string{"gpt-5.6-luna"}
+		}
+	}
+	return result
+}
+
 // complete sends one chat request and returns the assistant text plus usage.
+// If the primary model fails or is out of capacity, it automatically falls back
+// to other available models in the pool.
 func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion string, messages []chatMessage, wantJSON bool) (string, Usage, error) {
 	if !p.configured() {
 		return "", Usage{}, ErrUnavailable
 	}
 
-	payload := chatRequest{
-		Model:    model,
-		Messages: messages,
-		Temperature: 0.2,
-		MaxTokens:   g.maxTokens,
-	}
-	if wantJSON {
-		payload.ResponseFormat = &responseFmt{Type: "json_object"}
+	isAudio := false
+	for _, m := range messages {
+		if parts, ok := m.Content.([]contentPart); ok {
+			for _, part := range parts {
+				if part.Audio != nil {
+					isAudio = true
+					break
+				}
+			}
+		}
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", Usage{}, fmt.Errorf("encode ai request: %w", err)
-	}
+	candidates := fallbackCandidates(model, isAudio)
 
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		started := time.Now()
-		text, usage, err := g.send(ctx, p, body, model, promptVersion, started)
-		if err == nil {
-			return text, usage, nil
+	for _, candidateModel := range candidates {
+		payload := chatRequest{
+			Model:       candidateModel,
+			Messages:    messages,
+			Temperature: 0.2,
+			MaxTokens:   g.maxTokens,
 		}
-		lastErr = err
+		if wantJSON {
+			payload.ResponseFormat = &responseFmt{Type: "json_object"}
+		}
 
-		if ctx.Err() != nil {
-			return "", Usage{}, ErrUnavailable
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return "", Usage{}, fmt.Errorf("encode ai request: %w", err)
 		}
-		if errors.Is(err, errPermanent) {
-			break
+
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			started := time.Now()
+			text, usage, err := g.send(ctx, p, body, candidateModel, promptVersion, started)
+			if err == nil {
+				return text, usage, nil
+			}
+			lastErr = err
+
+			if ctx.Err() != nil {
+				return "", Usage{}, ErrUnavailable
+			}
+			if errors.Is(err, errPermanent) {
+				break
+			}
+			if attempt < maxAttempts {
+				g.log.Warn("ai request failed, retrying", "model", candidateModel, "attempt", attempt, "error", err)
+				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+			}
 		}
-		if attempt < maxAttempts {
-			g.log.Warn("ai request failed, retrying", "model", model, "attempt", attempt, "error", err)
-			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
-		}
+
+		g.log.Warn("ai model failed, attempting fallback candidate", "failedModel", candidateModel, "error", lastErr)
 	}
 
-	g.log.Error("ai request failed", "model", model, "error", lastErr)
+	g.log.Error("all ai candidate models failed", "primaryModel", model, "error", lastErr)
 	return "", Usage{}, ErrUnavailable
 }
 

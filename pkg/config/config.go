@@ -97,9 +97,9 @@ func Load() (*Config, error) {
 		AIAudioAPIKey:  firstOf("AI_AUDIO_API_KEY", aiKey),
 
 		AIModels: AIModels{
-			Writing:  stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"),
-			Speaking: stringOr("AI_MODEL_SPEAKING", "gemini-3.7-flash"),
-			Tutoring: stringOr("AI_MODEL_TUTORING", "gpt-5.6-luna"),
+			Writing:  cleanAIModel(stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"), "gpt-5.6-luna"),
+			Speaking: cleanAIModel(stringOr("AI_MODEL_SPEAKING", "gemini-3.7-flash"), "gemini-3.7-flash"),
+			Tutoring: cleanAIModel(stringOr("AI_MODEL_TUTORING", "gpt-5.6-luna"), "gpt-5.6-luna"),
 		},
 		SecureCookies: boolOr("SECURE_COOKIES", isProd),
 
@@ -249,6 +249,14 @@ func durationOr(key string, fallback time.Duration) (time.Duration, error) {
 		return fallback, errors.New("must be greater than zero")
 	}
 	return d, nil
+}
+
+func cleanAIModel(val, fallback string) string {
+	val = strings.TrimSpace(val)
+	if val == "" || strings.Contains(strings.ToLower(val), "gemini-3.8") {
+		return fallback
+	}
+	return val
 }
 
 func loadDotEnv() {

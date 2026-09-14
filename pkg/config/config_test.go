@@ -183,3 +183,25 @@ func TestDurationParsing(t *testing.T) {
 		}
 	})
 }
+
+func TestCleanAIModel(t *testing.T) {
+	cases := []struct {
+		input    string
+		fallback string
+		want     string
+	}{
+		{"gemini-3.8-flash-high", "gpt-5.6-luna", "gpt-5.6-luna"},
+		{"GEMINI-3.8", "gpt-5.6-luna", "gpt-5.6-luna"},
+		{"", "default-model", "default-model"},
+		{"  ", "default-model", "default-model"},
+		{"gpt-5.6-luna", "default-model", "gpt-5.6-luna"},
+		{"gemini-3.7-flash", "default-model", "gemini-3.7-flash"},
+	}
+
+	for _, tc := range cases {
+		if got := cleanAIModel(tc.input, tc.fallback); got != tc.want {
+			t.Errorf("cleanAIModel(%q, %q) = %q, want %q", tc.input, tc.fallback, got, tc.want)
+		}
+	}
+}
+

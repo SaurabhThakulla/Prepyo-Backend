@@ -40,3 +40,24 @@ func TestProviderConfigured(t *testing.T) {
 		t.Error("configured() = false with both set")
 	}
 }
+
+func TestFallbackCandidates(t *testing.T) {
+	candidates := fallbackCandidates("gemini-3.8-flash-high", false)
+	for _, c := range candidates {
+		if c == "gemini-3.8-flash-high" {
+			t.Errorf("expected gemini-3.8-flash-high to be excluded from candidates, got %v", candidates)
+		}
+	}
+	if len(candidates) == 0 {
+		t.Fatal("expected fallback candidates, got empty")
+	}
+	if candidates[0] != "gpt-5.6-luna" {
+		t.Errorf("expected first fallback to be gpt-5.6-luna, got %q", candidates[0])
+	}
+
+	audioCandidates := fallbackCandidates("gemini-3.8-flash-high", true)
+	if len(audioCandidates) == 0 || audioCandidates[0] != "gemini-3.7-flash" {
+		t.Errorf("expected first audio fallback to be gemini-3.7-flash, got %v", audioCandidates)
+	}
+}
+
