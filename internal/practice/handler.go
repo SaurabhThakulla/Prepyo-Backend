@@ -64,6 +64,8 @@ func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/attempts", h.listAttempts)
 	r.Post("/attempts", h.submit)
+	r.Post("/start", h.startSession)
+	r.Post("/stop", h.stopSession)
 	return r
 }
 
@@ -252,3 +254,75 @@ func examFor(raw models.ExamType, user models.User) (models.ExamType, bool) {
 	}
 	return raw, raw.Valid()
 }
+
+type StartSessionRequest struct {
+	Exam       string `json:"exam"`
+	Skill      string `json:"skill"`
+	QuestionID string `json:"questionId"`
+}
+
+func (h *Handler) startSession(w http.ResponseWriter, r *http.Request) {
+	var req StartSessionRequest
+	if !httpx.Decode(w, r, &req, h.log, "practice.startSession") {
+		return
+	}
+	if strings.TrimSpace(req.QuestionID) == "" {
+		httpx.ValidationError(w, map[string]string{"questionId": "Required."})
+		return
+	}
+
+	user := reqctx.MustUser(r.Context())
+	ctx := r.Context()
+
+	// Verify daily sub-test allowance before starting
+	state, err := h.billing.CheckSubTestAllowance(ctx, h.db, user, req.QuestionID)
+	if err != nil {
+		if errors.Is(err, billing.ErrLimitReached) {
+			httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "Daily sub-test limit reached.")
+			return
+		}
+		httpx.Internal(w, h.log, "practice.startSession.allowance", err)
+		return
+	}
+
+	// Consume 1 allowance by recording the session start
+	sessionID, err := h.billing.RecordSessionStart(ctx, h.db, user, req.Exam, req.Skill, req.QuestionID)
+	if err != nil {
+		httpx.Internal(w, h.log, "practice.startSession.record", err)
+		return
+	}
+
+	remaining := state.DailySubTestsLimit - state.DailySubTestsUsed - 1
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"sessionId":         sessionID,
+		"remainingSubTests": remaining,
+	})
+}
+
+type StopSessionRequest struct {
+	SessionID string `json:"sessionId"`
+}
+
+func (h *Handler) stopSession(w http.ResponseWriter, r *http.Request) {
+	var req StopSessionRequest
+	if !httpx.Decode(w, r, &req, h.log, "practice.stopSession") {
+		return
+	}
+	if strings.TrimSpace(req.SessionID) == "" {
+		httpx.ValidationError(w, map[string]string{"sessionId": "Required."})
+		return
+	}
+
+	user := reqctx.MustUser(r.Context())
+	if err := h.billing.RecordSessionStop(r.Context(), h.db, user, req.SessionID); err != nil {
+		httpx.Internal(w, h.log, "practice.stopSession", err)
+		return
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+

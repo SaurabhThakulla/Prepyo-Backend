@@ -14,7 +14,8 @@ services:
       # Development default. Production requires a real value; see backend/.env.example.
       SESSION_SECRET: ${SESSION_SECRET:-}
       # Without a key the AI endpoints return 503 rather than inventing scores.
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      CODE_CRAFT: ${CODE_CRAFT:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -80,22 +80,25 @@ func Load() (*Config, error) {
 	}
 	isProd := env == "production"
 
+	aiBaseURL := strings.TrimRight(stringOr("AI_BASE_URL", "https://codecraftapi.com/v1"), "/")
+	aiKey := firstOf("AI_API_KEY", "CODE_CRAFT")
+
 	cfg := &Config{
-		Env:              env,
-		Port:             stringOr("PORT", "8080"),
-		AllowedOrigins:   listOr("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
-		WebAppURL:        stringOr("WEB_APP_URL", "http://localhost:3000"),
-		RedisURL: os.Getenv("REDIS_URL"),
+		Env:            env,
+		Port:           stringOr("PORT", "8080"),
+		AllowedOrigins: listOr("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
+		WebAppURL:      stringOr("WEB_APP_URL", "http://localhost:3000"),
+		RedisURL:       os.Getenv("REDIS_URL"),
 
-		AIBaseURL: strings.TrimRight(stringOr("AI_BASE_URL", "https://codecraftapi.com/v1"), "/"),
-		AIAPIKey: firstOf("AI_API_KEY", "CODE_CRAFT"),
+		AIBaseURL: aiBaseURL,
+		AIAPIKey:  aiKey,
 
-		AIAudioBaseURL: strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", "https://openrouter.ai/api/v1"), "/"),
-		AIAudioAPIKey:  firstOf("AI_AUDIO_API_KEY", "OPENROUTER_API_KEY"),
+		AIAudioBaseURL: strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", aiBaseURL), "/"),
+		AIAudioAPIKey:  firstOf("AI_AUDIO_API_KEY", aiKey),
 
 		AIModels: AIModels{
-			Writing: stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"),
-			Speaking: stringOr("AI_MODEL_SPEAKING", "google/gemini-2.5-flash"),
+			Writing:  stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"),
+			Speaking: stringOr("AI_MODEL_SPEAKING", "gemini-3.7-flash"),
 			Tutoring: stringOr("AI_MODEL_TUTORING", "gpt-5.6-luna"),
 		},
 		SecureCookies: boolOr("SECURE_COOKIES", isProd),

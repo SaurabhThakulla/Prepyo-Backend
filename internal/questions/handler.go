@@ -50,6 +50,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		// Opt-in, for tooling that wants to see the whole bank. A learner-facing
 		// caller wants /api/v1/reading, which serves these with their passage.
 		IncludePassageQuestions: query.Get("includePassageQuestions") == "true",
+		Random:                  query.Get("random") == "true",
 	})
 	if err != nil {
 		httpx.Internal(w, h.log, "questions.list", err)

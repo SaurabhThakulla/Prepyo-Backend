@@ -37,6 +37,8 @@ func Grade(q models.Question, sub models.AnswerSubmission) (Result, bool) {
 		return gradeReorder(q, sub), true
 	case q.TypeID == "write-from-dictation":
 		return gradeDictation(q, sub), true
+	case q.TypeID == "summarize-spoken-text":
+		return gradeListeningSummary(q, sub), true
 	case shortAnswerTypes[q.TypeID]:
 		return gradeShortAnswer(q, sub), true
 	case len(q.CorrectAnswers) > 0 && len(q.Options) > 0:
@@ -222,6 +224,52 @@ func proportional(q models.Question, correct, total int, feedback, correctDispla
 		result.ErrorTag = errorTag
 	}
 	return result
+}
+
+// gradeListeningSummary scores summary word length and key concept coverage for listening summaries.
+func gradeListeningSummary(q models.Question, sub models.AnswerSubmission) Result {
+	text := strings.TrimSpace(sub.TextResponse)
+	wordList := words(text)
+	count := len(wordList)
+
+	if count == 0 {
+		return proportional(q, 0, 10, "No summary submitted.", "50-70 words covering key points.", orPlaceholder(text), "Summary length")
+	}
+
+	formScore := 0
+	var lengthFeedback string
+	if count >= 50 && count <= 70 {
+		formScore = 5
+		lengthFeedback = fmt.Sprintf("Summary length (%d words) is within the recommended 50-70 word range.", count)
+	} else if (count >= 40 && count < 50) || (count > 70 && count <= 90) {
+		formScore = 3
+		lengthFeedback = fmt.Sprintf("Summary length is %d words. Target 50-70 words for full marks.", count)
+	} else {
+		formScore = 1
+		lengthFeedback = fmt.Sprintf("Summary length is %d words. Target 50-70 words.", count)
+	}
+
+	keyMatches := 0
+	lowerText := strings.ToLower(text)
+	for _, kw := range q.CorrectAnswers {
+		if strings.Contains(lowerText, strings.ToLower(kw)) {
+			keyMatches++
+		}
+	}
+
+	totalKeywords := len(q.CorrectAnswers)
+	contentScore := 0
+	if totalKeywords > 0 {
+		contentScore = int(math.Round(float64(keyMatches) / float64(totalKeywords) * 5.0))
+	} else {
+		contentScore = 5
+	}
+
+	totalScore := formScore + contentScore
+	maxPossible := 10
+
+	feedback := fmt.Sprintf("%s Captured %d of %d key concepts.", lengthFeedback, keyMatches, totalKeywords)
+	return proportional(q, totalScore, maxPossible, feedback, "50-70 words including key points: "+strings.Join(q.CorrectAnswers, ", "), orPlaceholder(text), "Content & Form")
 }
 
 var nonWord = regexp.MustCompile(`[^\p{L}\p{N}\s']+`)

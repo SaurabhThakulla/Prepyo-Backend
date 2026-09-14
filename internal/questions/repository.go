@@ -39,6 +39,9 @@ type ListParams struct {
 
 	// IncludePassageQuestions includes reading questions that belong to a passage.
 	IncludePassageQuestions bool
+
+	// Random orders the results randomly instead of by id.
+	Random bool
 }
 
 // List returns published questions matching the filters.
@@ -57,9 +60,14 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question,
 		return nil, 0, fmt.Errorf("count questions: %w", err)
 	}
 
+	orderClause := "ORDER BY id"
+	if p.Random {
+		orderClause = "ORDER BY RANDOM()"
+	}
+
 	rows, err := r.db.Query(ctx, `
 		SELECT `+selectFields+` FROM questions`+where+`
-		ORDER BY id
+		`+orderClause+`
 		LIMIT $5 OFFSET $6`,
 		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, p.Limit, p.Offset)
 	if err != nil {

@@ -257,3 +257,28 @@ func TestGradeSentenceCompletionAcceptsAChosenOption(t *testing.T) {
 		t.Error("an accepted alternative spelling typed in was marked wrong")
 	}
 }
+
+func TestGradeListeningSummary(t *testing.T) {
+	q := models.Question{
+		TypeID:         "summarize-spoken-text",
+		Points:         10,
+		CorrectAnswers: []string{"renewable", "grid", "storage", "battery", "stability"},
+	}
+
+	// Good summary within 50-70 words (59 words) matching keywords
+	goodSummary := "The transition toward renewable energy introduces substantial intermittency issues that challenge power grid stability across the country. To address these volatility problems, electrical engineers are deploying utility scale battery storage and intelligent microgrids to regulate energy consumption effectively. These advanced solutions ensure that frequency remains constant while integrating sustainable solar and wind sources into national grids."
+	got, ok := Grade(q, models.AnswerSubmission{TextResponse: goodSummary})
+	if !ok {
+		t.Fatal("Grade() returned ok=false for summarize-spoken-text")
+	}
+	if got.Score < 8 {
+		t.Errorf("expected high score for good summary, got %v", got.Score)
+	}
+
+	// Empty summary
+	emptyGot, _ := Grade(q, models.AnswerSubmission{TextResponse: ""})
+	if emptyGot.Score != 0 || emptyGot.IsCorrect {
+		t.Errorf("empty summary scored %v, want 0", emptyGot.Score)
+	}
+}
+

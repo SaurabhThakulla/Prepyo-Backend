@@ -93,7 +93,18 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 		  WHERE pa.user_id = $1 AND pa.created_at >= $2 AND pa.created_at < $3)
 		+
 		(SELECT count(*) FROM ai_evaluations
-		  WHERE user_id = $1 AND created_at >= $2 AND created_at < $3)`
+		  WHERE user_id = $1 AND created_at >= $2 AND created_at < $3)
+		+
+		(SELECT count(*) FROM practice_sessions ps
+		  WHERE ps.user_id = $1 AND ps.created_at >= $2 AND ps.created_at < $3
+		    AND NOT EXISTS (
+		        SELECT 1 FROM practice_attempts pa
+		        WHERE pa.user_id = ps.user_id AND pa.created_at >= $2 AND pa.question_id = ps.item_id
+		    )
+		    AND NOT EXISTS (
+		        SELECT 1 FROM ai_evaluations ae
+		        WHERE ae.user_id = ps.user_id AND ae.created_at >= $2 AND ae.question_id = ps.item_id
+		    ))`
 
 	// For free plans, full mocks are counted lifetime (1 included on signup +
 	// bonuses). For paid active plans, they are counted per calendar month.
@@ -209,6 +220,35 @@ func (s *Service) CheckMockAllowance(ctx context.Context, db database.DB, user m
 		return state, ErrMockLimitReached
 	}
 	return state, nil
+}
+
+// RecordSessionStart records the start of a practice task or sub-test session, consuming allowance.
+func (s *Service) RecordSessionStart(ctx context.Context, db database.DB, user models.User, exam, skill, itemID string) (string, error) {
+	var sessionID string
+	err := db.QueryRow(ctx, `
+		INSERT INTO practice_sessions (user_id, exam, skill, item_id, status)
+		VALUES ($1, $2, $3, $4, 'active')
+		RETURNING id::text`,
+		user.ID, exam, skill, itemID,
+	).Scan(&sessionID)
+	if err != nil {
+		return "", fmt.Errorf("record session start: %w", err)
+	}
+	return sessionID, nil
+}
+
+// RecordSessionStop marks an active practice session as stopped.
+func (s *Service) RecordSessionStop(ctx context.Context, db database.DB, user models.User, sessionID string) error {
+	_, err := db.Exec(ctx, `
+		UPDATE practice_sessions
+		   SET status = 'stopped', stopped_at = now()
+		 WHERE id = $1 AND user_id = $2 AND status = 'active'`,
+		sessionID, user.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("record session stop: %w", err)
+	}
+	return nil
 }
 
 type ConfirmPaymentParams struct {

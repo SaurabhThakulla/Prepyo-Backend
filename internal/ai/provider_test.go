@@ -11,7 +11,7 @@ func TestProviderCompletionsURL(t *testing.T) {
 		want    string
 	}{
 		{"codecraft", "https://codecraftapi.com/v1", "https://codecraftapi.com/v1/chat/completions"},
-		{"openrouter", "https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1/chat/completions"},
+		{"custom", "https://api.example.com/v1", "https://api.example.com/v1/chat/completions"},
 	}
 
 	for _, tc := range cases {
