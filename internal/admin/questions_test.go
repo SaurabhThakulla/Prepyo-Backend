@@ -154,6 +154,15 @@ func TestLinksMustBeWebLinks(t *testing.T) {
 	}
 }
 
+func TestAssetLinksAllowed(t *testing.T) {
+	_, problems := newAuthoredQuestion{
+		Exam: "PTE", TypeID: "pte-describe-image", Title: "x", ImageURL: "/api/v1/questions/assets/img_123",
+	}.normalise()
+	if problems["imageUrl"] != "" {
+		t.Fatalf("expected asset url to be accepted, got error: %v", problems["imageUrl"])
+	}
+}
+
 func TestEveryAuthorableTypeIsWellFormed(t *testing.T) {
 	seen := map[string]bool{}
 	for _, spec := range authorableTypes {

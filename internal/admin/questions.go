@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -418,6 +420,9 @@ func orDefault(value, fallback int) int {
 }
 
 func isWebURL(value string) bool {
+	if strings.HasPrefix(value, "/api/v1/questions/assets/") || strings.HasPrefix(value, "/api/") || strings.HasPrefix(value, "data:image/") {
+		return true
+	}
 	parsed, err := url.Parse(value)
 	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
 }
@@ -495,11 +500,108 @@ func (h *Handler) authoredQuestions(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"questions": list})
 }
 
+const maxQuestionImageBytes = 5 << 20 // 5 MiB
+
+var allowedQuestionImageTypes = map[string]bool{
+	"image/jpeg":    true,
+	"image/png":     true,
+	"image/webp":    true,
+	"image/gif":     true,
+	"image/svg+xml": true,
+}
+
+func (h *Handler) uploadQuestionImage(w http.ResponseWriter, r *http.Request) {
+	_ = reqctx.MustUser(r.Context())
+
+	var data []byte
+	var contentType string
+
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(maxQuestionImageBytes); err != nil {
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "That file is larger than 5 MB. Please choose a smaller image.")
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			file, header, err = r.FormFile("image")
+		}
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "No image file was attached.")
+			return
+		}
+		defer file.Close()
+
+		limited := io.LimitReader(file, maxQuestionImageBytes+1)
+		readBytes, err := io.ReadAll(limited)
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Could not read uploaded image file.")
+			return
+		}
+		if len(readBytes) > maxQuestionImageBytes {
+			httpx.Error(w, http.StatusRequestEntityTooLarge, httpx.CodeBadRequest, "Image exceeds the 5 MB limit.")
+			return
+		}
+		data = readBytes
+		contentType = header.Header.Get("Content-Type")
+	} else {
+		body := http.MaxBytesReader(w, r.Body, maxQuestionImageBytes)
+		readBytes, err := io.ReadAll(body)
+		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				httpx.Error(w, http.StatusRequestEntityTooLarge, httpx.CodeBadRequest, "Image exceeds the 5 MB limit.")
+				return
+			}
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Could not read uploaded image file.")
+			return
+		}
+		data = readBytes
+	}
+
+	if len(data) == 0 {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Uploaded file is empty.")
+		return
+	}
+
+	sniffed := http.DetectContentType(data)
+	if allowedQuestionImageTypes[sniffed] {
+		contentType = sniffed
+	} else if strings.Contains(string(data[:min(len(data), 512)]), "<svg") {
+		contentType = "image/svg+xml"
+	}
+
+	if !allowedQuestionImageTypes[contentType] {
+		httpx.Error(w, http.StatusUnsupportedMediaType, httpx.CodeBadRequest, "Please upload a PNG, JPEG, WebP, SVG, or GIF image.")
+		return
+	}
+
+	assetID := fmt.Sprintf("img_%d_%x", time.Now().UnixNano(), rand.Uint32())
+
+	_, err := h.db.Exec(r.Context(), `
+		INSERT INTO question_assets (id, content_type, byte_size, data)
+		VALUES ($1, $2, $3, $4)`,
+		assetID, contentType, len(data), data,
+	)
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.uploadQuestionImage", err)
+		return
+	}
+
+	h.log.Info("admin uploaded question image", "assetId", assetID, "size", len(data), "type", contentType)
+
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"url":         "/api/v1/questions/assets/" + assetID,
+		"assetId":     assetID,
+		"contentType": contentType,
+		"size":        len(data),
+	})
+}
+
 func (h *Handler) createQuestion(w http.ResponseWriter, r *http.Request) {
 	actor := reqctx.MustUser(r.Context())
 
 	var req newAuthoredQuestion
-	if !httpx.DecodeLimit(w, r, &req, h.log, "admin.createQuestion", 1<<20) {
+	if !httpx.DecodeLimit(w, r, &req, h.log, "admin.createQuestion", 5<<20) {
 		return
 	}
 
@@ -773,7 +875,7 @@ func (h *Handler) updateQuestion(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var req newAuthoredQuestion
-	if !httpx.DecodeLimit(w, r, &req, h.log, "admin.updateQuestion", 1<<20) {
+	if !httpx.DecodeLimit(w, r, &req, h.log, "admin.updateQuestion", 5<<20) {
 		return
 	}
 

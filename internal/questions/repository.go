@@ -180,3 +180,27 @@ func fieldsOf(q *models.Question) []any {
 		&q.SupportedExams,
 	}
 }
+
+type QuestionAsset struct {
+	ID          string
+	ContentType string
+	ByteSize    int
+	Data        []byte
+}
+
+func (r *Repository) GetAsset(ctx context.Context, id string) (QuestionAsset, error) {
+	var asset QuestionAsset
+	err := r.db.QueryRow(ctx, `
+		SELECT id, content_type, byte_size, data
+		  FROM question_assets
+		 WHERE id = $1`,
+		id,
+	).Scan(&asset.ID, &asset.ContentType, &asset.ByteSize, &asset.Data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return QuestionAsset{}, ErrNotFound
+	}
+	if err != nil {
+		return QuestionAsset{}, fmt.Errorf("read asset: %w", err)
+	}
+	return asset, nil
+}

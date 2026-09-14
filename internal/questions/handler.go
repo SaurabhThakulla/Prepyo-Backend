@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/models"
@@ -22,8 +23,29 @@ func NewHandler(repo *Repository, log *slog.Logger) *Handler {
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/", h.list)
+	r.Get("/assets/{assetID}", h.getAsset)
 	r.Get("/{questionID}", h.get)
 	return r
+}
+
+func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
+	assetID := chi.URLParam(r, "assetID")
+	asset, err := h.repo.GetAsset(r.Context(), assetID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "Asset not found.")
+			return
+		}
+		httpx.Internal(w, h.log, "questions.getAsset", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", asset.ContentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(asset.Data)))
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(asset.Data)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
