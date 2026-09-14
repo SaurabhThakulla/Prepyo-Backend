@@ -215,11 +215,17 @@ func (a *app) health(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeInternal, "Database unreachable.")
 		return
 	}
+	keyPrefix := ""
+	if len(a.cfg.AIAPIKey) >= 6 {
+		keyPrefix = a.cfg.AIAPIKey[:6] + "..."
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"status":        "healthy",
-		"version":       "2026-09-14-ai-fallback",
+		"version":       "2026-09-14-ai-fallback-v2",
 		"aiConfigured":  a.cfg.AIEnabled(),
 		"aiBaseURL":     a.cfg.AIBaseURL,
+		"aiKeyLen":      len(a.cfg.AIAPIKey),
+		"aiKeyPrefix":   keyPrefix,
 		"tutoringModel": a.cfg.AIModels.Tutoring,
 	})
 }

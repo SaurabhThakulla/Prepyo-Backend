@@ -2,6 +2,7 @@ package ai
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -51,9 +52,10 @@ func (h *Handler) tutor(w http.ResponseWriter, r *http.Request) {
 		TaskContext: req.TaskContext,
 	})
 	if err != nil {
+		h.log.Error("ai.tutor failed", "err", err)
 		if errors.Is(err, ErrUnavailable) || errors.Is(err, ErrBadOutput) {
 			httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeAIUnavailable,
-				"The tutor is unavailable right now. Please try again shortly.")
+				fmt.Sprintf("The tutor is unavailable right now: %v", err))
 			return
 		}
 		httpx.Internal(w, h.log, "ai.tutor", err)

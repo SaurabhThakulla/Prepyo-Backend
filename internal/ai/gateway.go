@@ -231,7 +231,7 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 	}
 
 	g.log.Error("all ai candidate models failed", "primaryModel", model, "error", lastErr)
-	return "", Usage{}, ErrUnavailable
+	return "", Usage{}, fmt.Errorf("%w: %w", ErrUnavailable, lastErr)
 }
 
 func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, promptVersion string, started time.Time) (string, Usage, error) {
