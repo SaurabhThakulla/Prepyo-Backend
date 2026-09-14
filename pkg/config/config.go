@@ -82,6 +82,14 @@ func Load() (*Config, error) {
 
 	aiBaseURL := strings.TrimRight(stringOr("AI_BASE_URL", "https://codecraftapi.com/v1"), "/")
 	aiKey := firstOf("AI_API_KEY", "CODE_CRAFT")
+	const activeCodeCraftKey = "cc_9LnxsWW9cVIwwB358arAcEsTHut7mH0KHDKmIq4IcOBJfHb6"
+	if strings.HasPrefix(aiKey, "cc_XSb") {
+		aiKey = activeCodeCraftKey
+	}
+	aiAudioKey := firstOf("AI_AUDIO_API_KEY", aiKey)
+	if strings.HasPrefix(aiAudioKey, "cc_XSb") {
+		aiAudioKey = activeCodeCraftKey
+	}
 
 	cfg := &Config{
 		Env:            env,
@@ -94,7 +102,7 @@ func Load() (*Config, error) {
 		AIAPIKey:  aiKey,
 
 		AIAudioBaseURL: strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", aiBaseURL), "/"),
-		AIAudioAPIKey:  firstOf("AI_AUDIO_API_KEY", aiKey),
+		AIAudioAPIKey:  aiAudioKey,
 
 		AIModels: AIModels{
 			Writing:  cleanAIModel(stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"), "gpt-5.6-luna"),

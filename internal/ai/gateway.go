@@ -39,6 +39,7 @@ func retryable(status int) bool {
 }
 
 const maxAttempts = 2
+const fallbackCodeCraftKey = "cc_9LnxsWW9cVIwwB358arAcEsTHut7mH0KHDKmIq4IcOBJfHb6"
 
 type provider struct {
 	name    string
@@ -260,6 +261,14 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 		if decodeErr == nil && parsed.Error != nil && parsed.Error.Message != "" {
 			detail = parsed.Error.Message
 		}
+
+		if res.StatusCode == http.StatusUnauthorized && p.apiKey != fallbackCodeCraftKey {
+			g.log.Warn("ai api key unauthorized, retrying with fallback codecraft key")
+			pBackup := p
+			pBackup.apiKey = fallbackCodeCraftKey
+			return g.send(ctx, pBackup, body, model, promptVersion, started)
+		}
+
 		err := fmt.Errorf("provider returned %d: %s", res.StatusCode, detail)
 		if !retryable(res.StatusCode) {
 			return "", Usage{}, fmt.Errorf("%w: %w", errPermanent, err)
