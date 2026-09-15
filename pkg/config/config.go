@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,14 +16,14 @@ type Config struct {
 	Env            string
 	Port           string
 	AllowedOrigins []string
-	WebAppURL      string
+	// TrustedProxyCIDRs enumerates reverse proxies allowed to supply X-Forwarded-For.
+	TrustedProxyCIDRs []string
+	WebAppURL         string
 
 	DatabaseURL string
 	RedisURL    string
 
-	// SessionSecret signs session cookies. Rotating it logs everyone out.
-	SessionSecret string
-	SessionTTL    time.Duration
+	SessionTTL time.Duration
 	// SecureCookies must be true anywhere the app is served over HTTPS.
 	SecureCookies bool
 
@@ -82,21 +83,15 @@ func Load() (*Config, error) {
 
 	aiBaseURL := strings.TrimRight(stringOr("AI_BASE_URL", "https://codecraftapi.com/v1"), "/")
 	aiKey := firstOf("AI_API_KEY", "CODE_CRAFT")
-	const activeCodeCraftKey = "cc_9LnxsWW9cVIwwB358arAcEsTHut7mH0KHDKmIq4IcOBJfHb6"
-	if strings.HasPrefix(aiKey, "cc_XSb") {
-		aiKey = activeCodeCraftKey
-	}
 	aiAudioKey := firstOf("AI_AUDIO_API_KEY", aiKey)
-	if strings.HasPrefix(aiAudioKey, "cc_XSb") {
-		aiAudioKey = activeCodeCraftKey
-	}
 
 	cfg := &Config{
-		Env:            env,
-		Port:           stringOr("PORT", "8080"),
-		AllowedOrigins: listOr("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
-		WebAppURL:      stringOr("WEB_APP_URL", "http://localhost:3000"),
-		RedisURL:       os.Getenv("REDIS_URL"),
+		Env:               env,
+		Port:              stringOr("PORT", "8080"),
+		AllowedOrigins:    listOr("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
+		TrustedProxyCIDRs: listOr("TRUSTED_PROXY_CIDRS", nil),
+		WebAppURL:         stringOr("WEB_APP_URL", "http://localhost:3000"),
+		RedisURL:          os.Getenv("REDIS_URL"),
 
 		AIBaseURL: aiBaseURL,
 		AIAPIKey:  aiKey,
@@ -124,20 +119,15 @@ func Load() (*Config, error) {
 			problems = append(problems, "WEB_DIST_DIR is set but has no index.html in it: "+cfg.WebDistDir)
 		}
 	}
+	for _, prefix := range cfg.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(prefix); err != nil {
+			problems = append(problems, "TRUSTED_PROXY_CIDRS contains an invalid CIDR: "+prefix)
+		}
+	}
 
 	cfg.DatabaseURL = os.Getenv("DATABASE_URL")
 	if cfg.DatabaseURL == "" {
 		problems = append(problems, "DATABASE_URL is required")
-	}
-
-	cfg.SessionSecret = os.Getenv("SESSION_SECRET")
-	switch {
-	case cfg.SessionSecret == "" && isProd:
-		problems = append(problems, "SESSION_SECRET is required in production")
-	case cfg.SessionSecret == "":
-		cfg.SessionSecret = "dev-only-insecure-session-secret"
-	case len(cfg.SessionSecret) < 32:
-		problems = append(problems, "SESSION_SECRET must be at least 32 characters")
 	}
 
 	ttl, err := durationOr("SESSION_TTL", 14*24*time.Hour)

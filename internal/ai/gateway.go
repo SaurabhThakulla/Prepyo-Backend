@@ -39,7 +39,6 @@ func retryable(status int) bool {
 }
 
 const maxAttempts = 2
-const fallbackCodeCraftKey = "cc_9LnxsWW9cVIwwB358arAcEsTHut7mH0KHDKmIq4IcOBJfHb6"
 
 type provider struct {
 	name    string
@@ -70,9 +69,9 @@ type Gateway struct {
 
 func NewGateway(cfg *config.Config, log *slog.Logger) *Gateway {
 	return &Gateway{
-		client: &http.Client{Timeout: cfg.AIRequestTimeout},
-		text:   newProvider(cfg.AIBaseURL, cfg.AIAPIKey),
-		audio:  newProvider(cfg.AIAudioBaseURL, cfg.AIAudioAPIKey),
+		client:    &http.Client{Timeout: cfg.AIRequestTimeout},
+		text:      newProvider(cfg.AIBaseURL, cfg.AIAPIKey),
+		audio:     newProvider(cfg.AIAudioBaseURL, cfg.AIAudioAPIKey),
 		models:    cfg.AIModels,
 		maxTokens: cfg.AIMaxTokens,
 		log:       log,
@@ -260,13 +259,6 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 		detail := "no detail"
 		if decodeErr == nil && parsed.Error != nil && parsed.Error.Message != "" {
 			detail = parsed.Error.Message
-		}
-
-		if res.StatusCode == http.StatusUnauthorized && p.apiKey != fallbackCodeCraftKey {
-			g.log.Warn("ai api key unauthorized, retrying with fallback codecraft key")
-			pBackup := p
-			pBackup.apiKey = fallbackCodeCraftKey
-			return g.send(ctx, pBackup, body, model, promptVersion, started)
 		}
 
 		err := fmt.Errorf("provider returned %d: %s", res.StatusCode, detail)

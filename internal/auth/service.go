@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,7 +27,8 @@ var (
 	// ErrAdminCredentials covers a wrong email, a wrong password and an account
 	// that is not an admin. They are one error on purpose: the response must not
 	// tell a guesser which half they got right.
-	ErrAdminCredentials = errors.New("admin credentials are not valid")
+	ErrAdminCredentials      = errors.New("admin credentials are not valid")
+	ErrAdminLoginRateLimited = errors.New("admin login rate limited")
 )
 
 type ReferralsService interface {
@@ -46,6 +48,8 @@ type Service struct {
 	// environment. No password is stored in the database for anyone.
 	adminEmail    string
 	adminPassword string
+	adminMu       sync.Mutex
+	adminAttempts map[string][]time.Time
 }
 
 func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals ReferralsService, ttl time.Duration, log *slog.Logger, google *GoogleVerifier, adminEmail, adminPassword string) *Service {
@@ -59,6 +63,7 @@ func NewService(db *pgxpool.Pool, userRepo *users.Repository, referrals Referral
 		google:        google,
 		adminEmail:    strings.ToLower(strings.TrimSpace(adminEmail)),
 		adminPassword: adminPassword,
+		adminAttempts: make(map[string][]time.Time),
 	}
 }
 
@@ -77,6 +82,9 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 	}
 
 	email = strings.ToLower(strings.TrimSpace(email))
+	if !s.allowAdminAttempt(email, time.Now()) {
+		return models.User{}, "", ErrAdminLoginRateLimited
+	}
 
 	// Both halves are compared in constant time and combined without a short
 	// circuit, so response timing does not leak which one matched.
@@ -113,6 +121,29 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 }
 
 // Authenticate resolves a session token to its user.
+const adminLoginWindow = 10 * time.Minute
+const adminLoginMaxAttempts = 5
+
+// allowAdminAttempt adds an account/email dimension to the outer IP limiter.
+// The key is the normalized email, so changing IPs does not evade throttling.
+func (s *Service) allowAdminAttempt(email string, now time.Time) bool {
+	s.adminMu.Lock()
+	defer s.adminMu.Unlock()
+
+	cutoff := now.Add(-adminLoginWindow)
+	attempts := s.adminAttempts[email][:0]
+	for _, at := range s.adminAttempts[email] {
+		if at.After(cutoff) {
+			attempts = append(attempts, at)
+		}
+	}
+	if len(attempts) >= adminLoginMaxAttempts {
+		s.adminAttempts[email] = attempts
+		return false
+	}
+	s.adminAttempts[email] = append(attempts, now)
+	return true
+}
 func (s *Service) Authenticate(ctx context.Context, token string) (models.User, error) {
 	hash := hashToken(token)
 

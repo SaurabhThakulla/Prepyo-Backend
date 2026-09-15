@@ -38,9 +38,6 @@ func TestLoadDevelopmentDefaults(t *testing.T) {
 	if cfg.Env != "development" {
 		t.Errorf("Env = %q, want development", cfg.Env)
 	}
-	if cfg.SessionSecret == "" {
-		t.Error("SessionSecret is empty; development should get a usable fallback")
-	}
 	if cfg.SecureCookies {
 		t.Error("SecureCookies = true in development, want false so local HTTP works")
 	}
@@ -57,35 +54,17 @@ func TestLoadProductionRequirements(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "missing session secret",
-			env: map[string]string{
-				"SESSION_SECRET":     "",
-				"AI_API_KEY":         "key",
-			},
-			wantErr: "SESSION_SECRET",
-		},
-		{
-			name: "short session secret",
-			env: map[string]string{
-				"SESSION_SECRET":     "too-short",
-				"AI_API_KEY":         "key",
-			},
-			wantErr: "at least 32 characters",
-		},
-		{
 			name: "missing ai key",
 			env: map[string]string{
-				"SESSION_SECRET":     strings.Repeat("a", 40),
-				"AI_API_KEY":         "",
+				"AI_API_KEY": "",
 			},
 			wantErr: "AI_API_KEY",
 		},
 		{
 			name: "localhost origin",
 			env: map[string]string{
-				"SESSION_SECRET":     strings.Repeat("a", 40),
-				"AI_API_KEY":         "key",
-				"ALLOWED_ORIGINS":    "https://prepyo.np,http://localhost:3000",
+				"AI_API_KEY":      "key",
+				"ALLOWED_ORIGINS": "https://prepyo.np,http://localhost:3000",
 			},
 			wantErr: "localhost",
 		},
@@ -116,12 +95,11 @@ func TestLoadProductionRequirements(t *testing.T) {
 
 func TestLoadProductionSucceedsWhenConfigured(t *testing.T) {
 	setEnv(t, map[string]string{
-		"APP_ENV":            "production",
-		"DATABASE_URL":       "postgres://db/prepyo",
-		"ALLOWED_ORIGINS":    "https://prepyo.np",
-		"SESSION_SECRET":     strings.Repeat("a", 40),
-		"AI_API_KEY":         "key",
-		"GOOGLE_CLIENT_ID":   "prepyo.apps.googleusercontent.com",
+		"APP_ENV":          "production",
+		"DATABASE_URL":     "postgres://db/prepyo",
+		"ALLOWED_ORIGINS":  "https://prepyo.np",
+		"AI_API_KEY":       "key",
+		"GOOGLE_CLIENT_ID": "prepyo.apps.googleusercontent.com",
 	})
 
 	cfg, err := Load()
@@ -140,18 +118,17 @@ func TestLoadProductionSucceedsWhenConfigured(t *testing.T) {
 // everything that needs fixing.
 func TestLoadReportsAllProblemsTogether(t *testing.T) {
 	setEnv(t, map[string]string{
-		"APP_ENV":            "production",
-		"DATABASE_URL":       "",
-		"SESSION_SECRET":     "",
-		"AI_API_KEY":         "",
-		"ALLOWED_ORIGINS":    "https://prepyo.np",
+		"APP_ENV":         "production",
+		"DATABASE_URL":    "",
+		"AI_API_KEY":      "",
+		"ALLOWED_ORIGINS": "https://prepyo.np",
 	})
 
 	_, err := Load()
 	if err == nil {
 		t.Fatal("Load() succeeded, want an error")
 	}
-	for _, want := range []string{"DATABASE_URL", "SESSION_SECRET", "AI_API_KEY"} {
+	for _, want := range []string{"DATABASE_URL", "AI_API_KEY"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not mention %q; got:\n%s", want, err)
 		}
@@ -204,4 +181,3 @@ func TestCleanAIModel(t *testing.T) {
 		}
 	}
 }
-

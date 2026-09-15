@@ -105,7 +105,6 @@ func NewService(
 	}
 }
 
-
 // ---------------------------------------------------------------------------
 // Practice
 // ---------------------------------------------------------------------------
@@ -528,7 +527,13 @@ func (s *Service) SubmitMock(
 		return MockResult{}, err
 	}
 
-	graded := mocks.GradeAnswers(bank, answers)
+	graded, err := mocks.GradeAnswers(bank, session.QuestionIDs, answers)
+	if errors.Is(err, mocks.ErrInvalidAnswers) {
+		return MockResult{}, ErrNoAnswers
+	}
+	if err != nil {
+		return MockResult{}, err
+	}
 	if graded.Total == 0 {
 		return MockResult{}, ErrNoAnswers
 	}

@@ -10,10 +10,7 @@ services:
       PORT: 8080
       ALLOWED_ORIGINS: http://localhost:3000
       DATABASE_URL: postgres://prepyo:prepyo_pass@postgres:5432/prepyo_db?sslmode=disable
-      REDIS_URL: redis://redis:6379
-      # Development default. Production requires a real value; see backend/.env.example.
-      SESSION_SECRET: ${SESSION_SECRET:-}
-      # Without a key the AI endpoints return 503 rather than inventing scores.
+      REDIS_URL: redis://redis:6379`n      # Without a key the AI endpoints return 503 rather than inventing scores.
       AI_API_KEY: ${AI_API_KEY:-}
       CODE_CRAFT: ${CODE_CRAFT:-}
     depends_on:

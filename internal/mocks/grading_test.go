@@ -1,6 +1,7 @@
 package mocks
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/prepyo/backend/internal/models"
@@ -132,5 +133,32 @@ func TestGradeAllWithNoAnswers(t *testing.T) {
 
 	if got.total != 0 {
 		t.Errorf("total = %d, want 0", got.total)
+	}
+}
+func TestGradeCanonicalCountsMissingDeterministicAnswersAsZero(t *testing.T) {
+	got, err := gradeCanonical(bank(), []string{"r1", "r2", "l1"}, []models.AnswerSubmission{
+		{QuestionID: "r1", BlankResponses: map[string]string{"b1": "debunked"}},
+	})
+	if err != nil {
+		t.Fatalf("gradeCanonical() error = %v", err)
+	}
+	if got.total != 3 || got.correct != 1 {
+		t.Fatalf("total/correct = %d/%d, want 3/1", got.total, got.correct)
+	}
+	if got.accuracy() >= 1 {
+		t.Fatalf("one correct answer scored 100%%: accuracy=%v", got.accuracy())
+	}
+}
+
+func TestGradeCanonicalRejectsUnknownAndDuplicateAnswers(t *testing.T) {
+	for name, answers := range map[string][]models.AnswerSubmission{
+		"unknown":   {{QuestionID: "not-in-this-mock"}},
+		"duplicate": {{QuestionID: "r1"}, {QuestionID: "r1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := gradeCanonical(bank(), []string{"r1", "r2"}, answers); !errors.Is(err, ErrInvalidAnswers) {
+				t.Fatalf("error = %v, want ErrInvalidAnswers", err)
+			}
+		})
 	}
 }

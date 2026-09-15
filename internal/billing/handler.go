@@ -26,11 +26,12 @@ func NewHandler(db *pgxpool.Pool, repo *Repository, service *Service, log *slog.
 	return &Handler{db: db, repo: repo, service: service, log: log}
 }
 
-// Routes: /plans and /webhook are public; the rest need a session.
+// Routes: /plans is public; the webhook is deliberately fail-closed until a
+// provider-specific signature and transaction verifier is configured.
 func (h *Handler) Routes(requireUser func(http.Handler) http.Handler) chi.Router {
 	r := chi.NewRouter()
 	r.Get("/plans", h.plans)
-	r.Post("/webhook", h.webhook)
+	r.Post("/webhook", h.webhookUnavailable)
 
 	r.Group(func(private chi.Router) {
 		private.Use(requireUser)
@@ -201,46 +202,12 @@ func decodeProof(raw string) ([]byte, string, error) {
 // queue, and an unbounded blob per row makes that listing expensive.
 const maxProofBytes = 4 << 20
 
-type webhookPayload struct {
-	UserID         string `json:"userId"`
-	PlanID         string `json:"planId"`
-	PaymentGateway string `json:"paymentGateway"`
-	TransactionID  string `json:"transactionId"`
-	Status         string `json:"status"`
-	AmountNPR      int    `json:"amountNPR"`
+// webhookUnavailable never reads or acts on attacker-controlled payment data.
+// Re-enable only with provider signature verification and server-side lookup.
+func (h *Handler) webhookUnavailable(w http.ResponseWriter, _ *http.Request) {
+	httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeNotConfigured,
+		"Automated payment confirmation is not configured.")
 }
-
-func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
-	var payload webhookPayload
-	if !httpx.Decode(w, r, &payload, h.log, "billing.webhook") {
-		return
-	}
-
-	if payload.Status != "success" && payload.Status != "COMPLETE" {
-		// Non-successful events do not grant bonuses
-		httpx.JSON(w, http.StatusOK, map[string]any{"received": true, "applied": false})
-		return
-	}
-
-	state, err := h.service.ConfirmPayment(r.Context(), h.db, ConfirmPaymentParams{
-		UserID:         payload.UserID,
-		PlanID:         payload.PlanID,
-		PaymentGateway: payload.PaymentGateway,
-		TransactionID:  payload.TransactionID,
-		AmountNPR:      payload.AmountNPR,
-	})
-	if err != nil {
-		httpx.Internal(w, h.log, "billing.webhook", err)
-		return
-	}
-
-	httpx.JSON(w, http.StatusOK, map[string]any{
-		"received":     true,
-		"applied":      true,
-		"subscription": state,
-	})
-}
-
 
 // queued lists the plans this learner has bought that have not started yet.
 func (h *Handler) queued(w http.ResponseWriter, r *http.Request) {

@@ -274,8 +274,42 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request) {
 	user := reqctx.MustUser(r.Context())
 	ctx := r.Context()
 
-	// Verify daily sub-test allowance before starting
-	state, err := h.billing.CheckSubTestAllowance(ctx, h.db, user, req.QuestionID)
+	question, err := h.questions.ByID(ctx, req.QuestionID)
+	if err != nil {
+		if errors.Is(err, questions.ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That question does not exist.")
+			return
+		}
+		httpx.Internal(w, h.log, "practice.startSession.question", err)
+		return
+	}
+	exam, ok := examFor(models.ExamType(strings.TrimSpace(req.Exam)), user)
+	if !ok {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE or IELTS.")
+		return
+	}
+	if !question.SupportsExam(exam) {
+		httpx.Error(w, http.StatusUnprocessableEntity, httpx.CodeBadRequest,
+			"That question is not part of the "+string(exam)+" syllabus.")
+		return
+	}
+	if strings.TrimSpace(req.Skill) != "" && models.SkillType(req.Skill) != question.Skill {
+		httpx.Error(w, http.StatusUnprocessableEntity, httpx.CodeBadRequest,
+			"The requested skill does not match this question.")
+		return
+	}
+
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		httpx.Internal(w, h.log, "practice.startSession.begin", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+	if err := billing.LockUserForQuota(ctx, tx, user.ID); err != nil {
+		httpx.Internal(w, h.log, "practice.startSession.lock", err)
+		return
+	}
+	state, err := h.billing.CheckSubTestAllowance(ctx, tx, user, billing.SubTestKeyForQuestion(question))
 	if err != nil {
 		if errors.Is(err, billing.ErrLimitReached) {
 			httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "Daily sub-test limit reached.")
@@ -284,11 +318,13 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request) {
 		httpx.Internal(w, h.log, "practice.startSession.allowance", err)
 		return
 	}
-
-	// Consume 1 allowance by recording the session start
-	sessionID, err := h.billing.RecordSessionStart(ctx, h.db, user, req.Exam, req.Skill, req.QuestionID)
+	sessionID, err := h.billing.RecordSessionStart(ctx, tx, user, string(exam), string(question.Skill), billing.SubTestKeyForQuestion(question))
 	if err != nil {
 		httpx.Internal(w, h.log, "practice.startSession.record", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		httpx.Internal(w, h.log, "practice.startSession.commit", err)
 		return
 	}
 
@@ -325,4 +361,3 @@ func (h *Handler) stopSession(w http.ResponseWriter, r *http.Request) {
 
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
-

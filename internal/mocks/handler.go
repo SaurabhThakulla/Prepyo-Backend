@@ -59,7 +59,6 @@ func NewHandler(
 	}
 }
 
-
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/", h.list)
@@ -171,7 +170,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	graded := gradeAll(bank, req.Answers)
+	graded, err := gradeCanonical(bank, questionIDsOf(mock), req.Answers)
 	if graded.total == 0 {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest,
 			"None of the submitted answers belong to this mock exam.")
@@ -278,9 +277,9 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, http.StatusCreated, map[string]any{
-		"attempt":   attempt,
-		"xpAwarded": awarded,
-		"streak":    streak,
+		"attempt":           attempt,
+		"xpAwarded":         awarded,
+		"streak":            streak,
 		"scoredQuestions":   graded.total,
 		"ungradedQuestions": graded.ungraded,
 		"scoreConfidence":   scoring.Confidence(graded.total),
@@ -298,6 +297,53 @@ func (t tally) accuracy() float64 {
 		return 0
 	}
 	return t.earned / t.max
+}
+
+var ErrInvalidAnswers = errors.New("answers do not match the canonical mock question list")
+
+func gradeCanonical(bank map[string]models.Question, canonicalIDs []string, answers []models.AnswerSubmission) (gradedMock, error) {
+	result := gradedMock{bySkill: map[models.SkillType]tally{}}
+	canonical := make(map[string]bool, len(canonicalIDs))
+	submissions := make(map[string]models.AnswerSubmission, len(answers))
+	for _, id := range canonicalIDs {
+		canonical[id] = true
+	}
+	for _, answer := range answers {
+		if !canonical[answer.QuestionID] {
+			return gradedMock{}, ErrInvalidAnswers
+		}
+		if _, exists := submissions[answer.QuestionID]; exists {
+			return gradedMock{}, ErrInvalidAnswers
+		}
+		submissions[answer.QuestionID] = answer
+	}
+
+	for _, id := range canonicalIDs {
+		question, ok := bank[id]
+		if !ok {
+			return gradedMock{}, ErrInvalidAnswers
+		}
+		answer := submissions[id]
+		if !scoring.Deterministic(question.Skill) {
+			result.ungraded++
+			continue
+		}
+		graded, ok := scoring.Grade(question, answer)
+		if !ok {
+			return gradedMock{}, ErrInvalidAnswers
+		}
+		result.earned += graded.Score
+		result.max += graded.MaxScore
+		result.total++
+		if graded.IsCorrect {
+			result.correct++
+		}
+		skill := result.bySkill[question.Skill]
+		skill.earned += graded.Score
+		skill.max += graded.MaxScore
+		result.bySkill[question.Skill] = skill
+	}
+	return result, nil
 }
 
 type gradedMock struct {
@@ -356,8 +402,11 @@ type GradedSet struct {
 }
 
 // GradeAnswers grades a set of answers against a bank of questions.
-func GradeAnswers(bank map[string]models.Question, answers []models.AnswerSubmission) GradedSet {
-	graded := gradeAll(bank, answers)
+func GradeAnswers(bank map[string]models.Question, canonicalIDs []string, answers []models.AnswerSubmission) (GradedSet, error) {
+	graded, err := gradeCanonical(bank, canonicalIDs, answers)
+	if err != nil {
+		return GradedSet{}, err
+	}
 
 	set := GradedSet{
 		Correct:  graded.correct,
@@ -369,7 +418,7 @@ func GradeAnswers(bank map[string]models.Question, answers []models.AnswerSubmis
 	for skill, t := range graded.bySkill {
 		set.BySkill[skill] = t.accuracy()
 	}
-	return set
+	return set, nil
 }
 
 const generatedMockMessage = "This mock is composed for you when you start it. " +

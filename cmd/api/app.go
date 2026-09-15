@@ -122,18 +122,12 @@ func (a *app) router() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(trustedClientIP(a.cfg.TrustedProxyCIDRs))
 	r.Use(a.requestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: a.cfg.AllowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
+	r.Use(cors.Handler(apiCORSOptions(a.cfg.AllowedOrigins)))
 
 	r.Get("/health", a.health)
 
@@ -199,9 +193,19 @@ func (a *app) router() http.Handler {
 	return r
 }
 
+func apiCORSOptions(origins []string) cors.Options {
+	return cors.Options{
+		AllowedOrigins:   origins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}
+}
+
 // rateLimit throttles requests by client IP.
 func rateLimit(requests int, window time.Duration) func(http.Handler) http.Handler {
-	return httprate.LimitBy(requests, window, httprate.KeyByIP,
+	return httprate.LimitBy(requests, window, clientIPKey,
 		httprate.WithLimitHandler(httpx.RateLimited))
 }
 
@@ -215,19 +219,7 @@ func (a *app) health(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeInternal, "Database unreachable.")
 		return
 	}
-	keyPrefix := ""
-	if len(a.cfg.AIAPIKey) >= 6 {
-		keyPrefix = a.cfg.AIAPIKey[:6] + "..."
-	}
-	httpx.JSON(w, http.StatusOK, map[string]any{
-		"status":        "healthy",
-		"version":       "2026-09-14-ai-fallback-v2",
-		"aiConfigured":  a.cfg.AIEnabled(),
-		"aiBaseURL":     a.cfg.AIBaseURL,
-		"aiKeyLen":      len(a.cfg.AIAPIKey),
-		"aiKeyPrefix":   keyPrefix,
-		"tutoringModel": a.cfg.AIModels.Tutoring,
-	})
+	httpx.JSON(w, http.StatusOK, healthPayload())
 }
 
 // requestLogger logs incoming HTTP requests with latency and status.
