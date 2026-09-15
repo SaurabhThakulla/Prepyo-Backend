@@ -721,10 +721,9 @@ func (h *Handler) deleteQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 
-	var exists, inMock bool
+	var exists bool
 	if err := tx.QueryRow(r.Context(), `
-		SELECT EXISTS (SELECT 1 FROM questions WHERE id = $1 AND `+authoredScope+`),
-		       EXISTS (SELECT 1 FROM mock_sections WHERE $1 = ANY(question_ids))`, id).Scan(&exists, &inMock); err != nil {
+		SELECT EXISTS (SELECT 1 FROM questions WHERE id = $1 AND `+authoredScope+`)`, id).Scan(&exists); err != nil {
 		httpx.Internal(w, h.log, "admin.deleteQuestion.exists", err)
 		return
 	}
@@ -732,13 +731,9 @@ func (h *Handler) deleteQuestion(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "No authored question has that id.")
 		return
 	}
-	if inMock {
-		httpx.Error(w, http.StatusConflict, httpx.CodeConflict,
-			"This question is part of a mock exam. Unpublish it instead of deleting it.")
-		return
-	}
 
 	for _, statement := range []string{
+		`UPDATE mock_sections SET question_ids = array_remove(question_ids, $1) WHERE $1 = ANY(question_ids)`,
 		`DELETE FROM ai_evaluations WHERE question_id = $1`,
 		`DELETE FROM mistakes WHERE question_id = $1`,
 		`DELETE FROM practice_attempts WHERE question_id = $1`,
