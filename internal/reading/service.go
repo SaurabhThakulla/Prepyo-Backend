@@ -550,6 +550,11 @@ func (s *Service) SubmitMock(
 		skillScores[skill] = scale.EstimateFromAccuracy(accuracy)
 	}
 
+	// Use the official IELTS raw-to-band conversion table when the exam and
+	// question count match (40-question IELTS Academic Reading). Falls back
+	// to linear interpolation for PTE or non-standard question counts.
+	userScore := scale.EstimateFromRawMarks(string(session.Exam), "reading", graded.Correct, graded.Total)
+
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return MockResult{}, fmt.Errorf("begin reading mock submit: %w", err)
@@ -561,7 +566,7 @@ func (s *Service) SubmitMock(
 		MockID:          session.MockID,
 		ExamVersionID:   session.ExamVersionID,
 		Exam:            session.Exam,
-		UserScore:       scale.EstimateFromAccuracy(graded.Accuracy),
+		UserScore:       userScore,
 		SkillScores:     skillScores,
 		TotalCorrect:    graded.Correct,
 		TotalQuestions:  graded.Total,

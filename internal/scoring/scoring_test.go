@@ -282,3 +282,130 @@ func TestGradeListeningSummary(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// IELTS Band Table Tests
+// ---------------------------------------------------------------------------
+
+func TestIELTSReadingBand(t *testing.T) {
+	tests := []struct {
+		correct int
+		want    float64
+	}{
+		{40, 9.0},
+		{39, 9.0},
+		{38, 8.5},
+		{37, 8.5},
+		{36, 8.0},
+		{35, 8.0},
+		{34, 7.5},
+		{33, 7.5},
+		{32, 7.0},
+		{30, 7.0},
+		{29, 6.5},
+		{27, 6.5},
+		{26, 6.0},
+		{23, 6.0},
+		{22, 5.5},
+		{19, 5.5},
+		{18, 5.0},
+		{15, 5.0},
+		{14, 4.5},
+		{13, 4.5},
+		{12, 4.0},
+		{10, 4.0},
+		{9, 3.5},
+		{8, 3.5},
+		{7, 3.0},
+		{6, 3.0},
+		{5, 2.5},
+		{4, 2.5},
+		{3, 2.0},
+		{1, 2.0},
+		{0, 2.0},
+	}
+	for _, tc := range tests {
+		got := IELTSReadingBand(tc.correct)
+		if got != tc.want {
+			t.Errorf("IELTSReadingBand(%d) = %.1f, want %.1f", tc.correct, got, tc.want)
+		}
+	}
+}
+
+func TestIELTSReadingBandClamps(t *testing.T) {
+	if got := IELTSReadingBand(-5); got != 2.0 {
+		t.Errorf("IELTSReadingBand(-5) = %.1f, want 2.0", got)
+	}
+	if got := IELTSReadingBand(50); got != 9.0 {
+		t.Errorf("IELTSReadingBand(50) = %.1f, want 9.0", got)
+	}
+}
+
+func TestIELTSListeningBand(t *testing.T) {
+	tests := []struct {
+		correct int
+		want    float64
+	}{
+		{40, 9.0},
+		{39, 9.0},
+		{37, 8.5},
+		{35, 8.0},
+		{32, 7.5},
+		{30, 7.0},
+		{26, 6.5},
+		{23, 6.0},
+		{18, 5.5},
+		{16, 5.0},
+		{13, 4.5},
+		{11, 4.0},
+		{8, 3.5},
+		{6, 3.0},
+		{4, 2.5},
+		{3, 2.0},
+		{0, 2.0},
+	}
+	for _, tc := range tests {
+		got := IELTSListeningBand(tc.correct)
+		if got != tc.want {
+			t.Errorf("IELTSListeningBand(%d) = %.1f, want %.1f", tc.correct, got, tc.want)
+		}
+	}
+}
+
+func TestEstimateFromRawMarksUsesTableForIELTSReading(t *testing.T) {
+	scale := Scale{Min: 0, Max: 9, Step: 0.5}
+
+	// 23/40 should give Band 6.0 via the table, not 5.0 via linear interpolation.
+	got := scale.EstimateFromRawMarks("IELTS", "reading", 23, 40)
+	if got != 6.0 {
+		t.Errorf("EstimateFromRawMarks(IELTS, reading, 23, 40) = %.1f, want 6.0", got)
+	}
+
+	// 30/40 should give Band 7.0 via the table, not 6.5 via linear.
+	got = scale.EstimateFromRawMarks("IELTS", "reading", 30, 40)
+	if got != 7.0 {
+		t.Errorf("EstimateFromRawMarks(IELTS, reading, 30, 40) = %.1f, want 7.0", got)
+	}
+}
+
+func TestEstimateFromRawMarksFallsBackForPTE(t *testing.T) {
+	scale := Scale{Min: 10, Max: 90, Step: 1}
+
+	// PTE should still use linear interpolation.
+	got := scale.EstimateFromRawMarks("PTE", "reading", 30, 40)
+	want := scale.EstimateFromAccuracy(30.0 / 40.0)
+	if got != want {
+		t.Errorf("EstimateFromRawMarks(PTE, reading, 30, 40) = %.1f, want %.1f (linear)", got, want)
+	}
+}
+
+func TestEstimateFromRawMarksFallsBackForNon40Questions(t *testing.T) {
+	scale := Scale{Min: 0, Max: 9, Step: 0.5}
+
+	// IELTS reading with 13 questions (single passage practice) should use linear.
+	got := scale.EstimateFromRawMarks("IELTS", "reading", 10, 13)
+	want := scale.EstimateFromAccuracy(10.0 / 13.0)
+	if got != want {
+		t.Errorf("EstimateFromRawMarks(IELTS, reading, 10, 13) = %.1f, want %.1f (linear)", got, want)
+	}
+}
+
