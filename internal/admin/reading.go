@@ -246,9 +246,10 @@ func boxesOf(names []string) ([]resource, map[string]bool, string) {
 }
 
 type newPassage struct {
-	Exam     string `json:"exam"`
-	Title    string `json:"title"`
-	Subtitle string `json:"subtitle"`
+	Exam        string `json:"exam"`
+	PassageSlot string `json:"passageSlot"`
+	Title       string `json:"title"`
+	Subtitle    string `json:"subtitle"`
 	// Body is the passage as typed, split into paragraphs on blank lines.
 	// Paragraphs, when given, wins and is used as-is.
 	Body       string     `json:"body"`
@@ -294,13 +295,14 @@ func (h *Handler) createPassage(w http.ResponseWriter, r *http.Request) {
 
 	httpx.JSON(w, http.StatusCreated, map[string]any{
 		"passage": map[string]any{
-			"id":         id,
-			"title":      strings.TrimSpace(req.Title),
-			"exam":       req.Exam,
-			"paragraphs": len(paragraphs),
-			"groups":     len(req.Groups),
-			"questions":  req.questionCount(),
-			"published":  req.Publish,
+			"id":          id,
+			"title":       strings.TrimSpace(req.Title),
+			"exam":        req.Exam,
+			"passageSlot": req.PassageSlot,
+			"paragraphs":  len(paragraphs),
+			"groups":      len(req.Groups),
+			"questions":   req.questionCount(),
+			"published":   req.Publish,
 		},
 	})
 }
@@ -428,16 +430,23 @@ func (h *Handler) insertPassage(ctx context.Context, req newPassage, paragraphs 
 		difficulty = "medium"
 	}
 
+	slot := req.PassageSlot
+	switch slot {
+	case "A", "B", "C":
+	default:
+		slot = "custom"
+	}
+
 	// The passage's exam is carried by its version — 000028 dropped the column
 	// that repeated it here.
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO reading_passages
 			(id, exam_version_id, title, subtitle, paragraphs, word_count,
-			 difficulty, topic, tags, is_published)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			 difficulty, topic, tags, is_published, passage_slot)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		passageID, versionID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Subtitle),
 		paragraphJSON, words, difficulty, strings.TrimSpace(req.Topic),
-		normaliseTags(req.Tags), req.Publish,
+		normaliseTags(req.Tags), req.Publish, slot,
 	); err != nil {
 		return "", fmt.Errorf("insert passage: %w", err)
 	}

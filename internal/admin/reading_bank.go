@@ -27,6 +27,7 @@ type passageSummary struct {
 	ID          string   `json:"id"`
 	Exam        string   `json:"exam"`
 	Exams       []string `json:"exams"`
+	PassageSlot string   `json:"passageSlot,omitempty"`
 	Title       string   `json:"title"`
 	Subtitle    string   `json:"subtitle,omitempty"`
 	Topic       string   `json:"topic,omitempty"`
@@ -45,6 +46,7 @@ func (h *Handler) passages(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.Query(r.Context(), `
 		SELECT p.id, v.exam, p.title, p.subtitle, p.topic, p.difficulty, p.tags,
 		       p.word_count, jsonb_array_length(p.paragraphs), p.is_published, p.created_at,
+		       coalesce(p.passage_slot, 'custom'),
 		       count(DISTINCT g.id),
 		       count(q.id),
 		       coalesce(array_agg(DISTINCT g.type_name) FILTER (WHERE g.id IS NOT NULL), '{}'),
@@ -72,7 +74,7 @@ func (h *Handler) passages(w http.ResponseWriter, r *http.Request) {
 		var p passageSummary
 		var created time.Time
 		if err := rows.Scan(&p.ID, &p.Exam, &p.Title, &p.Subtitle, &p.Topic, &p.Difficulty,
-			&p.Tags, &p.WordCount, &p.Paragraphs, &p.IsPublished, &created,
+			&p.Tags, &p.WordCount, &p.Paragraphs, &p.IsPublished, &created, &p.PassageSlot,
 			&p.Groups, &p.Questions, &p.TaskTypes, &p.Exams); err != nil {
 			httpx.Internal(w, h.log, "admin.passages.scan", err)
 			return
@@ -105,12 +107,12 @@ func (h *Handler) passage(w http.ResponseWriter, r *http.Request) {
 
 	err := h.db.QueryRow(r.Context(), `
 		SELECT p.id, v.exam, p.title, p.subtitle, p.topic, p.difficulty, p.tags,
-		       p.word_count, p.paragraphs, p.is_published, p.created_at
+		       p.word_count, p.paragraphs, p.is_published, p.created_at, coalesce(p.passage_slot, 'custom')
 		FROM reading_passages p
 		JOIN exam_versions v ON v.id = p.exam_version_id
 		WHERE p.id = $1`, id).
 		Scan(&out.ID, &out.Exam, &out.Title, &out.Subtitle, &out.Topic, &out.Difficulty,
-			&out.Tags, &out.WordCount, &paragraphsJSON, &out.IsPublished, &created)
+			&out.Tags, &out.WordCount, &paragraphsJSON, &out.IsPublished, &created, &out.PassageSlot)
 	if errors.Is(err, pgx.ErrNoRows) {
 		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "No passage has that id.")
 		return

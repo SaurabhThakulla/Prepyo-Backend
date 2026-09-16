@@ -488,6 +488,22 @@ type ReadingPassage struct {
 	Difficulty    string             `json:"difficulty"`
 	Topic         string             `json:"topic,omitempty"`
 	Tags          []string           `json:"tags"`
+	PassageSlot   string             `json:"passageSlot,omitempty"`
+}
+
+type ReadingTest struct {
+	ID              string   `json:"id"`
+	ExamVersionID   string   `json:"examVersionId"`
+	Exam            ExamType `json:"exam"`
+	Title           string   `json:"title"`
+	Description     string   `json:"description,omitempty"`
+	PassageAID      string   `json:"passageAId"`
+	PassageBID      string   `json:"passageBId"`
+	PassageCID      string   `json:"passageCId"`
+	TotalQuestions  int      `json:"totalQuestions"`
+	DurationMinutes int      `json:"durationMinutes"`
+	IsPublished     bool     `json:"isPublished"`
+	CreatedAt       string   `json:"createdAt,omitempty"`
 }
 
 type ReadingGroup struct {

@@ -44,7 +44,7 @@ func NewRepository(db database.DB) *Repository {
 
 const passageFields = `
 	id, exam_version_id, title, subtitle, paragraphs, sources,
-	word_count, difficulty, topic, tags`
+	word_count, difficulty, topic, tags, coalesce(passage_slot, 'custom')`
 
 // ---------------------------------------------------------------------------
 // Passages
@@ -135,7 +135,7 @@ func (r *Repository) ListPassages(ctx context.Context, p ListPassagesParams) ([]
 func scanPassage(row pgx.Row) (models.ReadingPassage, error) {
 	var p models.ReadingPassage
 	err := row.Scan(&p.ID, &p.ExamVersionID, &p.Title, &p.Subtitle,
-		&p.Paragraphs, &p.Sources, &p.WordCount, &p.Difficulty, &p.Topic, &p.Tags)
+		&p.Paragraphs, &p.Sources, &p.WordCount, &p.Difficulty, &p.Topic, &p.Tags, &p.PassageSlot)
 	return p, err
 }
 
