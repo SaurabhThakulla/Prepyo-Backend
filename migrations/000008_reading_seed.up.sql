@@ -121,7 +121,7 @@ INSERT INTO reading_question_groups (id, passage_id, position, type_id, type_nam
  'Do the following statements agree with the information in the passage? Answer True or False.', '[]'::jsonb, TRUE, 420),
 ('g-choc-3', 'rp-choc-01', 3, 'reading-find-the-writer', 'Find the Writer',
  'Look at the five commentaries, Writer A to Writer E. Which writer makes each of the following statements?', '[]'::jsonb, TRUE, 420),
-('g-choc-4', 'rp-choc-01', 4, 'reading-arrange-passage', 'Arrange the Passage',
+('g-choc-4', 'rp-choc-01', 4, 'reading-arrange-passage', 'Match the Heading',
  'The four boxes below summarise stages in the history of chocolate but are printed out of order. The questions are listed in the correct chronological order: choose the box that belongs at each position.',
  $j$[
   {"label":"Paragraph A","text":"Spanish ships carry the beans home, sugar and cinnamon are stirred into the drink, and it circulates among European courts as a guarded recipe."},
@@ -145,7 +145,7 @@ INSERT INTO reading_question_groups (id, passage_id, position, type_id, type_nam
  'Do the following statements agree with the information in the passage? Answer True or False.', '[]'::jsonb, TRUE, 420),
 ('g-bees-3', 'rp-bees-01', 3, 'reading-find-the-writer', 'Find the Writer',
  'Look at the five commentaries, Writer A to Writer E. Which writer makes each of the following statements?', '[]'::jsonb, TRUE, 420),
-('g-bees-4', 'rp-bees-01', 4, 'reading-arrange-passage', 'Arrange the Passage',
+('g-bees-4', 'rp-bees-01', 4, 'reading-arrange-passage', 'Match the Heading',
  'The four boxes below summarise stages in the story of urban beekeeping but are printed out of order. The questions are listed in the correct chronological order: choose the box that belongs at each position.',
  $j$[
   {"label":"Paragraph A","text":"Colonies begin emptying without explanation, the reporting is relentless, and a minority hobby acquires a public cause."},
@@ -169,7 +169,7 @@ INSERT INTO reading_question_groups (id, passage_id, position, type_id, type_nam
  'Do the following statements agree with the information in the passage? Answer True or False.', '[]'::jsonb, TRUE, 420),
 ('g-paper-3', 'rp-paper-01', 3, 'reading-find-the-writer', 'Find the Writer',
  'Look at the five commentaries, Writer A to Writer E. Which writer makes each of the following statements?', '[]'::jsonb, TRUE, 420),
-('g-paper-4', 'rp-paper-01', 4, 'reading-arrange-passage', 'Arrange the Passage',
+('g-paper-4', 'rp-paper-01', 4, 'reading-arrange-passage', 'Match the Heading',
  'The four boxes below summarise stages in the history of paper but are printed out of order. The questions are listed in the correct chronological order: choose the box that belongs at each position.',
  $j$[
   {"label":"Paragraph A","text":"Mills advertise for linen, parishes collect it, and governments legislate over it, because the rag heap is the only thing paper can be made from."},
@@ -230,7 +230,7 @@ FROM (VALUES
 ('q-choc-018','g-choc-3',5,'Which writer argues that sugar ruins the natural antioxidant properties of cacao?','["C"]','Writer C says the sugar undoes the antioxidant properties.'),
 ('q-choc-019','g-choc-3',6,'Which writer provided the first recipe for a solid chocolate bar?','["E"]','Writer E cites house records for 1847.'),
 
--- Passage 1, group 4: arrange the passage
+-- Passage 1, group 4: match the heading
 ('q-choc-020','g-choc-4',1,'Position 1: the first use of cacao by the Olmecs.','["C"]','Box C describes the Gulf coast origin, the earliest stage.'),
 ('q-choc-021','g-choc-4',2,'Position 2: the Spanish conquest and the introduction of chocolate to Europe.','["A"]','Box A covers the Spanish ships and the guarded court recipe.'),
 ('q-choc-022','g-choc-4',3,'Position 3: the invention of the cocoa press during the Industrial Revolution.','["D"]','Box D describes van Houten pressing the fat from the bean.'),
@@ -286,7 +286,7 @@ FROM (VALUES
 ('q-bees-018','g-bees-3',5,'Which writer published the first hive design intended for an apartment roof?','["E"]','Writer E describes the bulletin design.'),
 ('q-bees-019','g-bees-3',6,'Which writer argues that heating honey destroys the properties it is valued for?','["C"]','Writer C warns about heating past enzyme survival.'),
 
--- Passage 2, group 4: arrange the passage
+-- Passage 2, group 4: match the heading
 ('q-bees-020','g-bees-4',1,'Position 1: the keeping of bees on city rooftops before the modern revival.','["C"]','Box C describes decades of unremarked rooftop hives.'),
 ('q-bees-021','g-bees-4',2,'Position 2: the reporting of colony collapse disorder.','["A"]','Box A covers the colonies emptying and the coverage.'),
 ('q-bees-022','g-bees-4',3,'Position 3: the lifting of city prohibitions and the rise in hive numbers.','["D"]','Box D describes repeal and the trebling of colonies.'),
@@ -342,7 +342,7 @@ FROM (VALUES
 ('q-paper-018','g-paper-3',5,'Which writer argues that de-acidification treatments damage bindings?','["C"]','Writer C calls the remedies worse than the problem.'),
 ('q-paper-019','g-paper-3',6,'Which writer published the first description of a continuous papermaking machine?','["E"]','Writer E cites the 1807 account.'),
 
--- Passage 3, group 4: arrange the passage
+-- Passage 3, group 4: match the heading
 ('q-paper-020','g-paper-4',1,'Position 1: a cheap writing material is presented to a Chinese emperor.','["C"]','Box C describes the presentation and the cost.'),
 ('q-paper-021','g-paper-4',2,'Position 2: rag supply becomes the limit on European paper production.','["A"]','Box A covers mills, parishes and rag legislation.'),
 ('q-paper-022','g-paper-4',3,'Position 3: machinery and wood pulp remove that limit.','["D"]','Box D covers the continuous web and the grinding stone.'),

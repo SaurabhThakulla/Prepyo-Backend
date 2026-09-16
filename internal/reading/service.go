@@ -31,6 +31,7 @@ const (
 	TypeTrueFalse           = "reading-true-false"
 	TypeFindTheParagraph    = "reading-find-the-paragraph"
 	TypeArrangePassage      = "reading-arrange-passage"
+	TypeMatchHeading        = "reading-arrange-passage"
 	TypeYesNoNotGiven       = "reading-yes-no-not-given"
 	TypeMatchingInformation = "reading-matching-information"
 )

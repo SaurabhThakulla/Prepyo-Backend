@@ -7,7 +7,7 @@
 -- mix of task types:
 --
 --   Slot 1  Sentence Completion 7, True/False 6                        = 13
---   Slot 2  Find the Writer 6, Arrange the Passage 4, Yes/No/Not Given 3 = 13
+--   Slot 2  Find the Writer 6, Match the Heading 4, Yes/No/Not Given 3 = 13
 --   Slot 3  Sentence Completion 6, Matching Information 4, Y/N/NG 4    = 14
 --
 -- The slot lives on the group rather than on the passage on purpose. A passage

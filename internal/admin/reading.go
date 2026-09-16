@@ -119,7 +119,7 @@ var supportedTypes = map[string]readingTypeSpec{
 		exams: examsIELTS, display: "full", shuffle: true,
 	},
 	"reading-arrange-passage": {
-		name: "Arrange the Passage", style: styleResource,
+		name: "Match the Heading", style: styleResource,
 		exams: examsIELTS, display: "full",
 	},
 	"reading-true-false": {
