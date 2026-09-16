@@ -387,25 +387,116 @@ func TestEstimateFromRawMarksUsesTableForIELTSReading(t *testing.T) {
 	}
 }
 
-func TestEstimateFromRawMarksFallsBackForPTE(t *testing.T) {
-	scale := Scale{Min: 10, Max: 90, Step: 1}
-
-	// PTE should still use linear interpolation.
-	got := scale.EstimateFromRawMarks("PTE", "reading", 30, 40)
-	want := scale.EstimateFromAccuracy(30.0 / 40.0)
-	if got != want {
-		t.Errorf("EstimateFromRawMarks(PTE, reading, 30, 40) = %.1f, want %.1f (linear)", got, want)
+func TestRoundIELTSBand(t *testing.T) {
+	tests := []struct {
+		raw  float64
+		want float64
+	}{
+		// Standard Cambridge IELTS rounding examples:
+		{6.0, 6.0},
+		{6.125, 6.0},  // < 0.25 rounds down to .0
+		{6.24, 6.0},
+		{6.25, 6.5},   // >= 0.25 rounds up to .5
+		{6.375, 6.5},
+		{6.5, 6.5},
+		{6.625, 6.5},
+		{6.74, 6.5},
+		{6.75, 7.0},   // >= 0.75 rounds up to whole band
+		{6.875, 7.0},
+		{7.0, 7.0},
+		{8.75, 9.0},
+		{9.0, 9.0},
+		{9.5, 9.0},    // Clamped
+		{-1.0, 0.0},   // Clamped
+	}
+	for _, tc := range tests {
+		got := RoundIELTSBand(tc.raw)
+		if got != tc.want {
+			t.Errorf("RoundIELTSBand(%v) = %v, want %v", tc.raw, got, tc.want)
+		}
 	}
 }
 
-func TestEstimateFromRawMarksFallsBackForNon40Questions(t *testing.T) {
+func TestPTEScaling(t *testing.T) {
+	tests := []struct {
+		accuracy float64
+		want     float64
+	}{
+		{0.0, 10.0},
+		{1.0, 90.0},
+		{0.5, 50.0},
+		{0.75, 70.0},
+		{0.25, 30.0},
+		{-0.1, 10.0},  // Clamped
+		{1.2, 90.0},   // Clamped
+	}
+	for _, tc := range tests {
+		got := PTEEstimateFromAccuracy(tc.accuracy)
+		if got != tc.want {
+			t.Errorf("PTEEstimateFromAccuracy(%v) = %v, want %v", tc.accuracy, got, tc.want)
+		}
+	}
+}
+
+func TestEstimateOverallIELTS(t *testing.T) {
 	scale := Scale{Min: 0, Max: 9, Step: 0.5}
 
-	// IELTS reading with 13 questions (single passage practice) should use linear.
-	got := scale.EstimateFromRawMarks("IELTS", "reading", 10, 13)
-	want := scale.EstimateFromAccuracy(10.0 / 13.0)
-	if got != want {
-		t.Errorf("EstimateFromRawMarks(IELTS, reading, 10, 13) = %.1f, want %.1f (linear)", got, want)
+	// 4 skills: 6.5, 6.5, 6.0, 6.0 -> Average = 6.25 -> Officially rounds to 6.5!
+	skills := map[models.SkillType]float64{
+		models.SkillReading:   6.5,
+		models.SkillListening: 6.5,
+		models.SkillWriting:   6.0,
+		models.SkillSpeaking:  6.0,
+	}
+	got := scale.EstimateOverall("IELTS", skills, 0, 0)
+	if got != 6.5 {
+		t.Errorf("EstimateOverall(IELTS, 4 skills avg 6.25) = %.1f, want 6.5", got)
+	}
+
+	// 4 skills: 7.0, 6.5, 6.5, 7.0 -> Average = 6.75 -> Officially rounds to 7.0!
+	skills2 := map[models.SkillType]float64{
+		models.SkillReading:   7.0,
+		models.SkillListening: 6.5,
+		models.SkillWriting:   6.5,
+		models.SkillSpeaking:  7.0,
+	}
+	got2 := scale.EstimateOverall("IELTS", skills2, 0, 0)
+	if got2 != 7.0 {
+		t.Errorf("EstimateOverall(IELTS, 4 skills avg 6.75) = %.1f, want 7.0", got2)
 	}
 }
+
+func TestEstimateOverallPTE(t *testing.T) {
+	scale := Scale{Min: 10, Max: 90, Step: 1}
+
+	// 4 skills: 65, 70, 62, 68 -> Average = 66.25 -> Rounds to 66
+	skills := map[models.SkillType]float64{
+		models.SkillReading:   65,
+		models.SkillListening: 70,
+		models.SkillWriting:   62,
+		models.SkillSpeaking:  68,
+	}
+	got := scale.EstimateOverall("PTE", skills, 0, 0)
+	if got != 66 {
+		t.Errorf("EstimateOverall(PTE, avg 66.25) = %.1f, want 66", got)
+	}
+}
+
+func TestConcordance(t *testing.T) {
+	// Pearson Concordance: PTE 86 -> IELTS 9.0; PTE 65 -> IELTS 7.0; PTE 50 -> IELTS 6.0
+	if got := PTEToIELTSConcordance(86); got != 9.0 {
+		t.Errorf("PTEToIELTSConcordance(86) = %.1f, want 9.0", got)
+	}
+	if got := PTEToIELTSConcordance(68); got != 7.0 {
+		t.Errorf("PTEToIELTSConcordance(68) = %.1f, want 7.0", got)
+	}
+	if got := PTEToIELTSConcordance(54); got != 6.0 {
+		t.Errorf("PTEToIELTSConcordance(54) = %.1f, want 6.0", got)
+	}
+
+	if got := IELTSToPTEConcordance(7.0); got != 68.0 {
+		t.Errorf("IELTSToPTEConcordance(7.0) = %.1f, want 68.0", got)
+	}
+}
+
 

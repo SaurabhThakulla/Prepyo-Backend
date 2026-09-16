@@ -191,12 +191,14 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scale := scoring.Scale{Min: version.MinScore, Max: version.MaxScore, Step: version.ScoreStep}
-	overall := scale.EstimateFromAccuracy(graded.accuracy())
 
 	skillScores := make(map[models.SkillType]float64, len(graded.bySkill))
-	for skill, tally := range graded.bySkill {
-		skillScores[skill] = scale.EstimateFromAccuracy(tally.accuracy())
+	for skill, t := range graded.bySkill {
+		skillScores[skill] = scale.EstimateFromRawMarks(string(mock.Exam), string(skill), t.correct, t.total)
 	}
+
+	overall := scale.EstimateOverall(string(mock.Exam), skillScores, graded.correct, graded.total)
+
 
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
@@ -286,10 +288,12 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// tally accumulates marks for a group of questions.
+// tally accumulates marks and question counts for a group of questions.
 type tally struct {
-	earned float64
-	max    float64
+	earned  float64
+	max     float64
+	correct int
+	total   int
 }
 
 func (t tally) accuracy() float64 {
@@ -341,6 +345,10 @@ func gradeCanonical(bank map[string]models.Question, canonicalIDs []string, answ
 		skill := result.bySkill[question.Skill]
 		skill.earned += graded.Score
 		skill.max += graded.MaxScore
+		skill.total++
+		if graded.IsCorrect {
+			skill.correct++
+		}
 		result.bySkill[question.Skill] = skill
 	}
 	return result, nil
@@ -387,6 +395,10 @@ func gradeAll(bank map[string]models.Question, answers []models.AnswerSubmission
 		skill := result.bySkill[question.Skill]
 		skill.earned += graded.Score
 		skill.max += graded.MaxScore
+		skill.total++
+		if graded.IsCorrect {
+			skill.correct++
+		}
 		result.bySkill[question.Skill] = skill
 	}
 	return result

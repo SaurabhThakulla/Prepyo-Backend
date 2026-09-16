@@ -545,15 +545,16 @@ func (s *Service) SubmitMock(
 	}
 
 	scale := scoring.Scale{Min: version.MinScore, Max: version.MaxScore, Step: version.ScoreStep}
-	skillScores := make(map[models.SkillType]float64, len(graded.BySkill))
-	for skill, accuracy := range graded.BySkill {
-		skillScores[skill] = scale.EstimateFromAccuracy(accuracy)
-	}
-
 	// Use the official IELTS raw-to-band conversion table when the exam and
 	// question count match (40-question IELTS Academic Reading). Falls back
 	// to linear interpolation for PTE or non-standard question counts.
 	userScore := scale.EstimateFromRawMarks(string(session.Exam), "reading", graded.Correct, graded.Total)
+
+	skillScores := make(map[models.SkillType]float64, len(graded.BySkill))
+	for skill := range graded.BySkill {
+		skillScores[skill] = userScore
+	}
+
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {

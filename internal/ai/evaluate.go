@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/scoring"
 )
 
 // WritingPromptVersion identifies the active writing evaluation prompt version.
@@ -147,10 +148,18 @@ func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation
 
 	score := p.EstimatedScore.Value
 	if score != nil {
+		if spec.Exam == models.ExamIELTS {
+			rounded := scoring.RoundIELTSBand(*score)
+			score = &rounded
+		} else if spec.Exam == models.ExamPTE {
+			rounded := math.Round(*score)
+			score = &rounded
+		}
 		if *score < spec.MinScore || *score > spec.MaxScore {
 			return models.Evaluation{}, fmt.Errorf("score %.2f outside %.1f-%.1f for %s", *score, spec.MinScore, spec.MaxScore, spec.Exam)
 		}
 	}
+
 
 	criteria := make([]models.EvaluationCriterion, 0, len(p.Criteria))
 	for _, c := range p.Criteria {

@@ -83,8 +83,17 @@ func (s *Service) Estimate(ctx context.Context, db database.DB, user models.User
 			estimate.Confidence = "medium"
 		}
 	case max > 0:
-		value := scale.EstimateFromAccuracy(earned / max)
+		accuracy := earned / max
+		var value float64
+		if user.TargetExam == models.ExamIELTS {
+			value = scoring.RoundIELTSBand(scale.Min + accuracy*(scale.Max-scale.Min))
+		} else if user.TargetExam == models.ExamPTE {
+			value = scoring.PTEEstimateFromAccuracy(accuracy)
+		} else {
+			value = scale.EstimateFromAccuracy(accuracy)
+		}
 		estimate.Value = &value
+
 	default:
 		// No evidence yet; Value stays nil.
 		estimate.Confidence = "low"
@@ -165,11 +174,19 @@ func (s *Service) Skills(ctx context.Context, db database.DB, user models.User) 
 
 		if t.max > 0 {
 			accuracy := t.earned / t.max
-			value := scale.EstimateFromAccuracy(accuracy)
+			var value float64
+			if user.TargetExam == models.ExamIELTS {
+				value = scoring.RoundIELTSBand(scale.Min + accuracy*(scale.Max-scale.Min))
+			} else if user.TargetExam == models.ExamPTE {
+				value = scoring.PTEEstimateFromAccuracy(accuracy)
+			} else {
+				value = scale.EstimateFromAccuracy(accuracy)
+			}
 			row.Accuracy = int(math.Round(accuracy * 100))
 			row.Estimate = &value
 			row.Status = statusFor(accuracy)
 		}
+
 		breakdown = append(breakdown, row)
 	}
 	return breakdown, nil
