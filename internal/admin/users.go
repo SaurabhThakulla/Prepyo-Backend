@@ -156,6 +156,10 @@ type setRoleRequest struct {
 	Role string `json:"role"`
 }
 
+type setExamRequest struct {
+	TargetExam string `json:"targetExam"`
+}
+
 // setUserRole changes one account's role.
 //
 // A tier role is granted by writing the plan behind it, not just the role
@@ -228,6 +232,56 @@ func (h *Handler) applyRole(ctx context.Context, userID, role string) (adminUser
 		    updated_at = now()
 		WHERE id = $1
 		RETURNING `+userFields, userID, role, planForRole[role]))
+}
+
+// setUserExam changes the exam a learner is preparing for. Learners cannot
+// switch tracks after onboarding, but admins need an override when a user
+// picked the wrong one or changes their plans.
+//
+// PTE and IELTS scores use non-overlapping scales, so retaining a target or
+// previous score would make it nonsensical after the switch. Clear both and
+// let the learner set goals on the newly selected scale.
+func (h *Handler) setUserExam(w http.ResponseWriter, r *http.Request) {
+	actor := reqctx.MustUser(r.Context())
+	targetID := chi.URLParam(r, "id")
+
+	var req setExamRequest
+	if !httpx.Decode(w, r, &req, h.log, "admin.setUserExam") {
+		return
+	}
+
+	exam, ok := parseTargetExam(req.TargetExam)
+	if !ok {
+		httpx.ValidationError(w, map[string]string{"targetExam": "Choose PTE or IELTS."})
+		return
+	}
+
+	updated, err := scanAdminUser(h.db.QueryRow(r.Context(), `
+		UPDATE users SET
+			target_exam = $2,
+			target_score = NULL,
+			previous_score = NULL,
+			updated_at = now()
+		WHERE id = $1
+		RETURNING `+userFields, targetID, exam))
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That account no longer exists.")
+		return
+	case err != nil:
+		httpx.Internal(w, h.log, "admin.setUserExam", err)
+		return
+	}
+
+	h.log.Info("admin changed a user's target exam",
+		"actor", actor.Email, "target", updated.Email, "exam", updated.TargetExam)
+
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": updated})
+}
+
+func parseTargetExam(value string) (models.ExamType, bool) {
+	exam := models.ExamType(strings.ToUpper(strings.TrimSpace(value)))
+	return exam, exam.Valid()
 }
 
 // row is satisfied by both pgx.Row and pgx.Rows, so one scanner serves the
