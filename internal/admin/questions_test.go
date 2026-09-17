@@ -132,6 +132,7 @@ func TestDictationIsAnsweredByItsScript(t *testing.T) {
 func TestBlanksAreNumberedAndChecked(t *testing.T) {
 	q, problems := newAuthoredQuestion{
 		Exam: "PTE", TypeID: "pte-listening-fib", Title: "x", AudioTranscript: "script",
+		ContextPassage: "The [[b1]] flows [[b2]].",
 		Blanks: []newBlank{
 			{CorrectAnswer: " river "},
 			{},

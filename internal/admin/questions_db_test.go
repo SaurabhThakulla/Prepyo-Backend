@@ -39,6 +39,16 @@ func TestAuthoredQuestionsAreStoredSoTheyGrade(t *testing.T) {
 			answer: models.AnswerSubmission{BlankResponses: map[string]string{"b1": "Harbour", "b2": "nine"}},
 		},
 		{
+			name: "PTE listening blanks with TTS",
+			req: newAuthoredQuestion{
+				Exam: "PTE", TypeID: "pte-listening-fib", Title: "Authoring check: TTS blanks",
+				AudioTranscript: "The tour leaves from the harbour at nine.",
+				ContextPassage:  "The tour leaves from the [[b1]] at [[b2]].",
+				Blanks:          []newBlank{{CorrectAnswer: "harbour"}, {CorrectAnswer: "nine"}},
+			},
+			answer: models.AnswerSubmission{BlankResponses: map[string]string{"b1": "harbour", "b2": "nine"}},
+		},
+		{
 			name: "dictation",
 			req: newAuthoredQuestion{
 				Exam: "PTE", TypeID: "write-from-dictation", Title: "Authoring check: dictation",
@@ -72,6 +82,19 @@ func TestAuthoredQuestionsAreStoredSoTheyGrade(t *testing.T) {
 			}
 			if stored.TypeName != q.spec.TypeName || string(stored.Skill) != "listening" {
 				t.Fatalf("stored as %s / %s", stored.Skill, stored.TypeName)
+			}
+
+			if stored.ContextPassage != q.contextPassage || stored.AudioTranscript != q.audioTranscript {
+				t.Fatalf("display or TTS script changed during storage: %+v", stored)
+			}
+			public := stored.PublicQuestion()
+			if public.ContextPassage != stored.ContextPassage || public.AudioTranscript != stored.AudioTranscript {
+				t.Fatal("learner response must preserve displayed text and the TTS script")
+			}
+			for _, blank := range public.Blanks {
+				if blank.CorrectAnswer != "" {
+					t.Fatal("learner response must not include blank answer keys")
+				}
 			}
 
 			result, graded := scoring.Grade(stored, tc.answer)

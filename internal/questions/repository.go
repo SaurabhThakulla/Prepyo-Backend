@@ -50,12 +50,13 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question,
 		WHERE is_published
 		  AND ($1 = '' OR $1 = ANY(supported_exams))
 		  AND ($2 = '' OR skill = $2)
-		  AND ($3 = '' OR type_id = $3)
+		  AND ($3 = '' OR type_id = $3
+		       OR (exam = 'PTE' AND skill = 'listening' AND type_id = ANY($5::text[])))
 		  AND ($4 OR (passage_id IS NULL AND reorder_item_id IS NULL))`
 
 	var total int
 	err := r.db.QueryRow(ctx, `SELECT count(*) FROM questions`+where,
-		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions).Scan(&total)
+		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, models.PTEListeningTypeIDs(p.TypeID)).Scan(&total)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count questions: %w", err)
 	}
@@ -68,8 +69,8 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question,
 	rows, err := r.db.Query(ctx, `
 		SELECT `+selectFields+` FROM questions`+where+`
 		`+orderClause+`
-		LIMIT $5 OFFSET $6`,
-		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, p.Limit, p.Offset)
+		LIMIT $6 OFFSET $7`,
+		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, models.PTEListeningTypeIDs(p.TypeID), p.Limit, p.Offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list questions: %w", err)
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
 )
@@ -34,6 +35,8 @@ const (
 	answerMultiple  answerKind = "multiple"
 	answerBlanks    answerKind = "blanks"
 	answerDictation answerKind = "dictation"
+	answerSummary   answerKind = "summary"
+	answerWords     answerKind = "words"
 )
 
 type questionTypeSpec struct {
@@ -120,7 +123,7 @@ var authorableTypes = []questionTypeSpec{
 		Prompt:           "Listen to the recording and answer the question by selecting all the correct responses. You will need to select more than one response.",
 		TimeLimitSeconds: 120, Points: 10},
 	{Exam: "PTE", Skill: "listening", TypeID: "pte-listening-fib", TypeName: "Listening Fill in the Blanks",
-		Answer: answerBlanks, Audio: fieldRequired,
+		Answer: answerBlanks, Audio: fieldRequired, Passage: fieldRequired,
 		Prompt:           "You will hear a recording. Type the missing word in each blank.",
 		TimeLimitSeconds: 120, Points: 10},
 	{Exam: "PTE", Skill: "listening", TypeID: "pte-highlight-correct-summary", TypeName: "Highlight Correct Summary",
@@ -135,8 +138,12 @@ var authorableTypes = []questionTypeSpec{
 		Answer: answerSingle, Audio: fieldRequired,
 		Prompt:           "You will hear a recording. The last word or group of words has been replaced by a beep. Choose the option that completes it.",
 		TimeLimitSeconds: 90, Points: 10},
+	{Exam: "PTE", Skill: "listening", TypeID: "summarize-spoken-text", TypeName: "Summarize Spoken Text",
+		Answer: answerSummary, Audio: fieldRequired,
+		Prompt:           "You will hear a short lecture. Write a summary of 50-70 words.",
+		TimeLimitSeconds: 600, Points: 12},
 	{Exam: "PTE", Skill: "listening", TypeID: "pte-highlight-incorrect-word", TypeName: "Highlight Incorrect Word",
-		Answer: answerMultiple, Audio: fieldRequired,
+		Answer: answerWords, Audio: fieldRequired, Passage: fieldRequired,
 		Prompt:           "Below is a transcript of the recording. Click on the words in the transcript that differ from what the speaker said.",
 		TimeLimitSeconds: 120, Points: 10},
 	{Exam: "PTE", Skill: "listening", TypeID: "write-from-dictation", TypeName: "Write from Dictation",
@@ -212,6 +219,9 @@ type authoredQuestion struct {
 func (req newAuthoredQuestion) normalise() (authoredQuestion, map[string]string) {
 	problems := map[string]string{}
 
+	if req.Exam == "PTE" {
+		req.TypeID = models.CanonicalPTEListeningType(req.TypeID)
+	}
 	spec, ok := authorableByID[req.TypeID]
 	if !ok {
 		problems["typeId"] = "Pick a task type."
@@ -262,7 +272,10 @@ func (req newAuthoredQuestion) normalise() (authoredQuestion, map[string]string)
 	if spec.Passage == fieldRequired && q.contextPassage == "" {
 		problems["contextPassage"] = "Write the text the learner works from."
 	}
-	if spec.Audio == fieldRequired && q.audioTranscript == "" && q.audioURL == "" {
+	if spec.Exam == "PTE" && spec.Skill == "listening" && q.audioTranscript == "" {
+		// Browser TTS needs the script even when a recording URL is supplied.
+		problems["audioTranscript"] = "Write the script for browser text-to-speech."
+	} else if spec.Audio == fieldRequired && q.audioTranscript == "" && q.audioURL == "" {
 		problems["audioTranscript"] = "Write the script, or give a recording URL."
 	}
 	if spec.Image == fieldRequired && q.imageURL == "" {
@@ -281,6 +294,21 @@ func (req newAuthoredQuestion) normalise() (authoredQuestion, map[string]string)
 	switch spec.Answer {
 	case answerRubric:
 		q.modelAnswer = strings.TrimSpace(req.ModelAnswer)
+	case answerSummary:
+		q.modelAnswer = strings.TrimSpace(req.ModelAnswer)
+		q.correctAnswers = summaryKeywords(req.CorrectAnswers)
+		if q.modelAnswer == "" {
+			problems["modelAnswer"] = "Write a model summary for review."
+		}
+		if len(q.correctAnswers) == 0 {
+			problems["correctAnswers"] = "Add key concepts for approximate summary grading."
+		}
+	case answerWords:
+		var wordProblems map[string]string
+		q.options, q.correctAnswers, wordProblems = highlightedWordKey(q.contextPassage, req.CorrectAnswers)
+		for field, problem := range wordProblems {
+			problems[field] = problem
+		}
 	case answerSingle, answerMultiple:
 		options, correct, choiceProblems := choiceKey(req.Options, req.CorrectAnswers, spec.Answer == answerMultiple)
 		q.options, q.correctAnswers = options, correct
@@ -852,7 +880,7 @@ func (h *Handler) authoredQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	q.CorrectAnswers = []string{}
 	for _, answer := range answerIDs {
-		if text, ok := textByID[answer]; ok {
+		if text, ok := textByID[answer]; ok && q.TypeID != "pte-highlight-incorrect-word" {
 			q.CorrectAnswers = append(q.CorrectAnswers, text)
 			continue
 		}
