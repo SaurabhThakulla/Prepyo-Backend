@@ -78,7 +78,7 @@ func (h *Handler) evaluateWriting(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.writeError(w, err, "evaluations.evaluateWriting", map[string]string{
-			"text": "Write at least 20 words so there is something to give feedback on.",
+			"text": "Write at least 5 words for Summarize Written Text, or at least 20 words for other writing tasks, so there is something to give feedback on.",
 		})
 		return
 	}
@@ -171,6 +171,10 @@ func (h *Handler) writeError(w http.ResponseWriter, err error, op string, tooSho
 	switch {
 	case errors.Is(err, questions.ErrNotFound):
 		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That question does not exist.")
+
+	case errors.Is(err, ErrWrongWritingSkill):
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest,
+			"That question is not a writing task.")
 
 	case errors.Is(err, ErrWrongSkill):
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest,

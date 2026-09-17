@@ -20,15 +20,30 @@ import (
 var (
 	// ErrEmptyResponse means there is nothing worth evaluating.
 	ErrEmptyResponse = errors.New("response is empty")
-	// ErrWrongSkill means the recording was submitted against a question that
-	// is not a speaking task.
-	ErrWrongSkill   = errors.New("question is not a speaking task")
-	ErrLimitReached = billing.ErrLimitReached
+	// Skill errors reject submissions sent to the wrong evaluator endpoint.
+	ErrWrongWritingSkill = errors.New("question is not a writing task")
+	ErrWrongSkill        = errors.New("question is not a speaking task")
+	ErrLimitReached      = billing.ErrLimitReached
 )
 
-// minWordsToEvaluate stops a one-word submission from consuming an evaluation
-// from the learner's daily allowance.
-const minWordsToEvaluate = 20
+// minWordsToEvaluate is a feedback threshold, not the full exam word limit.
+// PTE summaries explicitly permit a single sentence of as few as five words.
+func minWordsToEvaluate(q models.Question) int {
+	if q.Exam == models.ExamPTE && q.TypeID == "summarize-written-text" {
+		return 5
+	}
+	return 20
+}
+
+func validateWritingResponse(q models.Question, text string) error {
+	if q.Skill != models.SkillWriting {
+		return ErrWrongWritingSkill
+	}
+	if len(strings.Fields(text)) < minWordsToEvaluate(q) {
+		return ErrEmptyResponse
+	}
+	return nil
+}
 
 // minRecordingSeconds is the speaking equivalent: below this there is not
 // enough speech to say anything useful about, and a learner should not spend an
@@ -81,7 +96,7 @@ type Outcome struct {
 // validation, persistence and rewards.
 func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, error) {
 	text := strings.TrimSpace(req.Text)
-	if len(strings.Fields(text)) < minWordsToEvaluate {
+	if text == "" {
 		return Outcome{}, ErrEmptyResponse
 	}
 
@@ -90,9 +105,14 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 		return Outcome{}, err
 	}
 
+	if err := validateWritingResponse(question, text); err != nil {
+		return Outcome{}, err
+	}
+
 	// Same learner, same question, same words means the same feedback. Return
 	// the stored result rather than paying for an identical call.
-	fingerprint := fingerprintOf(req.User.ID, question.ID, text)
+	// Do not reuse feedback produced before source passages were supplied.
+	fingerprint := fingerprintOf(req.User.ID, question.ID+":"+ai.WritingPromptVersion, text)
 	if existing, err := s.repo.ByFingerprint(ctx, req.User.ID, fingerprint); err == nil {
 		state, err := s.billing.State(ctx, s.db, req.User)
 		if err != nil {
@@ -114,13 +134,14 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 	}
 
 	evaluation, usage, err := s.gateway.EvaluateWriting(ctx, ai.WritingRequest{
-		Exam:        question.Exam,
-		TaskName:    question.TypeName,
-		Prompt:      question.Prompt,
-		FigureData:  question.FigureData,
-		LearnerText: text,
-		MinScore:    version.MinScore,
-		MaxScore:    version.MaxScore,
+		Exam:           question.Exam,
+		TaskName:       question.TypeName,
+		Prompt:         question.Prompt,
+		FigureData:     question.FigureData,
+		ContextPassage: question.ContextPassage,
+		LearnerText:    text,
+		MinScore:       version.MinScore,
+		MaxScore:       version.MaxScore,
 	})
 	if err != nil {
 		return Outcome{}, err

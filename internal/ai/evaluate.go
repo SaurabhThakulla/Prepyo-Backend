@@ -12,7 +12,7 @@ import (
 )
 
 // WritingPromptVersion identifies the active writing evaluation prompt version.
-const WritingPromptVersion = "writing.v1"
+const WritingPromptVersion = "writing.v2" // Includes source passages for summary tasks.
 
 // EvaluationVersion is the evaluation schema version.
 const EvaluationVersion = "v1"
@@ -22,6 +22,8 @@ type WritingRequest struct {
 	TaskName    string
 	Prompt      string
 	LearnerText string
+	// ContextPassage is source material, not part of the learner's response.
+	ContextPassage string
 	// FigureData is the tabular data behind an image prompt, if applicable.
 	FigureData string
 	MinScore   float64
@@ -160,7 +162,6 @@ func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation
 		}
 	}
 
-
 	criteria := make([]models.EvaluationCriterion, 0, len(p.Criteria))
 	for _, c := range p.Criteria {
 		if strings.TrimSpace(c.Name) == "" || c.MaxScore <= 0 {
@@ -248,6 +249,9 @@ func exampleScore(min, max float64) float64 {
 func writingUserPrompt(req WritingRequest) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task: %s\n\nPrompt:\n%s\n", req.TaskName, req.Prompt)
+	if passage := strings.TrimSpace(req.ContextPassage); passage != "" {
+		fmt.Fprintf(&b, "\nSource passage (reference material, not the learner's response):\n%s\n", passage)
+	}
 	if figure := strings.TrimSpace(req.FigureData); figure != "" {
 		fmt.Fprintf(&b, "\nThe learner was shown this figure as an image. They could not read "+
 			"these numbers as text, so do not penalise wording that differs from it. Use it only "+
