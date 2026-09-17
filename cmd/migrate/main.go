@@ -22,6 +22,9 @@ func main() {
 	}
 
 	log := logger.New(cfg.Env)
+	if cfg.MigrationDatabaseURL != "" {
+		cfg.DatabaseURL = cfg.MigrationDatabaseURL
+	}
 	log.Info("running database migrations", "database_url", maskURL(cfg.DatabaseURL))
 
 	ctx := context.Background()

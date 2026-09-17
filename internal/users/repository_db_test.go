@@ -3,7 +3,7 @@ package users
 import (
 	"context"
 	"fmt"
-	"os"
+	"github.com/prepyo/backend/internal/testdb"
 	"testing"
 	"time"
 
@@ -14,7 +14,7 @@ import (
 func testRepository(t *testing.T) *Repository {
 	t.Helper()
 
-	url := os.Getenv("TEST_DATABASE_URL")
+	url := testdb.URL(t)
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping database-backed user tests")
 	}

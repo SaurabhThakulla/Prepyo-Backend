@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"github.com/prepyo/backend/internal/testdb"
 	"log/slog"
 	"os"
 	"testing"
@@ -20,7 +21,7 @@ import (
 func testHandler(t *testing.T) *Handler {
 	t.Helper()
 
-	url := os.Getenv("TEST_DATABASE_URL")
+	url := testdb.URL(t)
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping database-backed admin tests")
 	}

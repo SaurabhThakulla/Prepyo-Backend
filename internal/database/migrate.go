@@ -37,7 +37,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 	}
 	if len(pending) == 0 {
 		log.Info("database schema is up to date")
-		return nil
+		return CheckSeedIntegrity(ctx, pool)
 	}
 
 	for _, name := range pending {
@@ -50,7 +50,9 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("begin %s: %w", name, err)
 		}
-		if _, err := tx.Exec(ctx, string(body)); err != nil {
+		// Migration files contain multiple SQL statements and no bind values.
+		// Use simple protocol only here, not for parameterized repository JSON.
+		if _, err := tx.Conn().PgConn().Exec(ctx, string(body)).ReadAll(); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("apply %s: %w", name, err)
 		}
@@ -63,7 +65,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 		}
 		log.Info("applied migration", "version", name)
 	}
-	return nil
+	return CheckSeedIntegrity(ctx, pool)
 }
 
 func appliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[string]bool, error) {

@@ -2,8 +2,7 @@ package reading
 
 import (
 	"context"
-	"os"
-	"strings"
+	"github.com/prepyo/backend/internal/testdb"
 	"testing"
 
 	"github.com/prepyo/backend/internal/database"
@@ -14,30 +13,8 @@ import (
 	"github.com/prepyo/backend/internal/questions"
 )
 
-func loadTestEnv() string {
-	if url := os.Getenv("TEST_DATABASE_URL"); url != "" {
-		return url
-	}
-	if url := os.Getenv("DATABASE_URL"); url != "" {
-		return url
-	}
-	for _, p := range []string{".env", "../.env", "../../.env"} {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "DATABASE_URL=") {
-				return strings.Trim(strings.TrimPrefix(line, "DATABASE_URL="), `"'`)
-			}
-		}
-	}
-	return ""
-}
-
 func TestPTEReadingPracticeDealsAllFiveTasks(t *testing.T) {
-	dbURL := loadTestEnv()
+	dbURL := testdb.URL(t)
 	if dbURL == "" {
 		t.Skip("DATABASE_URL not found, skipping integration test")
 	}
@@ -87,7 +64,7 @@ func TestPTEReadingPracticeDealsAllFiveTasks(t *testing.T) {
 }
 
 func TestPTEMockPaperComposition(t *testing.T) {
-	dbURL := loadTestEnv()
+	dbURL := testdb.URL(t)
 	if dbURL == "" {
 		t.Skip("DATABASE_URL not found, skipping integration test")
 	}

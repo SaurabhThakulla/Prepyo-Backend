@@ -2,7 +2,7 @@ package reading
 
 import (
 	"context"
-	"os"
+	"github.com/prepyo/backend/internal/testdb"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,7 +19,7 @@ import (
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
+	url := testdb.URL(t)
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping database-backed reading tests")
 	}
@@ -36,7 +36,6 @@ func testService(t *testing.T, pool *pgxpool.Pool) *Service {
 	return NewService(pool, NewRepository(pool), questions.NewRepository(pool),
 		mocks.NewRepository(pool), exams.NewRepository(pool), gamification.NewService(), nil, nil)
 }
-
 
 // newLearner makes a throwaway user and removes them, and everything that
 // cascades from them, when the test ends.

@@ -65,7 +65,23 @@ func run() error {
 	}
 	defer pool.Close()
 
-	if err := database.Migrate(ctx, pool, log); err != nil {
+	if cfg.AutoMigrate {
+		migrationPool := pool
+		if cfg.MigrationDatabaseURL != "" {
+			migrationPool, err = database.Connect(ctx, cfg.MigrationDatabaseURL)
+			if err != nil {
+				return err
+			}
+		}
+		err = database.Migrate(ctx, migrationPool, log)
+		if migrationPool != pool {
+			migrationPool.Close()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if err := database.CheckSeedIntegrity(ctx, pool); err != nil {
 		return err
 	}
 

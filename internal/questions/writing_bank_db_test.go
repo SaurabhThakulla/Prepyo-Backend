@@ -2,7 +2,7 @@ package questions
 
 import (
 	"context"
-	"os"
+	"github.com/prepyo/backend/internal/testdb"
 	"strings"
 	"testing"
 
@@ -12,7 +12,7 @@ import (
 )
 
 func TestWritingElectricityGuidanceMigration(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
+	url := testdb.URL(t)
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
@@ -103,7 +103,7 @@ func TestWritingElectricityGuidanceMigration(t *testing.T) {
 // legacy Task 2 type, and four new PTE summaries. Uses the actual 000013 seed
 // plus fixtures carrying the affected content from 000002.
 func TestWritingContentRepairsMigration(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
+	url := testdb.URL(t)
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set")
 	}

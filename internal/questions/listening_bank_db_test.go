@@ -3,7 +3,7 @@ package questions
 import (
 	"context"
 	"fmt"
-	"os"
+	"github.com/prepyo/backend/internal/testdb"
 	"reflect"
 	"regexp"
 	"strings"
@@ -16,7 +16,7 @@ import (
 )
 
 func TestPTEListeningBankMigration(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
+	url := testdb.URL(t)
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping database-backed question tests")
 	}

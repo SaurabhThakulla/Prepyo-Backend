@@ -3,7 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
-	"os"
+	"github.com/prepyo/backend/internal/testdb"
 	"sync"
 	"testing"
 	"time"
@@ -19,7 +19,7 @@ import (
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
+	url := testdb.URL(t)
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping database-backed metering tests")
 	}

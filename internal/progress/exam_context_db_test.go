@@ -2,7 +2,7 @@ package progress
 
 import (
 	"context"
-	"os"
+	"github.com/prepyo/backend/internal/testdb"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,7 +17,7 @@ import (
 
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	url := os.Getenv("TEST_DATABASE_URL")
+	url := testdb.URL(t)
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping database-backed progress tests")
 	}
