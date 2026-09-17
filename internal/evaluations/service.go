@@ -103,12 +103,9 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 		return Outcome{}, err
 	}
 
-	// Cheap pre-check, deliberately unlocked and deliberately before the model
-	// call: an over-quota learner should never cost a provider call. The check
-	// that actually enforces the quota runs under a lock in persist().
-	state, err := s.billing.CheckSubTestAllowance(ctx, s.db, req.User, "")
-	if err != nil {
-		return Outcome{Subscription: state}, err
+	// The session already paid at start; submission needs no remaining credit.
+	if err := s.billing.RequireStartedSubTest(ctx, s.db, req.User, question, question.Exam); err != nil {
+		return Outcome{}, err
 	}
 
 	version, err := s.exams.ByID(ctx, question.ExamVersionID)
@@ -184,12 +181,9 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		return Outcome{}, err
 	}
 
-	// Cheap pre-check, deliberately unlocked and deliberately before the model
-	// call: an over-quota learner should never cost a provider call. The check
-	// that actually enforces the quota runs under a lock in persist().
-	state, err := s.billing.CheckSubTestAllowance(ctx, s.db, req.User, "")
-	if err != nil {
-		return Outcome{Subscription: state}, err
+	// The session already paid at start; submission needs no remaining credit.
+	if err := s.billing.RequireStartedSubTest(ctx, s.db, req.User, question, question.Exam); err != nil {
+		return Outcome{}, err
 	}
 
 	version, err := s.exams.ByID(ctx, question.ExamVersionID)
@@ -243,19 +237,11 @@ func (s *Service) persist(ctx context.Context, p persistParams) (Outcome, error)
 	}
 	defer tx.Rollback(ctx)
 
-	// The authoritative quota check. It runs here rather than beside the
-	// pre-check because this is the first point at which the model call is
-	// already done — the lock must never be held across provider inference, or
-	// one submission would block every other submission by the same learner for
-	// the several seconds the model takes.
-	//
-	// Two requests can therefore both clear the unlocked pre-check and both call
-	// the model. Only one gets past this check, so the quota is never exceeded;
-	// the cost of that race is one wasted provider call.
+	// Serialize reward writes, but do not charge for saving feedback.
 	if err := billing.LockUserForQuota(ctx, tx, p.User.ID); err != nil {
 		return Outcome{}, err
 	}
-	if _, err := s.billing.CheckSubTestAllowance(ctx, tx, p.User, ""); err != nil {
+	if err := s.billing.RequireStartedSubTest(ctx, tx, p.User, p.Question, p.Question.Exam); err != nil {
 		return Outcome{}, err
 	}
 

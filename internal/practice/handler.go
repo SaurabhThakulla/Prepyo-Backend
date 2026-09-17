@@ -148,15 +148,15 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Quota check under user lock.
+	// Serialize reward writes and verify the task was paid for at start.
 	if err := billing.LockUserForQuota(ctx, tx, user.ID); err != nil {
 		httpx.Internal(w, h.log, "practice.submit.lock", err)
 		return
 	}
-	if _, err := h.billing.CheckSubTestAllowance(ctx, tx, user, billing.SubTestKeyForQuestion(question)); err != nil {
-		if errors.Is(err, billing.ErrLimitReached) {
-			httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached,
-				"You have used all of today's practice sub-tests. They reset at midnight.")
+	if err := h.billing.RequireStartedSubTest(ctx, tx, user, question, exam); err != nil {
+		if errors.Is(err, billing.ErrSessionRequired) {
+			httpx.Error(w, http.StatusConflict, httpx.CodeConflict,
+				"Start this task before submitting answers.")
 			return
 		}
 		httpx.Internal(w, h.log, "practice.submit.allowance", err)

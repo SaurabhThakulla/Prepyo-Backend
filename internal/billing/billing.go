@@ -86,25 +86,11 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 
 	dayStart, dayEnd := gamification.LocalDayStart(user), gamification.LocalDayEnd(user)
 
+	// Session starts are the credit ledger. Answers and AI feedback never add
+	// usage, and stopping or completing a session never refunds its start.
 	const subTestsToday = `
-		(SELECT count(DISTINCT COALESCE(q.group_id, q.id))
-		   FROM practice_attempts pa
-		   JOIN questions q ON q.id = pa.question_id
-		  WHERE pa.user_id = $1 AND pa.created_at >= $2 AND pa.created_at < $3)
-		+
-		(SELECT count(*) FROM ai_evaluations
-		  WHERE user_id = $1 AND created_at >= $2 AND created_at < $3)
-		+
-		(SELECT count(*) FROM practice_sessions ps
-		  WHERE ps.user_id = $1 AND ps.created_at >= $2 AND ps.created_at < $3
-		    AND NOT EXISTS (
-		        SELECT 1 FROM practice_attempts pa
-		        WHERE pa.user_id = ps.user_id AND pa.created_at >= $2 AND pa.question_id = ps.item_id
-		    )
-		    AND NOT EXISTS (
-		        SELECT 1 FROM ai_evaluations ae
-		        WHERE ae.user_id = ps.user_id AND ae.created_at >= $2 AND ae.question_id = ps.item_id
-		    ))`
+		(SELECT count(*) FROM practice_sessions
+		  WHERE user_id = $1 AND created_at >= $2 AND created_at < $3)`
 
 	// For free plans, full mocks are counted lifetime (1 included on signup +
 	// bonuses). For paid active plans, they are counted per calendar month.
@@ -170,8 +156,9 @@ func LockUserForQuota(ctx context.Context, db database.DB, userID string) error 
 	return nil
 }
 
-// CheckSubTestAllowance checks if the user has remaining daily sub-test allowance.
-func (s *Service) CheckSubTestAllowance(ctx context.Context, db database.DB, user models.User, taskSetKey string) (models.SubscriptionState, error) {
+// CheckSubTestAllowance checks whether a new session can spend one credit.
+// Submission uses RequireStartedSubTest instead; it must not need a second credit.
+func (s *Service) CheckSubTestAllowance(ctx context.Context, db database.DB, user models.User, _ string) (models.SubscriptionState, error) {
 	state, err := s.State(ctx, db, user)
 	if err != nil {
 		return state, err
@@ -180,34 +167,32 @@ func (s *Service) CheckSubTestAllowance(ctx context.Context, db database.DB, use
 		return state, nil
 	}
 
-	if taskSetKey != "" {
-		counted, err := s.taskSetCountedToday(ctx, db, user, taskSetKey)
-		if err != nil {
-			return state, err
-		}
-		if counted {
-			return state, nil
-		}
-	}
 	return state, ErrLimitReached
 }
 
-// taskSetCountedToday reports whether this task set was already attempted today.
-func (s *Service) taskSetCountedToday(ctx context.Context, db database.DB, user models.User, taskSetKey string) (bool, error) {
-	var counted bool
+var ErrSessionRequired = errors.New("start this task before submitting answers")
+
+// RequireStartedSubTest verifies payment at start without checking remaining
+// credits. A group session covers every question in the group. Active sessions
+// may finish across midnight; stopped sessions remain answerable on their day
+// because clients can stop the timer before sending their answers.
+func (s *Service) RequireStartedSubTest(ctx context.Context, db database.DB, user models.User, question models.Question, exam models.ExamType) error {
+	var started bool
 	err := db.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM practice_attempts pa
-			  JOIN questions q ON q.id = pa.question_id
-			 WHERE pa.user_id = $1
-			   AND pa.created_at >= $2 AND pa.created_at < $3
-			   AND COALESCE(q.group_id, q.id) = $4)`,
-		user.ID, gamification.LocalDayStart(user), gamification.LocalDayEnd(user), taskSetKey,
-	).Scan(&counted)
+			SELECT 1 FROM practice_sessions
+			WHERE user_id = $1 AND item_id = $2 AND exam = $3 AND skill = $4
+			  AND (status = 'active' OR (created_at >= $5 AND created_at < $6)))`,
+		user.ID, SubTestKeyForQuestion(question), string(exam), string(question.Skill),
+		gamification.LocalDayStart(user), gamification.LocalDayEnd(user),
+	).Scan(&started)
 	if err != nil {
-		return false, fmt.Errorf("read task set usage: %w", err)
+		return fmt.Errorf("read started sub-test: %w", err)
 	}
-	return counted, nil
+	if !started {
+		return ErrSessionRequired
+	}
+	return nil
 }
 
 // CheckMockAllowance checks if the learner has available full mock tests in their quota.

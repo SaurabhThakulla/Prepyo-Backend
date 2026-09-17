@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/ai"
+	"github.com/prepyo/backend/internal/billing"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
@@ -174,6 +175,10 @@ func (h *Handler) writeError(w http.ResponseWriter, err error, op string, tooSho
 	case errors.Is(err, ErrWrongSkill):
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest,
 			"That question is not a speaking task.")
+
+	case errors.Is(err, billing.ErrSessionRequired):
+		httpx.Error(w, http.StatusConflict, httpx.CodeConflict,
+			"Start this task before submitting answers.")
 
 	case errors.Is(err, ErrEmptyResponse):
 		httpx.ValidationError(w, tooShort)

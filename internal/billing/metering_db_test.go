@@ -59,7 +59,7 @@ func taskSets(t *testing.T, pool *pgxpool.Pool, n int) [][]models.Question {
 	ctx := context.Background()
 
 	rows, err := pool.Query(ctx, `
-		SELECT q.group_id, q.id, q.exam, q.exam_version_id
+		SELECT q.group_id, q.id, q.exam, q.exam_version_id, q.skill
 		  FROM questions q
 		 WHERE q.group_id IN (
 			   SELECT group_id FROM questions
@@ -77,7 +77,7 @@ func taskSets(t *testing.T, pool *pgxpool.Pool, n int) [][]models.Question {
 	var order []string
 	for rows.Next() {
 		var q models.Question
-		if err := rows.Scan(&q.GroupID, &q.ID, &q.Exam, &q.ExamVersionID); err != nil {
+		if err := rows.Scan(&q.GroupID, &q.ID, &q.Exam, &q.ExamVersionID, &q.Skill); err != nil {
 			t.Fatalf("scan question: %v", err)
 		}
 		if _, seen := bySet[q.GroupID]; !seen {
@@ -125,9 +125,7 @@ func newService(pool *pgxpool.Pool) *Service {
 	return NewService(NewRepository(pool), nil)
 }
 
-// A task set is one sub-test however many questions are inside it. This is the
-// whole point of COALESCE(group_id, id): counting rows instead would make a
-// six-statement True/False set cost six.
+// One start pays for a task set however many answers are submitted within it.
 func TestTaskSetCountsOnceHoweverManyQuestions(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool)
@@ -138,9 +136,10 @@ func TestTaskSetCountsOnceHoweverManyQuestions(t *testing.T) {
 		t.Fatalf("a new learner has used %d sub-tests, want 0", got)
 	}
 
+	startSession(t, pool, user, SubTestKeyForQuestion(sets[0][0]))
 	answer(t, pool, user, sets[0][0])
 	if got := usage(t, svc, pool, user); got != 1 {
-		t.Fatalf("after the first answer usage = %d, want 1", got)
+		t.Fatalf("after start and first answer usage = %d, want 1", got)
 	}
 
 	for _, q := range sets[0][1:] {
@@ -161,15 +160,18 @@ func TestSetAlreadyStartedStaysAnswerableAtTheLimit(t *testing.T) {
 	sets := taskSets(t, pool, limit+1)
 
 	for i := 0; i < limit; i++ {
-		answer(t, pool, user, sets[i][0])
+		q := sets[i][0]
+		if _, err := svc.RecordSessionStart(ctx, pool, user, string(q.Exam), string(q.Skill), SubTestKeyForQuestion(q)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if got := usage(t, svc, pool, user); got != limit {
 		t.Fatalf("usage = %d after opening %d sets, want %d", got, limit, limit)
 	}
 
 	for i := 0; i < limit; i++ {
-		key := SubTestKeyForQuestion(sets[i][1])
-		if _, err := svc.CheckSubTestAllowance(ctx, pool, user, key); err != nil {
+		q := sets[i][1]
+		if err := svc.RequireStartedSubTest(ctx, pool, user, q, q.Exam); err != nil {
 			t.Errorf("continuing set %d was refused at the limit: %v", i, err)
 		}
 	}
@@ -178,6 +180,145 @@ func TestSetAlreadyStartedStaysAnswerableAtTheLimit(t *testing.T) {
 	_, err := svc.CheckSubTestAllowance(ctx, pool, user, fresh)
 	if !errors.Is(err, ErrLimitReached) {
 		t.Errorf("starting a new set at the limit returned %v, want ErrLimitReached", err)
+	}
+}
+
+// startSession mirrors billing.RecordSessionStart without pulling the handler
+// layer in: what is under test is the counting, not the insert.
+func startSession(t *testing.T, pool *pgxpool.Pool, user models.User, itemID string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO practice_sessions (user_id, exam, skill, item_id, status)
+		VALUES ($1, 'IELTS', 'reading', $2, 'active')`, user.ID, itemID)
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+}
+
+// A session row is what the start of a test writes, and RecordSessionStart
+// stores the task-set key, COALESCE(group_id, id), as item_id. Submitting
+// answers for that set must not charge a second sub-test: for grouped tasks the
+// attempt's question id never equals the session's item_id, so an exclusion
+// that compared them directly never matched and every grouped task cost one
+// credit at start plus another at submit.
+func TestSessionThenSubmitCountsOnceForGroupedTasks(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	user := newLearner(t, pool)
+	sets := taskSets(t, pool, 1)
+
+	key := SubTestKeyForQuestion(sets[0][0])
+	startSession(t, pool, user, key)
+
+	if got := usage(t, svc, pool, user); got != 1 {
+		t.Fatalf("after starting the set usage = %d, want 1", got)
+	}
+
+	answer(t, pool, user, sets[0][0])
+	if got := usage(t, svc, pool, user); got != 1 {
+		t.Errorf("after starting and answering the set usage = %d, want 1 — the submit charged a second credit", got)
+	}
+
+	// Finishing the rest of the set changes nothing: the set was paid for once.
+	for _, q := range sets[0][1:] {
+		answer(t, pool, user, q)
+	}
+	if got := usage(t, svc, pool, user); got != 1 {
+		t.Errorf("after answering the whole set usage = %d, want 1", got)
+	}
+}
+
+// Starting a set and never submitting it still costs the one credit the start
+// spent: nothing extra, nothing refunded.
+func TestAbandonedSessionCountsOnce(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	user := newLearner(t, pool)
+	sets := taskSets(t, pool, 1)
+
+	startSession(t, pool, user, SubTestKeyForQuestion(sets[0][0]))
+
+	if got := usage(t, svc, pool, user); got != 1 {
+		t.Errorf("an abandoned started session gave usage = %d, want 1", got)
+	}
+}
+
+func TestEvaluationDoesNotSpendAnotherCredit(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+	for _, skill := range []models.SkillType{models.SkillWriting, models.SkillSpeaking} {
+		t.Run(string(skill), func(t *testing.T) {
+			user := newLearner(t, pool)
+			var q models.Question
+			if err := pool.QueryRow(ctx, `SELECT id, exam, skill FROM questions WHERE skill = $1 LIMIT 1`, skill).Scan(&q.ID, &q.Exam, &q.Skill); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.RecordSessionStart(ctx, pool, user, string(q.Exam), string(skill), q.ID); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 2; i++ {
+				_, err := pool.Exec(ctx, `INSERT INTO ai_evaluations
+					(user_id, question_id, exam, skill, evaluation_version, request_fingerprint,
+					 score_confidence, provider, model, prompt_version)
+					VALUES ($1, $2, $3, $4, 'test', $5, 'low', 'test', 'test', 'test')`,
+					user.ID, q.ID, q.Exam, skill, []byte{byte(i)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := usage(t, svc, pool, user); got != 1 {
+					t.Fatalf("usage after evaluation = %d, want 1", got)
+				}
+			}
+		})
+	}
+}
+
+func TestSubmissionRequiresMatchingStartedSession(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+	user := newLearner(t, pool)
+	other := newLearner(t, pool)
+	q := taskSets(t, pool, 1)[0][0]
+	if err := svc.RequireStartedSubTest(ctx, pool, user, q, q.Exam); !errors.Is(err, ErrSessionRequired) {
+		t.Fatalf("without start: %v", err)
+	}
+	id, err := svc.RecordSessionStart(ctx, pool, user, string(q.Exam), string(q.Skill), SubTestKeyForQuestion(q))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RequireStartedSubTest(ctx, pool, other, q, q.Exam); !errors.Is(err, ErrSessionRequired) {
+		t.Fatalf("other learner's session: %v", err)
+	}
+	wrongTask := q
+	wrongTask.GroupID = "not-started"
+	if err := svc.RequireStartedSubTest(ctx, pool, user, wrongTask, q.Exam); !errors.Is(err, ErrSessionRequired) {
+		t.Fatalf("unstarted task: %v", err)
+	}
+	wrongExam := models.ExamIELTS
+	if q.Exam == wrongExam {
+		wrongExam = models.ExamPTE
+	}
+	if err := svc.RequireStartedSubTest(ctx, pool, user, q, wrongExam); !errors.Is(err, ErrSessionRequired) {
+		t.Fatalf("wrong exam: %v", err)
+	}
+	wrongSkill := q
+	wrongSkill.Skill = models.SkillSpeaking
+	if q.Skill == wrongSkill.Skill {
+		wrongSkill.Skill = models.SkillReading
+	}
+	if err := svc.RequireStartedSubTest(ctx, pool, user, wrongSkill, q.Exam); !errors.Is(err, ErrSessionRequired) {
+		t.Fatalf("wrong skill: %v", err)
+	}
+	if err := svc.RecordSessionStop(ctx, pool, user, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RequireStartedSubTest(ctx, pool, user, q, q.Exam); err != nil {
+		t.Fatalf("submit after stopping timer: %v", err)
+	}
+	if got := usage(t, svc, pool, user); got != 1 {
+		t.Fatalf("stopping changed usage to %d", got)
 	}
 }
 
@@ -219,7 +360,7 @@ func TestMocksDoNotConsumeSubTests(t *testing.T) {
 	}
 }
 
-func TestConcurrentFirstAnswersSpendOneSubTest(t *testing.T) {
+func TestConcurrentStartsSpendOnlyRemainingCredit(t *testing.T) {
 	pool := testPool(t)
 	svc := newService(pool)
 	ctx := context.Background()
@@ -230,7 +371,7 @@ func TestConcurrentFirstAnswersSpendOneSubTest(t *testing.T) {
 
 	// Spend all but one.
 	for i := 0; i < limit-1; i++ {
-		answer(t, pool, user, sets[i][0])
+		startSession(t, pool, user, SubTestKeyForQuestion(sets[i][0]))
 	}
 
 	contenders := sets[limit-1:]
@@ -257,10 +398,7 @@ func TestConcurrentFirstAnswersSpendOneSubTest(t *testing.T) {
 				results[i] = err
 				return
 			}
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO practice_attempts
-					(user_id, question_id, exam, exam_version_id, is_correct, score, max_score, accuracy_percentage)
-				VALUES ($1, $2, $3, $4, TRUE, 1, 1, 100)`, user.ID, q.ID, q.Exam, q.ExamVersionID); err != nil {
+			if _, err := svc.RecordSessionStart(ctx, tx, user, string(q.Exam), string(q.Skill), SubTestKeyForQuestion(q)); err != nil {
 				results[i] = err
 				return
 			}
@@ -324,9 +462,8 @@ func TestUsageCountsTheLearnersOwnDay(t *testing.T) {
 func mustInsertAt(t *testing.T, pool *pgxpool.Pool, user models.User, q models.Question, at time.Time) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO practice_attempts
-			(user_id, question_id, exam, exam_version_id, is_correct, score, max_score, accuracy_percentage, created_at)
-		VALUES ($1, $2, $3, $4, TRUE, 1, 1, 100, $5)`, user.ID, q.ID, q.Exam, q.ExamVersionID, at)
+		INSERT INTO practice_sessions (user_id, item_id, exam, skill, created_at)
+		VALUES ($1, $2, $3, $4, $5)`, user.ID, SubTestKeyForQuestion(q), q.Exam, q.Skill, at)
 	if err != nil {
 		t.Fatalf("record attempt at %s: %v", at, err)
 	}

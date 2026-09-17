@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -83,7 +84,7 @@ func Load() (*Config, error) {
 
 	aiBaseURL := strings.TrimRight(stringOr("AI_BASE_URL", "https://codecraftapi.com/v1"), "/")
 	aiKey := firstOf("AI_API_KEY", "CODE_CRAFT")
-	aiAudioKey := firstOf("AI_AUDIO_API_KEY", aiKey)
+	aiAudioKey := stringOr("AI_AUDIO_API_KEY", aiKey)
 
 	cfg := &Config{
 		Env:               env,
@@ -160,8 +161,8 @@ func Load() (*Config, error) {
 			problems = append(problems, "GOOGLE_CLIENT_ID is required in production")
 		}
 		for _, origin := range cfg.AllowedOrigins {
-			if strings.Contains(origin, "localhost") {
-				problems = append(problems, "ALLOWED_ORIGINS must not contain localhost in production")
+			if isLocalhostOrigin(origin) {
+				problems = append(problems, "ALLOWED_ORIGINS must not contain localhost in production: "+origin)
 				break
 			}
 		}
@@ -171,6 +172,45 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration:\n  - %s", strings.Join(problems, "\n  - "))
 	}
 	return cfg, nil
+}
+
+// isLocalhostOrigin reports whether an origin points at the machine itself
+// rather than the public internet: loopback IPs (127.0.0.0/8, ::1) plus the
+// unspecified address, and .localhost names, which resolve to loopback.
+//
+// The host is compared exactly, so a real domain that merely contains the
+// word "localhost" (https://my-localhost-blog.com) is allowed through — the
+// old substring check would have rejected it and, worse, waved through
+// nothing an attacker actually needed. The point of the check is to stop a
+// production deploy from trusting a browser on the same box.
+func isLocalhostOrigin(origin string) bool {
+	host := originHost(origin)
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return strings.EqualFold(host, "localhost") ||
+		strings.HasSuffix(strings.ToLower(host), ".localhost")
+}
+
+// originHost extracts just the host from an origin such as
+// "https://sub.example.com:8443", dropping scheme, port, path and userinfo.
+// A bare "host:port" or host entry is accepted too, so a miswritten
+// ALLOWED_ORIGINS is still judged on its host rather than skipped.
+func originHost(origin string) string {
+	trimmed := strings.TrimSpace(origin)
+	if u, err := url.Parse(trimmed); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	// Not a URL the parser recognises; fall back to treating the whole value
+	// as a host, with or without a port.
+	host := strings.Trim(trimmed, "[]")
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
 }
 
 // firstOf returns the first non-empty environment variable value from the provided keys.

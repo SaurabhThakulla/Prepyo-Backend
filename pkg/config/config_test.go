@@ -27,6 +27,28 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestLoadAudioKeyFallsBackToAIKey(t *testing.T) {
+	setEnv(t, map[string]string{
+		"APP_ENV":           "development",
+		"DATABASE_URL":      "postgres://localhost/prepyo",
+		"AI_API_KEY":        "test-text-api-key",
+		"CODE_CRAFT":        "",
+		"AI_AUDIO_API_KEY":  "",
+		"test-text-api-key": "",
+	})
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.AIAudioAPIKey != cfg.AIAPIKey {
+		t.Error("AIAudioAPIKey does not fall back to AIAPIKey")
+	}
+	if !cfg.SpeakingEnabled() {
+		t.Error("SpeakingEnabled() = false with a configured AI_API_KEY")
+	}
+}
+
 func TestLoadDevelopmentDefaults(t *testing.T) {
 	setEnv(t, map[string]string{"DATABASE_URL": "postgres://localhost/prepyo"})
 
@@ -65,6 +87,22 @@ func TestLoadProductionRequirements(t *testing.T) {
 			env: map[string]string{
 				"AI_API_KEY":      "key",
 				"ALLOWED_ORIGINS": "https://prepyo.np,http://localhost:3000",
+			},
+			wantErr: "localhost",
+		},
+		{
+			name: "loopback ip origin",
+			env: map[string]string{
+				"AI_API_KEY":      "key",
+				"ALLOWED_ORIGINS": "https://prepyo.np,http://127.0.0.1:3000",
+			},
+			wantErr: "localhost",
+		},
+		{
+			name: "ipv6 loopback origin",
+			env: map[string]string{
+				"AI_API_KEY":      "key",
+				"ALLOWED_ORIGINS": "http://[::1]:8080",
 			},
 			wantErr: "localhost",
 		},
@@ -179,5 +217,52 @@ func TestCleanAIModel(t *testing.T) {
 		if got := cleanAIModel(tc.input, tc.fallback); got != tc.want {
 			t.Errorf("cleanAIModel(%q, %q) = %q, want %q", tc.input, tc.fallback, got, tc.want)
 		}
+	}
+}
+
+func TestIsLocalhostOrigin(t *testing.T) {
+	cases := []struct {
+		origin string
+		want   bool
+	}{
+		{"http://localhost:3000", true},
+		{"https://localhost", true},
+		{"http://127.0.0.1:5173", true},
+		{"http://127.0.0.1", true},
+		{"http://[::1]:8080", true},
+		{"http://0.0.0.0:3000", true},
+		{"https://dev.localhost", true},
+		{"localhost:3000", true},
+		{"https://prepyo.online", false},
+		{"https://localhost.attacker.com", false},
+		{"http://evil-localhost.com", false},
+		{"https://prepyo.np/localhost", false},
+		{"", false},
+	}
+
+	for _, tc := range cases {
+		if got := isLocalhostOrigin(tc.origin); got != tc.want {
+			t.Errorf("isLocalhostOrigin(%q) = %v, want %v", tc.origin, got, tc.want)
+		}
+	}
+}
+
+// A domain that merely contains the word "localhost" is a real origin and must
+// pass the production boot check; only actual loopback hosts are rejected.
+func TestLoadProductionAllowsLocalhostSubstrings(t *testing.T) {
+	setEnv(t, map[string]string{
+		"APP_ENV":          "production",
+		"DATABASE_URL":     "postgres://db/prepyo",
+		"ALLOWED_ORIGINS":  "https://prepyo.np,https://my-localhost-blog.com",
+		"AI_API_KEY":       "key",
+		"GOOGLE_CLIENT_ID": "prepyo.apps.googleusercontent.com",
+	})
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if len(cfg.AllowedOrigins) != 2 {
+		t.Errorf("AllowedOrigins = %v, want both entries kept", cfg.AllowedOrigins)
 	}
 }
