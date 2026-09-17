@@ -12,7 +12,7 @@ import (
 )
 
 // WritingPromptVersion identifies the active writing evaluation prompt version.
-const WritingPromptVersion = "writing.v2" // Includes source passages for summary tasks.
+const WritingPromptVersion = "writing.v3" // Validates IELTS criterion structure and mean.
 
 // EvaluationVersion is the evaluation schema version.
 const EvaluationVersion = "v1"
@@ -122,6 +122,7 @@ func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation
 		MinScore: req.MinScore,
 		MaxScore: req.MaxScore,
 		Quotable: req.LearnerText,
+		TaskName: req.TaskName,
 	})
 }
 
@@ -131,6 +132,7 @@ type feedbackSpec struct {
 	MinScore float64
 	MaxScore float64
 	Quotable string
+	TaskName string
 }
 
 // validateFeedback validates the parsed evaluation payload against the specification.
@@ -150,6 +152,10 @@ func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation
 
 	score := p.EstimatedScore.Value
 	if score != nil {
+		// Validate before rounding, which otherwise hides out-of-range values.
+		if math.IsNaN(*score) || math.IsInf(*score, 0) || *score < spec.MinScore || *score > spec.MaxScore {
+			return models.Evaluation{}, fmt.Errorf("score %.2f outside %.1f-%.1f for %s", *score, spec.MinScore, spec.MaxScore, spec.Exam)
+		}
 		if spec.Exam == models.ExamIELTS {
 			rounded := scoring.RoundIELTSBand(*score)
 			score = &rounded
@@ -176,6 +182,12 @@ func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation
 			MaxScore: c.MaxScore,
 			Feedback: c.Feedback,
 		})
+	}
+
+	if spec.Exam == models.ExamIELTS && score != nil {
+		if err := validateIELTSCriteria(criteria, spec, *score); err != nil {
+			return models.Evaluation{}, err
+		}
 	}
 
 	haystack := normaliseSpace(spec.Quotable)
@@ -220,6 +232,7 @@ func writingSystemPrompt(req WritingRequest) string {
 		b.WriteString("- CRITICAL FOR PTE: estimatedScore.value MUST be on the 10-90 PTE points scale (e.g. 65, 79, 85). DO NOT output 0-9 IELTS band numbers.\n")
 	} else {
 		b.WriteString("- CRITICAL FOR IELTS: estimatedScore.value MUST be on the 0.0-9.0 IELTS band scale in 0.5 steps (e.g. 6.5, 7.0, 7.5).\n")
+		b.WriteString("- For a scored IELTS response return exactly four criteria: Task Achievement for Task 1/figure tasks or Task Response for Task 2, Coherence and Cohesion, Lexical Resource, and Grammatical Range and Accuracy. Each has maxScore 9 and nonempty evidence-based feedback. The estimate must be the equally weighted criterion mean rounded to the nearest half band. This is a task-level practice estimate, not a complete writing band.\n")
 	}
 	b.WriteString("- Set estimatedScore.confidence to low, medium or high based on how much evidence the response gives you.\n")
 	b.WriteString("- Use the published assessment criteria for this exam. Do not invent weightings.\n")

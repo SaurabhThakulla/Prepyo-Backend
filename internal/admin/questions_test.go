@@ -12,16 +12,19 @@ func TestAuthoredQuestionRejectsUnknownType(t *testing.T) {
 	}
 }
 
-func TestAuthoredQuestionRejectsRemovedSpeakingTask(t *testing.T) {
+func TestAuthoredQuestionSupportsCurrentSituationTask(t *testing.T) {
 	const typeID = "pte-respond-to-situation"
-	for _, spec := range authorableTypes {
-		if spec.TypeID == typeID {
-			t.Fatal("removed task is still in the authoring catalogue")
-		}
+	spec, ok := authorableByID[typeID]
+	if !ok || spec.PrepSeconds != 10 || spec.TimeLimitSeconds != 40 {
+		t.Fatalf("missing current PTE task or incorrect timing: %+v", spec)
 	}
-	_, problems := newAuthoredQuestion{Exam: "PTE", TypeID: typeID, Title: "x"}.normalise()
-	if problems["typeId"] == "" {
-		t.Fatalf("expected a typeId problem, got %v", problems)
+	q, problems := newAuthoredQuestion{
+		Exam: "PTE", TypeID: typeID, Title: "Delayed appointment",
+		ContextPassage:  "Your train is delayed. Call your tutor and request a later appointment.",
+		AudioTranscript: "Your train is delayed. Call your tutor and request a later appointment.",
+	}.normalise()
+	if len(problems) != 0 || q.prepSeconds != 10 || q.timeLimitSeconds != 40 {
+		t.Fatalf("situation task rejected or wrong defaults: %v %+v", problems, q)
 	}
 }
 

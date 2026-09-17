@@ -111,7 +111,7 @@ var supportedTypes = map[string]readingTypeSpec{
 		exams: examsIELTS, display: "full",
 	},
 	"reading-find-the-paragraph": {
-		name: "Find the Paragraph", style: styleParagraph,
+		name: "Matching Information", style: styleParagraph,
 		exams: examsIELTS, display: "full", shuffle: true,
 	},
 	"reading-matching-information": {
@@ -119,7 +119,7 @@ var supportedTypes = map[string]readingTypeSpec{
 		exams: examsIELTS, display: "full", shuffle: true,
 	},
 	"reading-arrange-passage": {
-		name: "Match the Heading", style: styleResource,
+		name: "Sequence the Summary (legacy practice)", style: styleResource,
 		exams: examsIELTS, display: "full",
 	},
 	"reading-true-false": {

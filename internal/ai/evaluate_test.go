@@ -87,8 +87,8 @@ func TestParseWritingAcceptsOnScaleScore(t *testing.T) {
 // Feedback that quotes a sentence the learner never wrote is dropped, so the
 // model cannot "correct" text it invented.
 func TestParseWritingDropsInventedSentences(t *testing.T) {
-	req := WritingRequest{Exam: models.ExamIELTS, MinScore: 0, MaxScore: 9, LearnerText: "Cities retain heat."}
-	raw := `{"summary":"Reasonable summary.","estimatedScore":{"value":7,"confidence":"medium"},
+	req := WritingRequest{Exam: models.ExamPTE, MinScore: 10, MaxScore: 90, LearnerText: "Cities retain heat."}
+	raw := `{"summary":"Reasonable summary.","estimatedScore":{"value":70,"confidence":"medium"},
 	         "criteria":[],"strengths":[],"weaknesses":[],
 	         "sentenceFeedback":[{"original":"A sentence never written.","correction":"x","issueType":"grammar","explanation":"y"}]}`
 

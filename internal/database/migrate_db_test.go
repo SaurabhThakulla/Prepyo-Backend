@@ -87,7 +87,7 @@ func TestMigratorRepairsMissingContent(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE skill='writing'), count(*) FILTER(WHERE skill='speaking') FROM questions`).Scan(&writing, &speaking); err != nil {
 		t.Fatal(err)
 	}
-	if writing != 216 || speaking != 2 {
+	if writing != 241 || speaking != 52 {
 		t.Fatalf("writing=%d speaking=%d", writing, speaking)
 	}
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations WHERE version='000050_restore_seed_content.up.sql'`).Scan(&recorded); err != nil || recorded != 1 {

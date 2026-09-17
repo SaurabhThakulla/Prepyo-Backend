@@ -32,7 +32,7 @@ func (r *Repository) List(ctx context.Context, exam models.ExamType) ([]models.M
 		SELECT id, exam_version_id, exam, title, description, total_duration_minutes,
 		       is_diagnostic, is_generated
 		FROM mocks
-		WHERE ($1 = '' OR exam = $1)
+		WHERE is_available AND ($1 = '' OR exam = $1)
 		ORDER BY is_diagnostic DESC, id`, exam)
 	if err != nil {
 		return nil, fmt.Errorf("list mocks: %w", err)
@@ -72,7 +72,7 @@ func (r *Repository) ByID(ctx context.Context, id string) (models.Mock, error) {
 	err := r.db.QueryRow(ctx, `
 		SELECT id, exam_version_id, exam, title, description, total_duration_minutes,
 		       is_diagnostic, is_generated
-		FROM mocks WHERE id = $1`, id).
+		FROM mocks WHERE id = $1 AND is_available`, id).
 		Scan(&m.ID, &m.ExamVersionID, &m.Exam, &m.Title, &m.Description,
 			&m.TotalDurationMinutes, &m.IsDiagnostic, &m.IsGenerated)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -132,6 +132,7 @@ type SaveAttemptParams struct {
 	TotalCorrect    int
 	TotalQuestions  int
 	DurationSeconds int
+	Answers         []models.AnswerSubmission
 }
 
 func (r *Repository) SaveAttempt(ctx context.Context, db database.DB, p SaveAttemptParams) (models.MockAttempt, error) {
@@ -140,16 +141,20 @@ func (r *Repository) SaveAttempt(ctx context.Context, db database.DB, p SaveAtte
 		return models.MockAttempt{}, fmt.Errorf("marshal skill scores: %w", err)
 	}
 
+	answersJSON, err := json.Marshal(p.Answers)
+	if err != nil {
+		return models.MockAttempt{}, fmt.Errorf("marshal mock responses: %w", err)
+	}
 	var a models.MockAttempt
 	err = db.QueryRow(ctx, `
 		INSERT INTO mock_attempts (
 			user_id, mock_id, exam_version_id, exam, user_score, skill_scores,
-			total_correct, total_questions, duration_seconds)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			total_correct, total_questions, duration_seconds, answers)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, mock_id, exam_version_id, exam, user_score, skill_scores,
 		          total_correct, total_questions, duration_seconds, completed_at`,
 		p.UserID, p.MockID, p.ExamVersionID, p.Exam, p.UserScore, string(skillScoresJSON),
-		p.TotalCorrect, p.TotalQuestions, p.DurationSeconds,
+		p.TotalCorrect, p.TotalQuestions, p.DurationSeconds, string(answersJSON),
 	).Scan(&a.ID, &a.MockID, &a.ExamVersionID, &a.Exam, &a.UserScore, &a.SkillScores,
 		&a.TotalCorrect, &a.TotalQuestions, &a.DurationSeconds, &a.CompletedAt)
 	if err != nil {

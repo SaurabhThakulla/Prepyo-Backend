@@ -12,7 +12,7 @@ import (
 // SpeakingPromptVersion is stamped on every stored evaluation. Change it
 // whenever the prompt below changes, so old feedback stays traceable to the
 // wording that produced it.
-const SpeakingPromptVersion = "speaking.v1"
+const SpeakingPromptVersion = "speaking.v2"
 
 // AudioFormats are the encodings the provider accepts inline. Callers convert
 // a browser recording to one of these before submitting; the gateway does not
@@ -157,7 +157,7 @@ func speakingSystemPrompt(req SpeakingRequest) string {
 		b.WriteString("- Use the published PTE speaking criteria for this task type: content, oral fluency and pronunciation.\n")
 		b.WriteString("- CRITICAL FOR PTE: estimatedScore.value MUST be on the 10-90 PTE points scale (e.g. 65, 79, 85). DO NOT output 0-9 IELTS band numbers.\n")
 	} else {
-		b.WriteString("- Use the published IELTS speaking criteria: fluency and coherence, lexical resource, grammatical range and accuracy, and pronunciation.\n")
+		b.WriteString("- For a scored IELTS response return exactly four criteria: Fluency and Coherence, Lexical Resource, Grammatical Range and Accuracy, and Pronunciation. Each has maxScore 9 and nonempty evidence-based feedback. The estimate must be the equally weighted criterion mean rounded to the nearest half band. A single recorded task is only a practice estimate, not a full speaking test band.\n")
 		b.WriteString("- CRITICAL FOR IELTS: estimatedScore.value MUST be on the 0.0-9.0 IELTS band scale in 0.5 steps (e.g. 6.5, 7.0, 7.5).\n")
 	}
 

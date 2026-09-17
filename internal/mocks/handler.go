@@ -163,6 +163,10 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	graded, err := gradeCanonical(bank, questionIDsOf(mock), req.Answers)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Answers must match this mock's question list without duplicates.")
+		return
+	}
 	if graded.total == 0 {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest,
 			"None of the submitted answers belong to this mock exam.")
@@ -208,6 +212,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		TotalCorrect:    graded.correct,
 		TotalQuestions:  graded.total,
 		DurationSeconds: req.DurationSeconds,
+		Answers:         req.Answers,
 	})
 	if err != nil {
 		httpx.Internal(w, h.log, "mocks.submit.save", err)
