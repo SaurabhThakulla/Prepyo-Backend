@@ -305,26 +305,31 @@ type ReferralMilestones struct {
 }
 
 type ReferralStats struct {
-	TotalInvited  int `json:"totalInvited"`
-	Pending       int `json:"pending"`
-	Completed     int `json:"completed"`
-	TotalXPEarned int `json:"totalXpEarned"`
+	TotalBonusDaysEarned int `json:"totalBonusDaysEarned"`
+	TotalInvited         int `json:"totalInvited"`
+	Pending              int `json:"pending"`
+	Completed            int `json:"completed"`
+	TotalXPEarned        int `json:"totalXpEarned"`
 }
 
 type RecentReferralItem struct {
-	ID          string     `json:"id"`
-	FriendName  string     `json:"friendName"`
-	Status      string     `json:"status"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	RewardDays    int        `json:"rewardDays"`
+	PaymentStatus string     `json:"paymentStatus,omitempty"`
+	ID            string     `json:"id"`
+	FriendName    string     `json:"friendName"`
+	Status        string     `json:"status"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	CompletedAt   *time.Time `json:"completedAt,omitempty"`
 }
 
 type ReferralOverview struct {
-	ReferralCode    string               `json:"referralCode"`
-	ShareLink       string               `json:"shareLink"`
-	Stats           ReferralStats        `json:"stats"`
-	Milestones      ReferralMilestones   `json:"milestones"`
-	RecentReferrals []RecentReferralItem `json:"recentReferrals"`
+	MyReferralStatus string               `json:"myReferralStatus"`
+	CanRedeem        bool                 `json:"canRedeem"`
+	ReferralCode     string               `json:"referralCode"`
+	ShareLink        string               `json:"shareLink"`
+	Stats            ReferralStats        `json:"stats"`
+	Milestones       ReferralMilestones   `json:"milestones"`
+	RecentReferrals  []RecentReferralItem `json:"recentReferrals"`
 }
 
 type ReferralValidation struct {
@@ -507,12 +512,12 @@ type ReadingTest struct {
 }
 
 type ReadingGroup struct {
-	ID               string             `json:"id"`
-	PassageID        string             `json:"passageId"`
-	Position         int                `json:"position"`
-	TypeID           string             `json:"typeId"`
-	TypeName         string             `json:"typeName"`
-	Instructions     string             `json:"instructions"`
+	ID           string `json:"id"`
+	PassageID    string `json:"passageId"`
+	Position     int    `json:"position"`
+	TypeID       string `json:"typeId"`
+	TypeName     string `json:"typeName"`
+	Instructions string `json:"instructions"`
 	// BoxTitle heads the box a summary-completion set is printed in.
 	BoxTitle         string             `json:"boxTitle,omitempty"`
 	Resources        []ReadingParagraph `json:"resources,omitempty"`
@@ -548,18 +553,18 @@ type ReadingTaskType struct {
 }
 
 type ReadingMockSession struct {
-	ID              string     `json:"id"`
-	MockID          string     `json:"mockId"`
-	MockTitle       string     `json:"mockTitle,omitempty"`
-	Exam            ExamType   `json:"exam"`
-	ExamVersionID   string     `json:"examVersionId"`
-	Status          string     `json:"status"`
-	DurationMinutes int        `json:"durationMinutes"`
-	TotalQuestions  int        `json:"totalQuestions"`
-	PassageIDs      []string   `json:"passageIds"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	SubmittedAt     *time.Time `json:"submittedAt,omitempty"`
-	ReusedPassages  bool       `json:"reusedPassages"`
+	ID              string       `json:"id"`
+	MockID          string       `json:"mockId"`
+	MockTitle       string       `json:"mockTitle,omitempty"`
+	Exam            ExamType     `json:"exam"`
+	ExamVersionID   string       `json:"examVersionId"`
+	Status          string       `json:"status"`
+	DurationMinutes int          `json:"durationMinutes"`
+	TotalQuestions  int          `json:"totalQuestions"`
+	PassageIDs      []string     `json:"passageIds"`
+	CreatedAt       time.Time    `json:"createdAt"`
+	SubmittedAt     *time.Time   `json:"submittedAt,omitempty"`
+	ReusedPassages  bool         `json:"reusedPassages"`
 	Sets            []ReadingSet `json:"sets,omitempty"`
 }
 

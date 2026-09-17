@@ -14,6 +14,7 @@ import (
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/notifications"
+	"github.com/prepyo/backend/internal/referrals"
 )
 
 var (
@@ -244,106 +245,6 @@ type ConfirmPaymentParams struct {
 	AmountNPR      int
 }
 
-// ConfirmPayment processes a successful subscription purchase, granting base duration plus purchase bonus days.
-// It is strictly idempotent against duplicate webhooks or retries.
-func (s *Service) ConfirmPayment(ctx context.Context, pool *pgxpool.Pool, p ConfirmPaymentParams) (models.SubscriptionState, error) {
-	if p.UserID == "" || p.PlanID == "" || p.TransactionID == "" {
-		return models.SubscriptionState{}, ErrInvalidPayment
-	}
-
-	plan, err := s.repo.Plan(ctx, p.PlanID)
-	if err != nil {
-		return models.SubscriptionState{}, err
-	}
-
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return models.SubscriptionState{}, fmt.Errorf("begin payment confirmation tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	// Check if this transaction ID was already confirmed (idempotency)
-	var existingStatus string
-	err = tx.QueryRow(ctx, `
-		SELECT status FROM subscription_payments
-		WHERE transaction_id = $1`, p.TransactionID).Scan(&existingStatus)
-	if err == nil && existingStatus == "success" {
-		// Already processed successfully! Return current state without duplicating entitlement.
-		var u models.User
-		_ = tx.QueryRow(ctx, `SELECT id, email, name, role, target_exam, target_score, exam_date, nepal_region, xp, streak_days, streak_last_active_date, timezone, plan_id, plan_started_at, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at FROM users WHERE id = $1`, p.UserID).
-			Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.TargetExam, &u.TargetScore, &u.ExamDate, &u.NepalRegion, &u.XP, &u.StreakDays, &u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanStartedAt, &u.PlanValidUntil, &u.ReferralCode, &u.BonusMockTests, &u.BonusProDays, &u.CreatedAt)
-		return s.State(ctx, tx, u)
-	}
-
-	// Calculate base + purchase bonus days:
-	// Weekly: 7 days (+0 bonus) = 7 days
-	// Normal (pro): 30 days (+3 bonus) = 33 days
-	// Max (elite): 90 days (+7 bonus) = 97 days
-	baseDays := plan.DurationDays
-	if baseDays <= 0 && plan.DurationMonths > 0 {
-		baseDays = plan.DurationMonths * 30
-	}
-	bonusDays := plan.BonusDays
-	effectiveDays := baseDays + bonusDays
-
-	var updatedUser models.User
-	err = tx.QueryRow(ctx, `
-		UPDATE users
-		SET plan_id = $2,
-		    plan_started_at = CURRENT_DATE,
-		    plan_valid_until = COALESCE(GREATEST(plan_valid_until, CURRENT_DATE), CURRENT_DATE) + ($3 || ' days')::INTERVAL,
-		    role = CASE WHEN role = 'admin' THEN 'admin' ELSE $4 END,
-		    updated_at = now()
-		WHERE id = $1
-		RETURNING id, email, name, role, target_exam, target_score, exam_date, nepal_region, xp, streak_days, streak_last_active_date, timezone, plan_id, plan_started_at, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at`,
-		p.UserID, plan.ID, effectiveDays, models.RoleForPlan(plan.ID)).
-		Scan(&updatedUser.ID, &updatedUser.Email, &updatedUser.Name,
-			&updatedUser.Role, &updatedUser.TargetExam, &updatedUser.TargetScore, &updatedUser.ExamDate,
-			&updatedUser.NepalRegion, &updatedUser.XP, &updatedUser.StreakDays, &updatedUser.StreakLastActiveDate,
-			&updatedUser.Timezone, &updatedUser.PlanID, &updatedUser.PlanStartedAt, &updatedUser.PlanValidUntil,
-			&updatedUser.ReferralCode, &updatedUser.BonusMockTests, &updatedUser.BonusProDays, &updatedUser.CreatedAt)
-	if err != nil {
-		return models.SubscriptionState{}, fmt.Errorf("update user plan: %w", err)
-	}
-
-	// Record subscription payment in ledger
-	_, err = tx.Exec(ctx, `
-		INSERT INTO subscription_payments (
-			user_id, plan_id, payment_gateway, transaction_id,
-			amount_npr, status, base_days, bonus_days, effective_days, processed_at
-		)
-		VALUES ($1, $2, $3, $4, $5, 'success', $6, $7, $8, now())
-		ON CONFLICT (transaction_id) DO UPDATE SET
-			status = 'success',
-			processed_at = now()`,
-		p.UserID, plan.ID, p.PaymentGateway, p.TransactionID,
-		p.AmountNPR, baseDays, bonusDays, effectiveDays)
-	if err != nil {
-		return models.SubscriptionState{}, fmt.Errorf("record subscription payment: %w", err)
-	}
-
-	// Send confirmation notification
-	if s.notifications != nil {
-		msg := fmt.Sprintf("Your %s plan is activated for %d days (%d base + %d purchase bonus days)!", plan.Name, effectiveDays, baseDays, bonusDays)
-		if bonusDays == 0 {
-			msg = fmt.Sprintf("Your %s plan is activated for %d days!", plan.Name, effectiveDays)
-		}
-		_ = s.notifications.Create(ctx, tx, notifications.CreateParams{
-			UserID:    p.UserID,
-			Title:     "Subscription Activated! 🎉",
-			Message:   msg,
-			Type:      "system",
-			ActionURL: "/subscription",
-		})
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return models.SubscriptionState{}, fmt.Errorf("commit payment confirmation: %w", err)
-	}
-
-	return s.State(ctx, pool, updatedUser)
-}
-
 // effectivePlan returns the user's active plan, falling back to free if lapsed.
 func (s *Service) effectivePlan(ctx context.Context, user models.User) (models.Plan, error) {
 	if !planIsActive(user) {
@@ -401,7 +302,15 @@ func (s *Service) RequestPayment(ctx context.Context, pool *pgxpool.Pool, p Requ
 		proofType = &p.ProofImageType
 	}
 
-	_, err := pool.Exec(ctx, `
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = referrals.LockLifecycle(ctx, tx); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		INSERT INTO subscription_payments
 			(user_id, plan_id, payment_gateway, transaction_id, phone_number, amount_npr, status,
 			 base_days, bonus_days, effective_days, proof_image, proof_image_type)
@@ -416,7 +325,7 @@ func (s *Service) RequestPayment(ctx context.Context, pool *pgxpool.Pool, p Requ
 		}
 		return fmt.Errorf("record payment request: %w", err)
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // QueuedPlan is a paid plan waiting for the current one to end.

@@ -12,6 +12,19 @@ func TestAuthoredQuestionRejectsUnknownType(t *testing.T) {
 	}
 }
 
+func TestAuthoredQuestionRejectsRemovedSpeakingTask(t *testing.T) {
+	const typeID = "pte-respond-to-situation"
+	for _, spec := range authorableTypes {
+		if spec.TypeID == typeID {
+			t.Fatal("removed task is still in the authoring catalogue")
+		}
+	}
+	_, problems := newAuthoredQuestion{Exam: "PTE", TypeID: typeID, Title: "x"}.normalise()
+	if problems["typeId"] == "" {
+		t.Fatalf("expected a typeId problem, got %v", problems)
+	}
+}
+
 func TestAuthoredQuestionRejectsTheWrongExam(t *testing.T) {
 	_, problems := newAuthoredQuestion{
 		Exam: "IELTS", TypeID: "read-aloud", Title: "x", ContextPassage: "Some text to read.",

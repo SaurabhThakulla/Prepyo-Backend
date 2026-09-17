@@ -1,6 +1,7 @@
 package referrals
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -28,6 +29,8 @@ func (h *Handler) Routes(requireUser func(http.Handler) http.Handler) chi.Router
 	r.Group(func(private chi.Router) {
 		private.Use(requireUser)
 		private.Get("/me", h.overview)
+		private.Get("/", h.overview)
+		private.Post("/redeem", h.redeem)
 	})
 
 	return r
@@ -47,6 +50,26 @@ func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) redeem(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ReferralCode string `json:"referralCode"`
+	}
+	if !httpx.Decode(w, r, &req, h.log, "referrals.redeem") {
+		return
+	}
+	ref, err := h.service.Redeem(r.Context(), reqctx.MustUser(r.Context()).ID, req.ReferralCode)
+	switch {
+	case errors.Is(err, ErrAlreadyReferred), errors.Is(err, ErrPurchaseExists):
+		httpx.Error(w, http.StatusConflict, httpx.CodeConflict, err.Error())
+	case errors.Is(err, ErrSelfReferral), errors.Is(err, ErrCodeNotFound):
+		httpx.ValidationError(w, map[string]string{"referralCode": err.Error()})
+	case err != nil:
+		httpx.Internal(w, h.log, "referrals.redeem", err)
+	default:
+		httpx.JSON(w, http.StatusCreated, map[string]any{"referral": ref})
+	}
+}
+
 func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	user := reqctx.MustUser(r.Context())
 	res, err := h.service.Overview(r.Context(), user)
@@ -55,10 +78,11 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
-		"referralCode":    res.ReferralCode,
-		"shareLink":       res.ShareLink,
-		"stats":           res.Stats,
-		"milestones":      res.Milestones,
-		"recentReferrals": res.RecentReferrals,
+		"referralCode":     res.ReferralCode,
+		"shareLink":        res.ShareLink,
+		"stats":            res.Stats,
+		"myReferralStatus": res.MyReferralStatus,
+		"canRedeem":        res.CanRedeem,
+		"recentReferrals":  res.RecentReferrals,
 	})
 }

@@ -102,10 +102,6 @@ var authorableTypes = []questionTypeSpec{
 		Answer: answerRubric, Audio: fieldRequired,
 		Prompt:      "You will hear three people having a discussion. Summarise the conversation in your own words.",
 		PrepSeconds: 10, TimeLimitSeconds: 120, Points: 15},
-	{Exam: "PTE", Skill: "speaking", TypeID: "pte-respond-to-situation", TypeName: "Respond to Situation",
-		Answer: answerRubric, Audio: fieldRequired,
-		Prompt:      "Listen to and read the situation. In 20 seconds, provide an appropriate spoken response to the person in the situation.",
-		PrepSeconds: 20, TimeLimitSeconds: 40, Points: 15},
 
 	{Exam: "IELTS", Skill: "listening", TypeID: "ielts-listening-fill-blanks", TypeName: "Fill in the blanks",
 		Answer: answerBlanks, Audio: fieldRequired,

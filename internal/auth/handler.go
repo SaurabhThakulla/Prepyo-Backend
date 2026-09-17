@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/referrals"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
 )
@@ -179,6 +180,9 @@ func (h *Handler) googleSignIn(w http.ResponseWriter, r *http.Request) {
 
 	user, token, err := h.service.SignInWithGoogle(r.Context(), req.Credential, req.ReferralCode)
 	switch {
+	case errors.Is(err, referrals.ErrCodeNotFound), errors.Is(err, referrals.ErrSelfReferral), errors.Is(err, referrals.ErrAlreadyReferred):
+		httpx.ValidationError(w, map[string]string{"referralCode": err.Error()})
+		return
 	case errors.Is(err, ErrGoogleNotConfigured):
 		httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeNotConfigured,
 			"Google sign-in is not available right now. Please try again later.")

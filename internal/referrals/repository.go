@@ -31,11 +31,11 @@ func (r *Repository) UserByCode(ctx context.Context, db database.DB, code string
 	norm := NormalizeCode(code)
 	var u models.User
 	err := db.QueryRow(ctx, `
-		SELECT id, email, name, role, target_exam, target_score, exam_date,
+		SELECT id, COALESCE(email, ''), name, role, target_exam, target_score, exam_date,
 		       nepal_region, xp, streak_days, streak_last_active_date, timezone,
 		       plan_id, plan_started_at, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at
 		FROM users
-		WHERE referral_code = $1`, norm).
+		WHERE upper(btrim(referral_code)) = $1`, norm).
 		Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.TargetExam,
 			&u.TargetScore, &u.ExamDate, &u.NepalRegion, &u.XP, &u.StreakDays,
 			&u.StreakLastActiveDate, &u.Timezone, &u.PlanID, &u.PlanStartedAt, &u.PlanValidUntil,
@@ -63,6 +63,7 @@ func (r *Repository) Create(ctx context.Context, db database.DB, ref models.Refe
 			reward_referrer_xp, reward_referee_xp
 		)
 		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (referee_id) DO NOTHING
 		RETURNING id, referrer_id, referee_id, referral_code, status,
 		          reward_referrer_xp, reward_referee_xp, created_at, completed_at`,
 		ref.ReferrerID, ref.RefereeID, NormalizeCode(ref.ReferralCode),
@@ -71,6 +72,9 @@ func (r *Repository) Create(ctx context.Context, db database.DB, ref models.Refe
 		&created.Status, &created.RewardReferrerXP, &created.RewardRefereeXP,
 		&created.CreatedAt, &created.CompletedAt)
 
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.Referral{}, ErrAlreadyReferred
+	}
 	if err != nil {
 		return models.Referral{}, fmt.Errorf("create referral: %w", err)
 	}
@@ -158,7 +162,13 @@ func (r *Repository) AddBonusProDays(ctx context.Context, db database.DB, userID
 	_, err := db.Exec(ctx, `
 		UPDATE users
 		SET bonus_pro_days = bonus_pro_days + $2,
-		    plan_valid_until = COALESCE(GREATEST(plan_valid_until, CURRENT_DATE), CURRENT_DATE) + ($2 || ' days')::INTERVAL,
+		    plan_id = CASE WHEN plan_id <> 'free' AND plan_valid_until > CURRENT_DATE THEN plan_id ELSE 'pro' END,
+		    plan_started_at = CASE WHEN plan_id <> 'free' AND plan_valid_until > CURRENT_DATE THEN plan_started_at ELSE CURRENT_DATE END,
+		    role = CASE WHEN role = 'admin' THEN role
+		                WHEN plan_valid_until > CURRENT_DATE AND plan_id = 'weekly' THEN 'abhyas'
+		                WHEN plan_valid_until > CURRENT_DATE AND plan_id = 'elite' THEN 'udaan'
+		                ELSE 'taiyari' END,
+		    plan_valid_until = GREATEST(COALESCE(plan_valid_until, CURRENT_DATE), CURRENT_DATE) + make_interval(days => $2),
 		    updated_at = now()
 		WHERE id = $1`, userID, days)
 	if err != nil {
@@ -170,11 +180,21 @@ func (r *Repository) AddBonusProDays(ctx context.Context, db database.DB, userID
 // Overview aggregates the complete referral profile for the authenticated learner.
 func (r *Repository) Overview(ctx context.Context, db database.DB, user models.User, webAppURL string) (models.ReferralOverview, error) {
 	var totalInvited, pendingCount, completedCount, totalXpEarned int
+	var totalDays int
+	var myStatus string
+	var canRedeem bool
+	if err := db.QueryRow(ctx, `SELECT bonus_pro_days,
+  COALESCE((SELECT CASE WHEN reward_payment_id IS NOT NULL THEN 'completed' WHEN status = 'completed' THEN 'legacy' ELSE status END FROM referrals WHERE referee_id = users.id), 'none'),
+  NOT EXISTS(SELECT 1 FROM referrals WHERE referee_id = users.id)
+  AND NOT EXISTS(SELECT 1 FROM subscription_payments WHERE user_id = users.id AND status IN ('pending','success','refunded'))
+  FROM users WHERE id = $1`, user.ID).Scan(&totalDays, &myStatus, &canRedeem); err != nil {
+		return models.ReferralOverview{}, err
+	}
 	err := db.QueryRow(ctx, `
 		SELECT
 			count(*),
 			count(*) FILTER (WHERE status = 'pending'),
-			count(*) FILTER (WHERE status = 'completed'),
+			count(*) FILTER (WHERE reward_payment_id IS NOT NULL),
 			COALESCE(sum(reward_referrer_xp) FILTER (WHERE status = 'completed'), 0)
 		FROM referrals
 		WHERE referrer_id = $1`, user.ID).
@@ -184,12 +204,13 @@ func (r *Repository) Overview(ctx context.Context, db database.DB, user models.U
 	}
 
 	rows, err := db.Query(ctx, `
-		SELECT r.id, u.name, r.status, r.created_at, r.completed_at
+		SELECT r.id, u.name, CASE WHEN r.reward_payment_id IS NOT NULL THEN 'completed' WHEN r.status = 'completed' THEN 'legacy' ELSE r.status END,
+   r.created_at, r.completed_at, r.reward_days, COALESCE(p.status, '')
 		FROM referrals r
 		JOIN users u ON r.referee_id = u.id
+  LEFT JOIN subscription_payments p ON p.id = r.reward_payment_id
 		WHERE r.referrer_id = $1
-		ORDER BY r.created_at DESC
-		LIMIT 15`, user.ID)
+		ORDER BY r.created_at DESC`, user.ID)
 	if err != nil {
 		return models.ReferralOverview{}, fmt.Errorf("list recent referrals: %w", err)
 	}
@@ -199,26 +220,32 @@ func (r *Repository) Overview(ctx context.Context, db database.DB, user models.U
 	for rows.Next() {
 		var item models.RecentReferralItem
 		var rawName string
-		if err := rows.Scan(&item.ID, &rawName, &item.Status, &item.CreatedAt, &item.CompletedAt); err != nil {
+		if err := rows.Scan(&item.ID, &rawName, &item.Status, &item.CreatedAt, &item.CompletedAt, &item.RewardDays, &item.PaymentStatus); err != nil {
 			return models.ReferralOverview{}, fmt.Errorf("scan recent referral: %w", err)
 		}
 		item.FriendName = maskName(rawName)
 		recent = append(recent, item)
 	}
 
+	if err := rows.Err(); err != nil {
+		return models.ReferralOverview{}, err
+	}
 	if webAppURL == "" {
 		webAppURL = "https://prepyo.com"
 	}
 	shareLink := fmt.Sprintf("%s/signup?ref=%s", strings.TrimRight(webAppURL, "/"), user.ReferralCode)
 
 	return models.ReferralOverview{
-		ReferralCode: user.ReferralCode,
-		ShareLink:    shareLink,
+		ReferralCode:     user.ReferralCode,
+		MyReferralStatus: myStatus,
+		CanRedeem:        canRedeem,
+		ShareLink:        shareLink,
 		Stats: models.ReferralStats{
-			TotalInvited:  totalInvited,
-			Pending:       pendingCount,
-			Completed:     completedCount,
-			TotalXPEarned: totalXpEarned,
+			TotalInvited:         totalInvited,
+			Pending:              pendingCount,
+			Completed:            completedCount,
+			TotalXPEarned:        totalXpEarned,
+			TotalBonusDaysEarned: totalDays,
 		},
 		Milestones: models.ReferralMilestones{
 			ThreeReferrals: models.ReferralMilestone{

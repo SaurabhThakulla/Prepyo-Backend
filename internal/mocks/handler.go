@@ -1,7 +1,6 @@
 package mocks
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -19,10 +18,6 @@ import (
 	"github.com/prepyo/backend/pkg/httpx"
 )
 
-type ReferralsService interface {
-	QualifyReferral(ctx context.Context, refereeID string) error
-}
-
 type Handler struct {
 	db        *pgxpool.Pool
 	repo      *Repository
@@ -31,7 +26,6 @@ type Handler struct {
 	xp        *gamification.Service
 	billing   *billing.Service
 	mistakes  *mistakes.Repository
-	referrals ReferralsService
 	log       *slog.Logger
 }
 
@@ -43,7 +37,6 @@ func NewHandler(
 	xp *gamification.Service,
 	billing *billing.Service,
 	mistakeRepo *mistakes.Repository,
-	referrals ReferralsService,
 	log *slog.Logger,
 ) *Handler {
 	return &Handler{
@@ -54,7 +47,6 @@ func NewHandler(
 		xp:        xp,
 		billing:   billing,
 		mistakes:  mistakeRepo,
-		referrals: referrals,
 		log:       log,
 	}
 }
@@ -199,7 +191,6 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 
 	overall := scale.EstimateOverall(string(mock.Exam), skillScores, graded.correct, graded.total)
 
-
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		httpx.Internal(w, h.log, "mocks.submit.begin", err)
@@ -269,13 +260,6 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 
 		httpx.Internal(w, h.log, "mocks.submit.commit", err)
 		return
-	}
-
-	// If this was a diagnostic test, qualify pending referral
-	if mock.IsDiagnostic && h.referrals != nil {
-		if err := h.referrals.QualifyReferral(ctx, user.ID); err != nil {
-			h.log.Error("referral qualification failed for diagnostic", "error", err, "userId", user.ID)
-		}
 	}
 
 	httpx.JSON(w, http.StatusCreated, map[string]any{

@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/prepyo/backend/internal/billing"
+	"github.com/prepyo/backend/internal/referrals"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
 )
@@ -274,6 +276,10 @@ func (h *Handler) applyPaymentReview(ctx context.Context, paymentID, actorID str
 	}
 	defer tx.Rollback(ctx)
 
+	if err := referrals.LockLifecycle(ctx, tx); err != nil {
+		return 0, false, err
+	}
+
 	// Locked so two admins clicking approve at the same moment cannot grant the
 	// same plan twice.
 	var userID, planID string
@@ -312,43 +318,18 @@ func (h *Handler) applyPaymentReview(ctx context.Context, paymentID, actorID str
 		return 0, false, nil
 	}
 
-	// Overwriting the user's plan here is what downgraded anyone who bought a
-	// cheaper plan while a better one was still running. A live plan is left
-	// alone and the purchase waits its turn instead.
-	var liveUntil *time.Time
-	if err := tx.QueryRow(ctx,
-		`SELECT plan_valid_until FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&liveUntil); err != nil {
-		return 0, false, fmt.Errorf("read current plan: %w", err)
+	if err := referrals.QualifyPayment(ctx, tx, paymentID); err != nil {
+		return 0, false, err
 	}
 
-	if liveUntil != nil && liveUntil.After(time.Now()) {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO queued_plans (user_id, plan_id, days, payment_id, status)
-			VALUES ($1, $2, $3, $4, 'queued')`, userID, planID, days, paymentID); err != nil {
-			return 0, false, fmt.Errorf("queue plan: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return 0, false, fmt.Errorf("commit queued approval: %w", err)
-		}
-		return days, true, nil
+	queued, err := billing.GrantPurchase(ctx, tx, userID, planID, paymentID, days)
+	if err != nil {
+		return 0, false, err
 	}
-
-	// Nothing running, so it starts today.
-	if _, err := tx.Exec(ctx, `
-		UPDATE users
-		SET plan_id = $2,
-		    plan_started_at = CURRENT_DATE,
-		    plan_valid_until = CURRENT_DATE + make_interval(days => $3),
-		    role = CASE WHEN role = 'admin' THEN 'admin' ELSE $4 END,
-		    updated_at = now()
-		WHERE id = $1`, userID, planID, days, roleForPlanID(planID)); err != nil {
-		return 0, false, fmt.Errorf("grant plan: %w", err)
+	if err = tx.Commit(ctx); err != nil {
+		return 0, false, err
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, false, fmt.Errorf("commit approval: %w", err)
-	}
-	return days, false, nil
+	return days, queued, nil
 }
 
 // roleForPlanID is planForRole read the other way.

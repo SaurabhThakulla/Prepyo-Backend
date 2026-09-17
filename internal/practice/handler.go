@@ -1,7 +1,6 @@
 package practice
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -20,10 +19,6 @@ import (
 	"github.com/prepyo/backend/pkg/httpx"
 )
 
-type ReferralsService interface {
-	QualifyReferral(ctx context.Context, refereeID string) error
-}
-
 type Handler struct {
 	db        *pgxpool.Pool
 	repo      *Repository
@@ -32,7 +27,6 @@ type Handler struct {
 	exams     *exams.Repository
 	xp        *gamification.Service
 	billing   *billing.Service
-	referrals ReferralsService
 	log       *slog.Logger
 }
 
@@ -44,7 +38,6 @@ func NewHandler(
 	examRepo *exams.Repository,
 	xp *gamification.Service,
 	billingService *billing.Service,
-	referrals ReferralsService,
 	log *slog.Logger,
 ) *Handler {
 	return &Handler{
@@ -55,7 +48,6 @@ func NewHandler(
 		exams:     examRepo,
 		xp:        xp,
 		billing:   billingService,
-		referrals: referrals,
 		log:       log,
 	}
 }
@@ -226,16 +218,6 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(ctx); err != nil {
 		httpx.Internal(w, h.log, "practice.submit.commit", err)
 		return
-	}
-
-	// If referee has completed at least 10 practice questions, qualify referral
-	if h.referrals != nil {
-		var totalPracticeAttempts int
-		if err := h.db.QueryRow(ctx, `SELECT count(*) FROM practice_attempts WHERE user_id = $1`, user.ID).Scan(&totalPracticeAttempts); err == nil && totalPracticeAttempts >= 10 {
-			if err := h.referrals.QualifyReferral(ctx, user.ID); err != nil {
-				h.log.Error("referral qualification failed for practice", "error", err, "userId", user.ID)
-			}
-		}
 	}
 
 	httpx.JSON(w, http.StatusCreated, map[string]any{

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/referrals"
 )
 
 var (
@@ -51,13 +52,27 @@ func (r *Repository) Create(ctx context.Context, p CreateParams) (models.User, e
 }
 
 func (r *Repository) CreateTx(ctx context.Context, db database.DB, p CreateParams) (models.User, error) {
-	row := db.QueryRow(ctx, `
-		INSERT INTO users (email, google_sub, name, nepal_region, timezone, referral_code)
-		VALUES (lower(NULLIF($1, '')), NULLIF($2, ''), $3, $4, $5, $6)
-		RETURNING `+selectUserFields,
-		p.Email, p.GoogleSub, p.Name, p.NepalRegion, p.Timezone, p.ReferralCode)
-
-	user, err := scanUser(row)
+	var user models.User
+	var err error
+	for attempt := 0; attempt < 10; attempt++ {
+		if p.ReferralCode == "" {
+			p.ReferralCode, err = referrals.GenerateCode()
+			if err != nil {
+				return models.User{}, err
+			}
+		}
+		row := db.QueryRow(ctx, `
+   INSERT INTO users (email, google_sub, name, nepal_region, timezone, referral_code)
+   VALUES (lower(NULLIF($1, '')), NULLIF($2, ''), $3, $4, $5, $6)
+   ON CONFLICT (upper(btrim(referral_code))) DO NOTHING
+   RETURNING `+selectUserFields,
+			p.Email, p.GoogleSub, p.Name, p.NepalRegion, p.Timezone, referrals.NormalizeCode(p.ReferralCode))
+		user, err = scanUser(row)
+		if !errors.Is(err, pgx.ErrNoRows) {
+			break
+		}
+		p.ReferralCode = ""
+	}
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {

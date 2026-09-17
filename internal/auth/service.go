@@ -277,7 +277,7 @@ func (s *Service) registerWithGoogle(ctx context.Context, identity GoogleIdentit
 
 	if s.referrals != nil && strings.TrimSpace(referralCode) != "" {
 		if _, err := s.referrals.LinkReferralOnRegister(ctx, tx, user.ID, referralCode); err != nil {
-			s.log.Warn("referral linking notice during google registration", "error", err, "code", referralCode)
+			return models.User{}, "", err
 		}
 	}
 
