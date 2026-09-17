@@ -30,6 +30,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Use(h.requirePremium)
 	r.Get("/", h.list)
 	r.Get("/analytics", h.analytics)
+	r.Get("/{mistakeID}/task", h.task)
 	r.Post("/{mistakeID}/resolve", h.resolve)
 	return r
 }
@@ -53,7 +54,6 @@ func (h *Handler) analytics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 func (h *Handler) requirePremium(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := reqctx.User(r.Context())
@@ -68,7 +68,6 @@ func (h *Handler) requirePremium(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	user := reqctx.MustUser(r.Context())
@@ -96,6 +95,19 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) task(w http.ResponseWriter, r *http.Request) {
+	task, err := h.repo.Task(r.Context(), reqctx.MustUser(r.Context()).ID, chi.URLParam(r, "mistakeID"))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That task is not available in your mistake bank.")
+			return
+		}
+		httpx.Internal(w, h.log, "mistakes.task", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"question": task.Question, "passage": task.Passage, "group": task.Group})
+}
+
 func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) {
 	user := reqctx.MustUser(r.Context())
 	mistakeID := chi.URLParam(r, "mistakeID")
@@ -112,7 +124,7 @@ func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) {
 			// Covers both "no such mistake" and "not yours": the response is
 			// the same either way, so this cannot be used to probe other
 			// learners' data.
-			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That mistake is not in your bank, or is already resolved.")
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "This mistake cannot be resolved. Complete a new correct attempt first, or refresh if it is already resolved.")
 			return
 		}
 		httpx.Internal(w, h.log, "mistakes.resolve", err)

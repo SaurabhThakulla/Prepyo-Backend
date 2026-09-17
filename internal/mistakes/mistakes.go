@@ -108,11 +108,21 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, 
 	return list, total, rows.Err()
 }
 
-// Resolve marks a mistake as handled for a user.
+// Resolve requires a newer correct attempt for this learner, question and exam.
 func (r *Repository) Resolve(ctx context.Context, db database.DB, userID, mistakeID string) error {
 	tag, err := db.Exec(ctx, `
-		UPDATE mistakes SET resolved = TRUE
-		WHERE id = $1 AND user_id = $2 AND NOT resolved`,
+		UPDATE mistakes m SET resolved = TRUE
+		WHERE m.id = $1 AND m.user_id = $2 AND NOT m.resolved
+		  AND EXISTS (
+		    SELECT 1 FROM practice_attempts a
+		    WHERE a.user_id=m.user_id AND a.question_id=m.question_id
+		      AND a.exam=m.exam AND a.is_correct AND a.created_at > m.last_attempted_at
+		      AND NOT EXISTS (
+		        SELECT 1 FROM practice_attempts newer
+		        WHERE newer.user_id=a.user_id AND newer.question_id=a.question_id
+		          AND newer.exam=a.exam AND newer.created_at>a.created_at
+		      )
+		  )`,
 		mistakeID, userID)
 	if err != nil {
 		return fmt.Errorf("resolve mistake: %w", err)
@@ -297,4 +307,3 @@ func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (Analytic
 
 	return summary, nil
 }
-
