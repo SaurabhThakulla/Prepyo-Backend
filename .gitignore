@@ -25,3 +25,5 @@ bin/
 Thumbs.db
 .idea/
 .vscode/
+.claude/
+agent/

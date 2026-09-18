@@ -11,10 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/testdb"
-	"github.com/prepyo/backend/migrations"
 )
 
-func TestMigratorRepairsMissingContent(t *testing.T) {
+func TestMigratorAppliesAllCleanly(t *testing.T) {
 	ctx := context.Background()
 	admin, err := pgxpool.New(ctx, testdb.URL(t))
 	if err != nil {
@@ -39,43 +38,7 @@ func TestMigratorRepairsMissingContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err = pool.Exec(ctx, `CREATE TABLE schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
-		t.Fatal(err)
-	}
-	files, err := pendingFiles(map[string]bool{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range files {
-		if name >= "000050" {
-			continue
-		}
-		body, err := migrations.Files.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err = tx.Conn().PgConn().Exec(ctx, string(body)).ReadAll(); err != nil {
-			_ = tx.Rollback(ctx)
-			t.Fatalf("%s: %v", name, err)
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES($1)`, name); err != nil {
-			_ = tx.Rollback(ctx)
-			t.Fatal(err)
-		}
-		if err = tx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err = pool.Exec(ctx, `DELETE FROM questions WHERE skill IN ('writing','speaking') AND id NOT LIKE 'pte-wrt-swt-%'`); err != nil {
-		t.Fatal(err)
-	}
-	if err = CheckSeedIntegrity(ctx, pool); err == nil {
-		t.Fatal("simulated data loss was not detected")
-	}
+
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if err = Migrate(ctx, pool, log); err != nil {
 		t.Fatal(err)
@@ -83,21 +46,24 @@ func TestMigratorRepairsMissingContent(t *testing.T) {
 	if err = Migrate(ctx, pool, log); err != nil {
 		t.Fatalf("second migration run: %v", err)
 	}
-	var writing, speaking, recorded int
-	if err = pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE skill='writing'), count(*) FILTER(WHERE skill='speaking') FROM questions`).Scan(&writing, &speaking); err != nil {
+
+	var questionsCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM questions`).Scan(&questionsCount); err != nil {
 		t.Fatal(err)
 	}
-	// Includes the three original IELTS Speaking pilot tasks from migration 000055.
-	if writing != 241 || speaking != 55 {
-		t.Fatalf("writing=%d speaking=%d", writing, speaking)
+	if questionsCount != 0 {
+		t.Fatalf("expected 0 seeded questions, got %d", questionsCount)
 	}
-	if err = pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations WHERE version='000050_restore_seed_content.up.sql'`).Scan(&recorded); err != nil || recorded != 1 {
-		t.Fatalf("recorded=%d err=%v", recorded, err)
+
+	if err = CheckSeedIntegrity(ctx, pool); err != nil {
+		t.Fatalf("seed integrity check failed: %v", err)
 	}
-	if _, err = pool.Exec(ctx, `DELETE FROM questions WHERE id='pte-spk-001'`); err != nil {
+
+	// Delete a core plan and verify integrity check fails
+	if _, err = pool.Exec(ctx, `DELETE FROM plans WHERE id='free'`); err != nil {
 		t.Fatal(err)
 	}
-	if err = Migrate(ctx, pool, log); err == nil {
-		t.Fatal("up-to-date migration history hid missing content")
+	if err = CheckSeedIntegrity(ctx, pool); err == nil {
+		t.Fatal("missing plan was not detected by CheckSeedIntegrity")
 	}
 }

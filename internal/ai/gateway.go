@@ -143,7 +143,11 @@ func fallbackCandidates(primary string, isAudio bool) []string {
 	primary = strings.TrimSpace(primary)
 	var pool []string
 	if isAudio {
-		pool = []string{primary, "gemini-3.7-flash", "gemini-3.6-flash"}
+		if strings.Contains(primary, "/") {
+			pool = []string{primary, "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite"}
+		} else {
+			pool = []string{primary, "gemini-3.7-flash", "gemini-3.6-flash"}
+		}
 	} else {
 		pool = []string{primary, "gpt-5.6-luna", "claude-sonnet-5", "gpt-5.5", "gemini-3.7-flash"}
 	}
@@ -160,7 +164,11 @@ func fallbackCandidates(primary string, isAudio bool) []string {
 	}
 	if len(result) == 0 {
 		if isAudio {
-			result = []string{"gemini-3.7-flash"}
+			if strings.Contains(primary, "/") {
+				result = []string{"google/gemini-2.5-flash"}
+			} else {
+				result = []string{"gemini-3.7-flash"}
+			}
 		} else {
 			result = []string{"gpt-5.6-luna"}
 		}
