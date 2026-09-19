@@ -3,25 +3,29 @@
 Go API for the Prepyo PTE/IELTS practice platform. One binary, PostgreSQL, no
 microservices.
 
-## Running it
+## Running with Docker
+
+Make sure Docker Desktop (or your Docker engine) is running, then start the whole stack:
 
 ```bash
-docker compose up
+docker compose up --build
 ```
 
-That starts Postgres, Redis and the API on port 8080. The API applies its own
-migrations at startup, so there is no separate migration step.
+This starts:
+- **Postgres 16** on `:5432` with automated health checks
+- **Redis 7** on `:6379`
+- **Prepyo API** on `:8080` (applies embedded migrations automatically at startup)
 
-To run the API directly against the compose database:
-
+Check health status:
 ```bash
-cp backend/.env.example backend/.env
+curl http://localhost:8080/health
 ```
 
-then, from `backend/`:
+To run only the database and cache in Docker while developing the API locally:
 
 ```bash
-DATABASE_URL="postgres://prepyo:prepyo_pass@localhost:5432/prepyo_db?sslmode=disable" go run ./cmd/api
+docker compose up postgres redis -d
+go run ./cmd/api
 ```
 
 The API refuses to start if required configuration is missing, and reports

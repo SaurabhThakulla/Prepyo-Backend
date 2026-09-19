@@ -1,0 +1,40 @@
+# Git & version control
+.git
+.gitignore
+
+# Environment & credentials (prevent secret leakage into image)
+.env
+.env.*
+!.env.example
+
+# Go build & test artifacts
+bin/
+*.exe
+*.test
+*.out
+coverage.out
+
+# IDE and tool metadata
+.vscode/
+.idea/
+.claude/
+.agents/
+skills-lock.json
+
+# Local scripts & test runners
+run_local.ps1
+start.bat
+test_routes.ps1
+scripts/
+
+# Documentation & design assets
+docs/
+*.md
+!README.md
+
+# OS & temporary files
+.DS_Store
+Thumbs.db
+tmp/
+temp/
+*.log

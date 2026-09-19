@@ -2,50 +2,88 @@ services:
   api:
     build:
       context: .
+      dockerfile: Dockerfile
     container_name: prepyo-api
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      APP_ENV: development
-      PORT: 8080
-      ALLOWED_ORIGINS: http://localhost:3000
-      DATABASE_URL: postgres://prepyo:prepyo_pass@postgres:5432/prepyo_db?sslmode=disable
-      REDIS_URL: redis://redis:6379`n      # Without a key the AI endpoints return 503 rather than inventing scores.
+      APP_ENV: ${APP_ENV:-development}
+      PORT: "8080"
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://prepyo:prepyo_pass@postgres:5432/prepyo_db?sslmode=disable}
+      # Default MIGRATION_DATABASE_URL to empty so migrations run against the local container database
+      MIGRATION_DATABASE_URL: ${DOCKER_MIGRATION_DATABASE_URL:-}
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+      AI_BASE_URL: ${AI_BASE_URL:-https://codecraftapi.com/v1}
       AI_API_KEY: ${AI_API_KEY:-}
       CODE_CRAFT: ${CODE_CRAFT:-}
+      AI_AUDIO_BASE_URL: ${AI_AUDIO_BASE_URL:-}
+      AI_AUDIO_API_KEY: ${AI_AUDIO_API_KEY:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@prepyo.online}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      WEB_APP_URL: ${WEB_APP_URL:-http://localhost:3000}
+      SESSION_TTL: ${SESSION_TTL:-336h}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - prepyo-net
     restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
     container_name: prepyo-postgres
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     environment:
-      POSTGRES_USER: prepyo
-      POSTGRES_PASSWORD: prepyo_pass
-      POSTGRES_DB: prepyo_db
+      POSTGRES_USER: ${POSTGRES_USER:-prepyo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prepyo_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-prepyo_db}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # The schema is not mounted here: the API applies its own embedded
-    # migrations at startup, so dev and production use the same path.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U prepyo -d prepyo_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-prepyo} -d ${POSTGRES_DB:-prepyo_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - prepyo-net
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: prepyo-redis
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redisdata:/data
+    networks:
+      - prepyo-net
     restart: unless-stopped
 
 volumes:
   pgdata:
+  redisdata:
+
+networks:
+  prepyo-net:
+    driver: bridge
