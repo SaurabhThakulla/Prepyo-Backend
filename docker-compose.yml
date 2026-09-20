@@ -14,8 +14,6 @@ services:
       PORT: "8080"
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://prepyo:prepyo_pass@postgres:5432/prepyo_db?sslmode=disable}
-      # Default MIGRATION_DATABASE_URL to empty so migrations run against the local container database
-      MIGRATION_DATABASE_URL: ${DOCKER_MIGRATION_DATABASE_URL:-}
       REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
       AI_BASE_URL: ${AI_BASE_URL:-https://codecraftapi.com/v1}

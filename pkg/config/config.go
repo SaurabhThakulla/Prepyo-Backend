@@ -22,10 +22,8 @@ type Config struct {
 	WebAppURL         string
 
 	DatabaseURL string
-	// MigrationDatabaseURL optionally uses a direct, schema-owner connection.
-	MigrationDatabaseURL string
-	AutoMigrate          bool
-	RedisURL             string
+	AutoMigrate bool
+	RedisURL    string
 
 	SessionTTL time.Duration
 	// SecureCookies must be true anywhere the app is served over HTTPS.
@@ -130,7 +128,6 @@ func Load() (*Config, error) {
 	}
 
 	cfg.DatabaseURL = os.Getenv("DATABASE_URL")
-	cfg.MigrationDatabaseURL = os.Getenv("MIGRATION_DATABASE_URL")
 	cfg.AutoMigrate = boolOr("AUTO_MIGRATE", true)
 	if cfg.DatabaseURL == "" {
 		problems = append(problems, "DATABASE_URL is required")
