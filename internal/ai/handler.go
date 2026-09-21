@@ -23,8 +23,24 @@ func NewHandler(gateway *Gateway, log *slog.Logger) *Handler {
 
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
+	r.Get("/capabilities", h.capabilities)
 	r.Post("/tutor", h.tutor)
 	return r
+}
+
+// capabilities tells the app which kinds of feedback are actually available, so
+// it can offer a speaking task as recording practice instead of letting a
+// learner record an answer nothing is going to score.
+func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request) {
+	// speakingTranscript is the fallback for a provider with no audio models:
+	// the device transcribes, the text model judges the words, and nothing
+	// pretends to have heard how they were said.
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"writing":            h.gateway.Available(),
+		"speaking":           h.gateway.SpeakingAvailable(),
+		"speakingTranscript": !h.gateway.SpeakingAvailable() && h.gateway.Available(),
+		"tutor":              h.gateway.Available(),
+	})
 }
 
 func (h *Handler) tutor(w http.ResponseWriter, r *http.Request) {

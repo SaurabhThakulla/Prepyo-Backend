@@ -28,6 +28,11 @@ type Handler struct {
 	xp        *gamification.Service
 	billing   *billing.Service
 	log       *slog.Logger
+	// speakingEvaluated mirrors the gateway's capability. A speaking task that
+	// nothing can score must not spend a daily sub-test: the credit ledger is
+	// session starts, so starting one for an answer we will refuse to grade
+	// charges a learner for nothing.
+	speakingEvaluated bool
 }
 
 func NewHandler(
@@ -38,17 +43,19 @@ func NewHandler(
 	examRepo *exams.Repository,
 	xp *gamification.Service,
 	billingService *billing.Service,
+	speakingEvaluated bool,
 	log *slog.Logger,
 ) *Handler {
 	return &Handler{
-		db:        db,
-		repo:      repo,
-		questions: questionRepo,
-		mistakes:  mistakeRepo,
-		exams:     examRepo,
-		xp:        xp,
-		billing:   billingService,
-		log:       log,
+		db:                db,
+		repo:              repo,
+		questions:         questionRepo,
+		mistakes:          mistakeRepo,
+		exams:             examRepo,
+		xp:                xp,
+		billing:           billingService,
+		speakingEvaluated: speakingEvaluated,
+		log:               log,
 	}
 }
 
@@ -281,6 +288,18 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Recording a speaking answer is still worth doing when nothing can score
+	// it: the learner can listen back. But it is free practice, so no
+	// session is opened and no credit is spent.
+	if question.Skill == models.SkillSpeaking && !h.speakingEvaluated {
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"sessionId":         "",
+			"remainingSubTests": nil,
+			"scored":            false,
+		})
+		return
+	}
+
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		httpx.Internal(w, h.log, "practice.startSession.begin", err)
@@ -318,6 +337,7 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"sessionId":         sessionID,
 		"remainingSubTests": remaining,
+		"scored":            true,
 	})
 }
 
