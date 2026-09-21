@@ -134,27 +134,31 @@ func speechRate(words, seconds int) int {
 
 func transcriptSystemPrompt(req SpokenTranscriptRequest) string {
 	var b strings.Builder
-	b.WriteString("You are an experienced ")
+	b.WriteString("You are a strict, certified senior ")
 	b.WriteString(string(req.Exam))
-	b.WriteString(" speaking examiner giving practice feedback to a learner in Nepal.\n\n")
+	b.WriteString(" speaking examiner. Your duty is to provide authentic, rigorous exam scoring that mirrors real British Council/IDP and Pearson testing center standards.\n\n")
 	b.WriteString("You are given a transcript of the learner's spoken answer, produced by speech recognition on their device. You cannot hear the recording.\n\n")
-	b.WriteString("Rules:\n")
+	b.WriteString("Evaluation Rigor & Strictness Guidelines:\n")
+	b.WriteString("- CRITICAL: Grade strictly and objectively against official published rubric band descriptors. DO NOT inflate scores or be lenient.\n")
+	b.WriteString("- Real Exam Benchmark: Average test-takers score between Band 5.5 and 6.5 (PTE 50-64). Reserve Band 7.5+ (PTE 75+) strictly for responses demonstrating exceptional lexical precision, complex error-free syntactic range, and coherent elaboration.\n")
+	b.WriteString("- Scrutinize Lexical Resource: Penalize simplistic, repetitive phrasing and non-academic collocations. Demand precise, context-appropriate vocabulary.\n")
+	b.WriteString("- Scrutinize Grammatical Range & Accuracy: Penalize subject-verb disagreements, incorrect verb tenses, article omissions, and fragmented clauses.\n")
+	b.WriteString("- Base delivery comments on the measured speaking rate and duration. A rate below 110 wpm suggests hesitant, fragmented delivery, while rates over 175 wpm suggest rushed pacing; penalize fluency accordingly.\n")
 	b.WriteString("- Judge only what the transcript shows: content, coherence, vocabulary and grammar.\n")
 	b.WriteString("- NEVER score or comment on pronunciation, accent, intonation or stress. You did not hear them. Do not include a pronunciation criterion.\n")
 	b.WriteString("- Speech recognition makes its own mistakes. A single odd word is more likely a recognition error than a learner error: ignore it unless the pattern repeats.\n")
-	b.WriteString("- Base any comment on delivery only on the speaking rate and length given below, never on guesswork.\n")
-	b.WriteString("- Every entry in sentenceFeedback must copy an exact sentence from the transcript into `original`.\n")
+	b.WriteString("- Every entry in sentenceFeedback must copy an exact sentence from the transcript into `original` and provide an elevated, high-scoring correction.\n")
 	b.WriteString("- Say in the summary that this is a provisional estimate from a transcript, and that pronunciation was not assessed.\n")
 
 	if strings.TrimSpace(req.ExpectedText) != "" {
-		b.WriteString("- The learner was given a fixed text to say. Compare the transcript against it and treat omissions and substitutions as content errors, allowing for recognition error.\n")
+		b.WriteString("- The learner was given a fixed text to say. Compare the transcript strictly against it and treat omissions, substitutions and additions as content errors, allowing reasonable margin for speech recognition anomalies.\n")
 	}
 
 	if req.Exam == models.ExamPTE {
-		b.WriteString("- Return exactly two criteria: Content and Oral Fluency. Each has maxScore 90 and evidence-based feedback. Do not return a Pronunciation criterion.\n")
-		b.WriteString("- CRITICAL FOR PTE: estimatedScore.value MUST be on the 10-90 PTE points scale (e.g. 65, 79). DO NOT output 0-9 IELTS band numbers.\n")
+		b.WriteString("- Return exactly two criteria: Content and Oral Fluency. Each has maxScore 90 and evidence-based feedback citing specific weaknesses. Do not return a Pronunciation criterion.\n")
+		b.WriteString("- CRITICAL FOR PTE: estimatedScore.value MUST be on the 10-90 PTE points scale (e.g. 65, 70.0, 79, 85). DO NOT output 0-9 IELTS band numbers.\n")
 	} else {
-		b.WriteString("- Return exactly three criteria: Fluency and Coherence, Lexical Resource, and Grammatical Range and Accuracy. Each has maxScore 9 and evidence-based feedback. Do not return a Pronunciation criterion.\n")
+		b.WriteString("- Return exactly three criteria: Fluency and Coherence, Lexical Resource, and Grammatical Range and Accuracy. Each has maxScore 9 and nonempty evidence-based feedback citing specific weaknesses. Do not return a Pronunciation criterion.\n")
 		b.WriteString("- The estimate must be the equally weighted mean of those three criteria, rounded to the nearest half band.\n")
 		b.WriteString("- CRITICAL FOR IELTS: estimatedScore.value MUST be on the 0.0-9.0 IELTS band scale in 0.5 steps (e.g. 6.0, 6.5, 7.0).\n")
 	}
@@ -162,7 +166,7 @@ func transcriptSystemPrompt(req SpokenTranscriptRequest) string {
 	b.WriteString("- Set estimatedScore.confidence to low or medium. A transcript-only judgement is never high confidence.\n")
 	b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
 {
-  "summary": "two or three sentences, ending with the provisional-estimate caveat",
+  "summary": "two or three sentences of rigorous assessment, ending with the provisional-estimate caveat",
   "estimatedScore": {"value": %.1f, "confidence": "low"},
   "criteria": [{"name": "...", "score": <this criterion's score>, "maxScore": <this criterion's maximum>, "feedback": "..."}],
   "strengths": ["..."],

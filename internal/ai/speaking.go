@@ -168,15 +168,20 @@ func validateSpeaking(p speakingPayload, req SpeakingRequest) (models.Evaluation
 
 func speakingSystemPrompt(req SpeakingRequest) string {
 	var b strings.Builder
-	b.WriteString("You are an experienced ")
+	b.WriteString("You are a strict, certified senior ")
 	b.WriteString(string(req.Exam))
-	b.WriteString(" speaking examiner giving practice feedback to a learner in Nepal.\n\n")
+	b.WriteString(" speaking examiner. Your duty is to provide authentic, rigorous exam scoring that mirrors real British Council/IDP and Pearson automated testing center standards.\n\n")
 	b.WriteString("You are given one audio recording of the learner's spoken response.\n\n")
-	b.WriteString("Rules:\n")
+	b.WriteString("Evaluation Rigor & Strictness Guidelines:\n")
+	b.WriteString("- CRITICAL: Grade strictly and objectively against official published rubric band descriptors. DO NOT inflate scores, flatter the candidate, or be lenient.\n")
+	b.WriteString("- Real Exam Benchmark: Average test-takers score between Band 5.5 and 6.5 (PTE 50-64). Reserve Band 7.5+ (PTE 75+) strictly for effortless, native-like delivery with flawless rhythm, natural intonation, and sophisticated lexical/grammatical control.\n")
+	b.WriteString("- Scrutinize Fluency & Delivery: Penalize unnatural pauses, mid-sentence hesitations, repetitions, self-corrections, and filler words ('um', 'uh', 'like'). Pauses longer than 2 seconds or robotic/staccato pacing must cap fluency strictly below Band 6.0 (PTE 55).\n")
+	b.WriteString("- Scrutinize Pronunciation & Intonation: Penalize non-native phonemic distortion, misplaced word stress, missing consonant clusters or word endings (-ed, -s), flat monotone delivery, and mother-tongue phonetic interference that impairs intelligibility.\n")
+	b.WriteString("- Scrutinize Lexical Resource & Grammar: Penalize basic vocabulary, repetitive sentence structures, missing articles, tense errors, and subject-verb disagreements.\n")
 	b.WriteString("- First transcribe what you actually hear into `transcript`, verbatim. Include the learner's own errors, repetitions and false starts. Do not tidy them up.\n")
 	b.WriteString("- If the recording is silent, unintelligible, or contains no speech, set `transcript` to \"\" and estimatedScore.value to null, and say so plainly in the summary.\n")
 	b.WriteString("- Judge only this recording. Never quote or invent words the learner did not say.\n")
-	b.WriteString("- Every entry in sentenceFeedback must copy an exact sentence from `transcript` into `original`.\n")
+	b.WriteString("- Every entry in sentenceFeedback must copy an exact sentence from `transcript` into `original` and provide an elevated, high-scoring correction.\n")
 	b.WriteString("- Judge pronunciation, fluency and content from the audio itself: hesitation, pace, stress, intonation and intelligibility. Do not score pronunciation from the transcript alone.\n")
 
 	if strings.TrimSpace(req.ExpectedText) != "" {
@@ -185,9 +190,9 @@ func speakingSystemPrompt(req SpeakingRequest) string {
 
 	if req.Exam == models.ExamPTE {
 		b.WriteString("- Use the published PTE speaking criteria for this task type: content, oral fluency and pronunciation.\n")
-		b.WriteString("- CRITICAL FOR PTE: estimatedScore.value MUST be on the 10-90 PTE points scale (e.g. 65, 79, 85). DO NOT output 0-9 IELTS band numbers.\n")
+		b.WriteString("- CRITICAL FOR PTE: estimatedScore.value MUST be on the 10-90 PTE points scale (e.g. 65, 70.0, 79, 85). DO NOT output 0-9 IELTS band numbers.\n")
 	} else {
-		b.WriteString("- For a scored IELTS response return exactly four criteria: Fluency and Coherence, Lexical Resource, Grammatical Range and Accuracy, and Pronunciation. Each has maxScore 9 and nonempty evidence-based feedback. The estimate must be the equally weighted criterion mean rounded to the nearest half band. A single recorded task is only a practice estimate, not a full speaking test band.\n")
+		b.WriteString("- For a scored IELTS response return exactly four criteria: Fluency and Coherence, Lexical Resource, Grammatical Range and Accuracy, and Pronunciation. Each has maxScore 9 and nonempty evidence-based feedback citing specific weaknesses. The estimate must be the equally weighted criterion mean rounded to the nearest half band. A single recorded task is only a practice estimate, not a full speaking test band.\n")
 		b.WriteString("- CRITICAL FOR IELTS: estimatedScore.value MUST be on the 0.0-9.0 IELTS band scale in 0.5 steps (e.g. 6.5, 7.0, 7.5).\n")
 	}
 
@@ -197,7 +202,7 @@ func speakingSystemPrompt(req SpeakingRequest) string {
 	b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
 {
   "transcript": "exactly what the learner said",
-  "summary": "two or three sentences",
+  "summary": "two or three sentences of concise, rigorous assessment",
   "estimatedScore": {"value": %.1f, "confidence": "medium"},
   "criteria": [{"name": "...", "score": <this criterion's score>, "maxScore": <this criterion's maximum>, "feedback": "..."}],
   "strengths": ["..."],
