@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -40,6 +42,21 @@ func retryable(status int) bool {
 
 const maxAttempts = 2
 
+// minCallBudget is the least time worth starting a provider call with. A call
+// that cannot finish before the request deadline is worse than no call: it
+// consumes the remaining budget and fails anyway.
+const minCallBudget = 5 * time.Second
+
+// timeLeftForCall reports whether the deadline leaves room for another attempt.
+// A context without a deadline always does.
+func timeLeftForCall(ctx context.Context) bool {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx.Err() == nil
+	}
+	return ctx.Err() == nil && time.Until(deadline) > minCallBudget
+}
+
 type provider struct {
 	name    string
 	baseURL string
@@ -62,6 +79,7 @@ type Gateway struct {
 	client    *http.Client
 	text      provider
 	audio     provider
+	speaking  bool
 	models    config.AIModels
 	maxTokens int
 	log       *slog.Logger
@@ -72,6 +90,7 @@ func NewGateway(cfg *config.Config, log *slog.Logger) *Gateway {
 		client:    &http.Client{Timeout: cfg.AIRequestTimeout},
 		text:      newProvider(cfg.AIBaseURL, cfg.AIAPIKey),
 		audio:     newProvider(cfg.AIAudioBaseURL, cfg.AIAudioAPIKey),
+		speaking:  cfg.SpeakingEvaluated,
 		models:    cfg.AIModels,
 		maxTokens: cfg.AIMaxTokens,
 		log:       log,
@@ -81,8 +100,10 @@ func NewGateway(cfg *config.Config, log *slog.Logger) *Gateway {
 // Available reports whether text evaluation and tutoring can run.
 func (g *Gateway) Available() bool { return g.text.configured() }
 
-// SpeakingAvailable reports whether the audio provider is configured.
-func (g *Gateway) SpeakingAvailable() bool { return g.audio.configured() }
+// SpeakingAvailable reports whether a recording can be scored: an audio
+// provider that was configured as one, not the text provider standing in for it
+// because its key was inherited.
+func (g *Gateway) SpeakingAvailable() bool { return g.speaking && g.audio.configured() }
 
 // Usage records token counts and latency for a provider call.
 type Usage struct {
@@ -200,6 +221,19 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 
 	var lastErr error
 	for _, candidateModel := range candidates {
+		// Starting a call the deadline cannot fit spends what little time is
+		// left and leaves the caller holding a cancellation instead of a clean
+		// "unavailable", which is the difference between telling a learner to
+		// try again and telling them something broke.
+		if !timeLeftForCall(ctx) {
+			g.log.Warn("skipping ai candidate, not enough time left",
+				"model", candidateModel, "primaryModel", model)
+			if lastErr == nil {
+				lastErr = context.DeadlineExceeded
+			}
+			break
+		}
+
 		payload := chatRequest{
 			Model:       candidateModel,
 			Messages:    messages,
@@ -215,6 +249,7 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 			return "", Usage{}, fmt.Errorf("encode ai request: %w", err)
 		}
 
+		unresponsive := false
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			started := time.Now()
 			text, usage, err := g.send(ctx, p, body, candidateModel, promptVersion, started)
@@ -226,13 +261,30 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 			if ctx.Err() != nil {
 				return "", Usage{}, ErrUnavailable
 			}
+			// A host that never sends headers is down for every model on it,
+			// not just this one. Walking the candidate list costs the learner
+			// one client timeout per entry and ends in the same failure, so
+			// stop at the first one and say so while they are still waiting.
+			if requestTimedOut(err) {
+				unresponsive = true
+				break
+			}
 			if errors.Is(err, errPermanent) {
 				break
 			}
 			if attempt < maxAttempts {
+				if !timeLeftForCall(ctx) {
+					break
+				}
 				g.log.Warn("ai request failed, retrying", "model", candidateModel, "attempt", attempt, "error", err)
 				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 			}
+		}
+
+		if unresponsive {
+			g.log.Error("ai provider is not responding, skipping remaining candidates",
+				"provider", p.name, "failedModel", candidateModel, "error", lastErr)
+			break
 		}
 
 		g.log.Warn("ai model failed, attempting fallback candidate", "failedModel", candidateModel, "error", lastErr)
@@ -240,6 +292,17 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 
 	g.log.Error("all ai candidate models failed", "primaryModel", model, "error", lastErr)
 	return "", Usage{}, fmt.Errorf("%w: %w", ErrUnavailable, lastErr)
+}
+
+// requestTimedOut reports whether the provider never answered, as opposed to
+// answering with a refusal. The client's own timeout surfaces as a deadline on
+// the request, which is why this is not the same check as ctx.Err().
+func requestTimedOut(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err)
 }
 
 func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, promptVersion string, started time.Time) (string, Usage, error) {
