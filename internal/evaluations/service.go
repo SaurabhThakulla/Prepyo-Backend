@@ -81,7 +81,7 @@ func NewService(
 // from a transcript the learner's device produced. That needs only the text
 // provider, which is what a provider without audio models leaves us.
 func (s *Service) SpeakingTranscriptAvailable() bool {
-	return !s.gateway.SpeakingAvailable() && s.gateway.Available()
+	return s.gateway.Available()
 }
 
 // SpeakingAvailable reports whether a recording can be scored at all. Handlers

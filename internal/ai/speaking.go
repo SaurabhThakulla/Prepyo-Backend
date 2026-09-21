@@ -59,11 +59,32 @@ func (g *Gateway) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (mo
 		return models.Evaluation{}, Usage{}, fmt.Errorf("%w: no audio provider is configured", ErrUnavailable)
 	}
 
-	// There is deliberately no fallback to a text model here. A text model
-	// cannot hear the recording; asked to score one anyway it writes a
-	// plausible transcript of words nobody said and grades those. A learner is
-	// better served by "we could not score this" than by a band invented from
-	// an invented answer.
+	// If the configured audio provider is a transcription service (such as Groq Whisper),
+	// transcribe the audio recording first and then evaluate the transcript via the text provider.
+	if strings.Contains(strings.ToLower(g.audio.baseURL), "groq") || strings.Contains(strings.ToLower(g.models.Speaking), "whisper") {
+		transcript, transcribeUsage, err := g.transcribeAudio(ctx, req)
+		if err != nil {
+			return models.Evaluation{}, transcribeUsage, err
+		}
+		if transcript == "" {
+			return models.Evaluation{}, transcribeUsage, fmt.Errorf("%w: could not transcribe speech from audio", ErrBadOutput)
+		}
+
+		eval, evalUsage, err := g.EvaluateSpokenTranscript(ctx, SpokenTranscriptRequest{
+			Exam:            req.Exam,
+			TaskName:        req.TaskName,
+			Prompt:          req.Prompt,
+			ExpectedText:    req.ExpectedText,
+			Transcript:      transcript,
+			DurationSeconds: req.DurationSeconds,
+			WordCount:       len(strings.Fields(transcript)),
+			MinScore:        req.MinScore,
+			MaxScore:        req.MaxScore,
+		})
+		evalUsage.add(transcribeUsage)
+		return eval, evalUsage, err
+	}
+
 	return g.evaluateSpeakingMultimodal(ctx, req)
 }
 

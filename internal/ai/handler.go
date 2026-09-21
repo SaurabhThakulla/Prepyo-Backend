@@ -38,7 +38,7 @@ func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"writing":            h.gateway.Available(),
 		"speaking":           h.gateway.SpeakingAvailable(),
-		"speakingTranscript": !h.gateway.SpeakingAvailable() && h.gateway.Available(),
+		"speakingTranscript": h.gateway.Available(),
 		"tutor":              h.gateway.Available(),
 	})
 }
