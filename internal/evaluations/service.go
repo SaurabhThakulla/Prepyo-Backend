@@ -226,14 +226,14 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		return Outcome{}, err
 	}
 
+	material := speakingMaterialOf(question)
 	evaluation, usage, err := s.gateway.EvaluateSpeaking(ctx, ai.SpeakingRequest{
-		Exam:     question.Exam,
-		TaskName: question.TypeName,
-		Prompt:   question.Prompt,
-		// Read Aloud puts the words to say in the passage; Repeat Sentence puts
-		// them in the transcript. Either way the model needs them to judge
-		// content, and an open task such as a cue card has neither.
-		ExpectedText:    firstNonEmpty(question.ContextPassage, question.AudioTranscript),
+		Exam:            question.Exam,
+		TaskName:        question.TypeName,
+		Prompt:          question.Prompt,
+		ExpectedText:    material.expected,
+		SourceText:      material.source,
+		ReferenceAnswer: material.reference,
 		AudioBase64:     base64.StdEncoding.EncodeToString(req.Audio),
 		AudioFormat:     req.AudioFormat,
 		DurationSeconds: req.DurationSeconds,
@@ -314,14 +314,14 @@ func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req Transcript
 		return Outcome{}, err
 	}
 
-	expected := firstNonEmpty(question.ContextPassage, question.AudioTranscript)
+	material := speakingMaterialOf(question)
 
 	// Read Aloud and Repeat Sentence have one right answer, word for word. That
 	// is an alignment, not an opinion: scoring it here is instant, costs no
 	// provider call, and gives the same answer every time, which a model does
 	// not. See scoring.ScoreVerbatim.
-	if scoring.IsVerbatimTask(question.TypeID) && strings.TrimSpace(expected) != "" {
-		evaluation := verbatimEvaluation(question, version, expected, transcript, req.Delivery)
+	if strings.TrimSpace(material.expected) != "" {
+		evaluation := verbatimEvaluation(question, version, material.expected, transcript, req.Delivery)
 		return s.persist(ctx, persistParams{
 			User:        req.User,
 			Question:    question,
@@ -340,7 +340,9 @@ func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req Transcript
 		Exam:            question.Exam,
 		TaskName:        question.TypeName,
 		Prompt:          question.Prompt,
-		ExpectedText:    expected,
+		ExpectedText:    material.expected,
+		SourceText:      material.source,
+		ReferenceAnswer: material.reference,
 		Transcript:      transcript,
 		DurationSeconds: req.DurationSeconds,
 		WordCount:       words,
@@ -464,6 +466,33 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// speakingMaterial is what a speaking task gives the grader to judge against.
+type speakingMaterial struct {
+	// expected is the text to say word for word. Only Read Aloud and Repeat
+	// Sentence have one.
+	expected string
+	// source is what every other task responds to: a lecture, a discussion, a
+	// situation, a question. It must never reach the grader as text to repeat,
+	// or a correct retelling is marked down for every word it paraphrases.
+	source string
+	// reference is the item's model answer, if it has one.
+	reference string
+}
+
+// speakingMaterialOf sorts a question's text into the part the learner must
+// repeat and the part they must respond to. Read Aloud puts the words to say in
+// the passage; Repeat Sentence puts them in the transcript.
+func speakingMaterialOf(q models.Question) speakingMaterial {
+	text := firstNonEmpty(q.ContextPassage, q.AudioTranscript)
+	material := speakingMaterial{reference: strings.TrimSpace(q.ModelAnswer)}
+	if scoring.IsVerbatimTask(q.TypeID) {
+		material.expected = text
+	} else {
+		material.source = text
+	}
+	return material
 }
 
 // fingerprintOf identifies a submission. Whitespace is normalised so reformatting

@@ -123,3 +123,22 @@ func TestEvaluateSpeakingRejectsUnsupportedFormat(t *testing.T) {
 		}
 	}
 }
+
+// Material a learner responds to must never be framed as text to repeat.
+func TestResponseMaterialIsNotTextToRepeat(t *testing.T) {
+	system := speakingSystemPrompt(SpeakingRequest{
+		Exam: models.ExamPTE, TaskName: "Answer Short Questions",
+		SourceText: "What measures temperature?", ReferenceAnswer: "A thermometer.",
+		MinScore: 10, MaxScore: 90,
+	})
+	if strings.Contains(system, "given a fixed text to say") {
+		t.Error("a short answer was framed as a fixed text to say")
+	}
+	if !strings.Contains(system, "not asked to repeat") || !strings.Contains(system, "same meaning as the reference") {
+		t.Error("system prompt lacks the respond-in-own-words and reference rules")
+	}
+	user := speakingUserPrompt(SpeakingRequest{SourceText: "What measures temperature?", ReferenceAnswer: "A thermometer."})
+	if strings.Contains(user, "asked to say") || !strings.Contains(user, "A thermometer.") {
+		t.Errorf("user prompt framing is wrong:\n%s", user)
+	}
+}

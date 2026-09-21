@@ -12,7 +12,7 @@ import (
 // SpeakingPromptVersion is stamped on every stored evaluation. Change it
 // whenever the prompt below changes, so old feedback stays traceable to the
 // wording that produced it.
-const SpeakingPromptVersion = "speaking.v2"
+const SpeakingPromptVersion = "speaking.v3"
 
 // AudioFormats are the encodings the provider accepts inline. Callers convert
 // a browser recording to one of these before submitting; the gateway does not
@@ -28,6 +28,13 @@ type SpeakingRequest struct {
 	// sentence they were told to repeat. Empty for open-ended tasks such as an
 	// IELTS cue card, where there is no single right answer to compare against.
 	ExpectedText string
+	// SourceText is material the learner responds to rather than repeats: the
+	// lecture to retell, the discussion to summarise, the situation to answer,
+	// the question to reply to. Never set together with ExpectedText.
+	SourceText string
+	// ReferenceAnswer is the item's model answer, a calibration point for
+	// content rather than wording the learner has to match.
+	ReferenceAnswer string
 	// AudioBase64 is the recording, already in AudioFormat.
 	AudioBase64 string
 	AudioFormat string
@@ -75,6 +82,8 @@ func (g *Gateway) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (mo
 			TaskName:        req.TaskName,
 			Prompt:          req.Prompt,
 			ExpectedText:    req.ExpectedText,
+			SourceText:      req.SourceText,
+			ReferenceAnswer: req.ReferenceAnswer,
 			Transcript:      transcript,
 			DurationSeconds: req.DurationSeconds,
 			WordCount:       len(strings.Fields(transcript)),
@@ -187,6 +196,7 @@ func speakingSystemPrompt(req SpeakingRequest) string {
 	if strings.TrimSpace(req.ExpectedText) != "" {
 		b.WriteString("- The learner was given a fixed text to say. Compare what you heard against it and treat omissions, substitutions and additions as content errors.\n")
 	}
+	b.WriteString(responseMaterialRules(req.SourceText, req.ReferenceAnswer))
 
 	if req.Exam == models.ExamPTE {
 		b.WriteString("- Use the published PTE speaking criteria for this task type: content, oral fluency and pronunciation.\n")
@@ -212,6 +222,33 @@ func speakingSystemPrompt(req SpeakingRequest) string {
 	return b.String()
 }
 
+// responseMaterialRules tells the model how to use the material behind a task
+// that is answered in the learner's own words. Without it, a lecture or a
+// question handed over as "text" reads as something to repeat, and a correct
+// retelling or a one-word answer is marked down for every word it leaves out.
+func responseMaterialRules(source, reference string) string {
+	var b strings.Builder
+	if strings.TrimSpace(source) != "" {
+		b.WriteString("- The learner was not asked to repeat the material supplied. They were asked to respond to it: retell, summarise, answer or reply in their own words. Judge content by how accurately and fully the response does what the task asks. Never penalise paraphrase, and never count words of the material the learner did not repeat as omissions.\n")
+	}
+	if strings.TrimSpace(reference) != "" {
+		b.WriteString("- A reference answer is supplied for calibration. It shows the content a strong response covers; any wording that conveys the same content earns full content credit. For a short-answer question, any answer with the same meaning as the reference is correct, and an answer with a different meaning is wrong however fluent it is.\n")
+	}
+	return b.String()
+}
+
+// responseMaterialContext is the user-message half of responseMaterialRules.
+func responseMaterialContext(source, reference string) string {
+	var b strings.Builder
+	if text := strings.TrimSpace(source); text != "" {
+		fmt.Fprintf(&b, "\nMaterial the learner responded to (not a text to repeat):\n%s\n", text)
+	}
+	if text := strings.TrimSpace(reference); text != "" {
+		fmt.Fprintf(&b, "\nReference answer (for calibration, not required wording):\n%s\n", text)
+	}
+	return b.String()
+}
+
 func speakingUserPrompt(req SpeakingRequest) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task: %s\n\nInstructions given to the learner:\n%s\n", req.TaskName, req.Prompt)
@@ -219,6 +256,7 @@ func speakingUserPrompt(req SpeakingRequest) string {
 	if text := strings.TrimSpace(req.ExpectedText); text != "" {
 		fmt.Fprintf(&b, "\nThe text the learner was asked to say:\n%s\n", text)
 	}
+	b.WriteString(responseMaterialContext(req.SourceText, req.ReferenceAnswer))
 	if req.DurationSeconds > 0 {
 		fmt.Fprintf(&b, "\nRecording length: %d seconds.\n", req.DurationSeconds)
 	}
