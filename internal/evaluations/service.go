@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/ai"
@@ -15,6 +16,7 @@ import (
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/questions"
+	"github.com/prepyo/backend/internal/scoring"
 )
 
 var (
@@ -74,6 +76,18 @@ func NewService(
 		billing: billingService, gateway: gateway, xp: xp,
 	}
 }
+
+// SpeakingTranscriptAvailable reports whether a spoken answer can be scored
+// from a transcript the learner's device produced. That needs only the text
+// provider, which is what a provider without audio models leaves us.
+func (s *Service) SpeakingTranscriptAvailable() bool {
+	return !s.gateway.SpeakingAvailable() && s.gateway.Available()
+}
+
+// SpeakingAvailable reports whether a recording can be scored at all. Handlers
+// check this before accepting an upload, so a learner is told straight away
+// rather than after a provider round trip that was never going to work.
+func (s *Service) SpeakingAvailable() bool { return s.gateway.SpeakingAvailable() }
 
 type Request struct {
 	User       models.User
@@ -240,6 +254,114 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 	})
 }
 
+// TranscriptRequest is a spoken answer that was transcribed on the device.
+type TranscriptRequest struct {
+	User            models.User
+	QuestionID      string
+	Transcript      string
+	DurationSeconds int
+	// Delivery is what the browser measured while recording: pace and the
+	// silences in between. Empty when the browser could not measure it, in
+	// which case nothing here judges pace at all.
+	Delivery scoring.Delivery
+}
+
+// minTranscriptWords is the point below which there is nothing to give feedback
+// on. Two or three recognised words is a learner who was not heard, and they
+// should be told that rather than handed a band for it.
+const minTranscriptWords = 8
+
+// EvaluateSpeakingTranscript scores a spoken answer from its transcript.
+//
+// It runs the same flow as the recording path - allowance, deduplication,
+// provider call, validation, persistence, rewards - with one difference that
+// matters to the learner: pronunciation is not judged, because nothing in this
+// path ever heard them speak.
+func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req TranscriptRequest) (Outcome, error) {
+	transcript := strings.TrimSpace(req.Transcript)
+	words := len(strings.Fields(transcript))
+	if words < minTranscriptWords {
+		return Outcome{}, ErrEmptyResponse
+	}
+
+	question, err := s.questions.ByID(ctx, req.QuestionID)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if question.Skill != models.SkillSpeaking {
+		return Outcome{}, ErrWrongSkill
+	}
+
+	// The same words spoken again are the same submission to judge, so the
+	// fingerprint is over the transcript rather than the audio bytes.
+	fingerprint := fingerprintOf(req.User.ID, question.ID+":"+ai.SpeakingTranscriptPromptVersion, transcript)
+	if existing, err := s.repo.ByFingerprint(ctx, req.User.ID, fingerprint); err == nil {
+		state, err := s.billing.State(ctx, s.db, req.User)
+		if err != nil {
+			return Outcome{}, err
+		}
+		return Outcome{Evaluation: existing, Reused: true, Subscription: state}, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return Outcome{}, err
+	}
+
+	if err := s.billing.RequireStartedSubTest(ctx, s.db, req.User, question, question.Exam); err != nil {
+		return Outcome{}, err
+	}
+
+	version, err := s.exams.ByID(ctx, question.ExamVersionID)
+	if err != nil {
+		return Outcome{}, err
+	}
+
+	expected := firstNonEmpty(question.ContextPassage, question.AudioTranscript)
+
+	// Read Aloud and Repeat Sentence have one right answer, word for word. That
+	// is an alignment, not an opinion: scoring it here is instant, costs no
+	// provider call, and gives the same answer every time, which a model does
+	// not. See scoring.ScoreVerbatim.
+	if scoring.IsVerbatimTask(question.TypeID) && strings.TrimSpace(expected) != "" {
+		evaluation := verbatimEvaluation(question, version, expected, transcript, req.Delivery)
+		return s.persist(ctx, persistParams{
+			User:        req.User,
+			Question:    question,
+			Fingerprint: fingerprint,
+			Evaluation:  evaluation,
+			Usage: ai.Usage{
+				Provider:      "prepyo",
+				Model:         "verbatim-alignment",
+				PromptVersion: verbatimScoringVersion,
+			},
+			XPReason: "Speaking evaluated: " + question.TypeName,
+		})
+	}
+
+	evaluation, usage, err := s.gateway.EvaluateSpokenTranscript(ctx, ai.SpokenTranscriptRequest{
+		Exam:            question.Exam,
+		TaskName:        question.TypeName,
+		Prompt:          question.Prompt,
+		ExpectedText:    expected,
+		Transcript:      transcript,
+		DurationSeconds: req.DurationSeconds,
+		WordCount:       words,
+		Delivery:        req.Delivery.Summary(),
+		MinScore:        version.MinScore,
+		MaxScore:        version.MaxScore,
+	})
+	if err != nil {
+		return Outcome{}, err
+	}
+
+	return s.persist(ctx, persistParams{
+		User:        req.User,
+		Question:    question,
+		Fingerprint: fingerprint,
+		Evaluation:  evaluation,
+		Usage:       usage,
+		XPReason:    "Speaking evaluated: " + question.TypeName,
+	})
+}
+
 type persistParams struct {
 	User        models.User
 	Question    models.Question
@@ -249,9 +371,21 @@ type persistParams struct {
 	XPReason    string
 }
 
+// persistTimeout bounds the writes below on their own, now that they no longer
+// inherit whatever is left of the request's deadline.
+const persistTimeout = 20 * time.Second
+
 // persist stores a validated evaluation and pays out for it, in one transaction
 // so a learner cannot end up with XP for feedback that was never saved.
 func (s *Service) persist(ctx context.Context, p persistParams) (Outcome, error) {
+	// By this point the provider has answered and the allowance has been spent.
+	// Saving must not be cancelled because the learner's request ran out of
+	// deadline while the model was thinking: that loses feedback they have
+	// already paid for and surfaces as a database error, which reads to them as
+	// "something went wrong on our side" rather than "that took too long".
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
+	defer cancel()
+
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("begin evaluation: %w", err)
