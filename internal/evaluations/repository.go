@@ -59,6 +59,18 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 	if err != nil {
 		return models.Evaluation{}, fmt.Errorf("marshal sentence feedback: %w", err)
 	}
+	// strengths and weaknesses are jsonb columns, so they have to arrive as
+	// JSON text. Sent as a Go slice they were encoded as a Postgres array
+	// literal - {"one","two"} - which the column rejects as invalid JSON, and
+	// every evaluation that actually listed a strength failed to save.
+	strengthsJSON, err := json.Marshal(nonNilStrings(e.Strengths))
+	if err != nil {
+		return models.Evaluation{}, fmt.Errorf("marshal strengths: %w", err)
+	}
+	weaknessesJSON, err := json.Marshal(nonNilStrings(e.Weaknesses))
+	if err != nil {
+		return models.Evaluation{}, fmt.Errorf("marshal weaknesses: %w", err)
+	}
 
 	err = db.QueryRow(ctx, `
 		INSERT INTO ai_evaluations (
@@ -69,7 +81,7 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		RETURNING `+selectFields,
 		p.UserID, questionID, e.Exam, e.Skill, e.EvaluationVersion, p.Fingerprint,
-		e.EstimatedScore, e.ScoreConfidence, e.Summary, string(criteriaJSON), e.Strengths, e.Weaknesses,
+		e.EstimatedScore, e.ScoreConfidence, e.Summary, string(criteriaJSON), string(strengthsJSON), string(weaknessesJSON),
 		string(feedbackJSON), e.ModelRewrite, e.Transcript, p.Usage.Provider, p.Usage.Model, p.Usage.PromptVersion,
 		p.Usage.PromptTokens, p.Usage.CompletionTokens, p.Usage.LatencyMS,
 	).Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion, &e.EstimatedScore,
@@ -130,6 +142,15 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Evaluatio
 		list = append(list, e)
 	}
 	return list, total, rows.Err()
+}
+
+// nonNilStrings keeps an absent list as [] rather than null, which is what the
+// column defaults to and what the app expects to read back.
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func scan(row pgx.Row) (models.Evaluation, error) {
