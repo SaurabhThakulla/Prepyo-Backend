@@ -488,7 +488,13 @@ func jsonOrNull[T any](items []T) (any, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
-	return json.Marshal(items)
+	// Sent as text, not []byte: the pool runs in QueryExecModeExec, where a
+	// []byte is encoded as bytea and a jsonb column rejects it. See jsonParam.
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
 }
 
 func (h *Handler) questionTypes(w http.ResponseWriter, r *http.Request) {

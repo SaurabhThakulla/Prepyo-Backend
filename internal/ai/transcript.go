@@ -13,7 +13,7 @@ import (
 // prompt. It is deliberately a different version from SpeakingPromptVersion:
 // feedback produced this way saw words, not a recording, and stored evaluations
 // have to stay traceable to which of the two produced them.
-const SpeakingTranscriptPromptVersion = "speaking.transcript.v1"
+const SpeakingTranscriptPromptVersion = "speaking.transcript.v2"
 
 // SpokenTranscriptRequest is a speaking answer that was transcribed on the
 // learner's device, for providers that serve text models only.
@@ -28,6 +28,10 @@ type SpokenTranscriptRequest struct {
 	// ExpectedText is the passage a Read Aloud learner was told to read, or the
 	// sentence they were told to repeat. Empty for open tasks.
 	ExpectedText string
+	// SourceText and ReferenceAnswer are as on SpeakingRequest: material to
+	// respond to, and a model answer to calibrate content against.
+	SourceText      string
+	ReferenceAnswer string
 	// Transcript is what the device's speech recognition heard. It carries
 	// recognition errors as well as the learner's own, which is why the prompt
 	// tells the model not to treat every oddity as a language mistake.
@@ -153,6 +157,7 @@ func transcriptSystemPrompt(req SpokenTranscriptRequest) string {
 	if strings.TrimSpace(req.ExpectedText) != "" {
 		b.WriteString("- The learner was given a fixed text to say. Compare the transcript strictly against it and treat omissions, substitutions and additions as content errors, allowing reasonable margin for speech recognition anomalies.\n")
 	}
+	b.WriteString(responseMaterialRules(req.SourceText, req.ReferenceAnswer))
 
 	if req.Exam == models.ExamPTE {
 		b.WriteString("- Return exactly two criteria: Content and Oral Fluency. Each has maxScore 90 and evidence-based feedback citing specific weaknesses. Do not return a Pronunciation criterion.\n")
@@ -183,6 +188,7 @@ func transcriptUserPrompt(req SpokenTranscriptRequest) string {
 	if text := strings.TrimSpace(req.ExpectedText); text != "" {
 		fmt.Fprintf(&b, "\nThe text the learner was asked to say:\n%s\n", text)
 	}
+	b.WriteString(responseMaterialContext(req.SourceText, req.ReferenceAnswer))
 
 	if measured := strings.TrimSpace(req.Delivery); measured != "" {
 		fmt.Fprintf(&b, "\n%s\n", measured)
