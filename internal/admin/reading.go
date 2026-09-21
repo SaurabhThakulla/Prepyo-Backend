@@ -378,12 +378,35 @@ func paragraphLabel(index int) string {
 	return string(rune('A'+index/26-1)) + string(rune('A'+index%26))
 }
 
-// minPassageWords mirrors reading_passages_word_count_floor from 000009.
+// minPassageWords mirrors reading_passages_word_count_floor from 000009. The
+// floor is an IELTS rule: one long text there carries three task types, and a
+// short passage cannot. PTE reading works the other way round — each task sets
+// its own short text, typically 110-300 words — so applying the floor to PTE
+// made the whole format unauthorable here. 000009 permits a zero word_count for
+// exactly this reason, and every short PTE passage already in the bank uses it.
 const minPassageWords = 700
+
+// minPTEPassageWords is not a format rule. It only rejects an empty or
+// truncated paste, which the 700 floor used to catch by accident.
+const minPTEPassageWords = 80
 
 type validationError struct{ fields map[string]string }
 
 func (e validationError) Error() string { return "reading passage failed validation" }
+
+// jsonParam hands a jsonb parameter to pgx as text.
+//
+// The pool runs in QueryExecModeExec (internal/database sets it so PgBouncer's
+// transaction pooler cannot collide on statement names). In that mode a []byte
+// argument is encoded as bytea, and a jsonb column rejects the \x… literal that
+// produces with "invalid input syntax for type json". Marshalled JSON therefore
+// has to be sent as a string. A nil stays nil so an absent value is still NULL.
+func jsonParam(b []byte) any {
+	if b == nil {
+		return nil
+	}
+	return string(b)
+}
 
 func (h *Handler) insertPassage(ctx context.Context, req newPassage, paragraphs []paragraph) (string, error) {
 	tx, err := h.db.Begin(ctx)
@@ -409,14 +432,30 @@ func (h *Handler) insertPassage(ctx context.Context, req newPassage, paragraphs 
 		labels[para.Label] = true
 	}
 
-	// 000009 puts a floor under passage length: shorter than this and there is
-	// not enough text to carry three task types. Checked here rather than left
-	// to the constraint so the author is told the number, not shown a 500.
+	// 000009 puts a floor under passage length so one text can carry three task
+	// types. That is an IELTS requirement; PTE sets a short text per task and is
+	// held to a floor that only catches an empty paste. Checked here rather than
+	// left to the constraint so the author is told the number, not shown a 500.
 	words := wordCount(paragraphs)
-	if words < minPassageWords {
-		return "", validationError{fields: map[string]string{
-			"body": fmt.Sprintf("A reading passage needs at least %d words; this one has %d.", minPassageWords, words),
-		}}
+	storedWords := words
+	if req.Exam == string(models.ExamIELTS) {
+		if words < minPassageWords {
+			return "", validationError{fields: map[string]string{
+				"body": fmt.Sprintf("An IELTS reading passage needs at least %d words; this one has %d.", minPassageWords, words),
+			}}
+		}
+	} else {
+		if words < minPTEPassageWords {
+			return "", validationError{fields: map[string]string{
+				"body": fmt.Sprintf("A reading passage needs at least %d words; this one has %d.", minPTEPassageWords, words),
+			}}
+		}
+		// The constraint allows a real count or zero, and nothing between it and
+		// 700. A short PTE passage therefore stores zero, which is what every
+		// seeded one does; word_count is read for display only.
+		if words < minPassageWords {
+			storedWords = 0
+		}
 	}
 
 	passageID := newContentID("passage", req.Title)
@@ -445,7 +484,7 @@ func (h *Handler) insertPassage(ctx context.Context, req newPassage, paragraphs 
 			 difficulty, topic, tags, is_published, passage_slot)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		passageID, versionID, strings.TrimSpace(req.Title), strings.TrimSpace(req.Subtitle),
-		paragraphJSON, words, difficulty, strings.TrimSpace(req.Topic),
+		jsonParam(paragraphJSON), storedWords, difficulty, strings.TrimSpace(req.Topic),
 		normaliseTags(req.Tags), req.Publish, slot,
 	); err != nil {
 		return "", fmt.Errorf("insert passage: %w", err)
@@ -928,7 +967,7 @@ func (h *Handler) insertReorderItem(ctx context.Context, req newReorderItem, box
 			(id, exam_version_id, exam, title, paragraphs, source_passage_id,
 			 topic, word_count, difficulty, tags, is_published)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		itemID, versionID, req.Exam, strings.TrimSpace(req.Title), boxesJSON, sourcePassage,
+		itemID, versionID, req.Exam, strings.TrimSpace(req.Title), jsonParam(boxesJSON), sourcePassage,
 		strings.TrimSpace(req.Topic), wordCount(boxes), difficulty,
 		normaliseTags(req.Tags), req.Publish,
 	); err != nil {
@@ -946,7 +985,7 @@ func (h *Handler) insertReorderItem(ctx context.Context, req newReorderItem, box
 		        $7, $8, $9, $10, $11, $12, $13, $14)`,
 		"q-"+itemID, versionID, req.Exam, []string{req.Exam},
 		strings.TrimSpace(req.Title), prompt,
-		optionsJSON, orderJSON, strings.TrimSpace(req.Explanation), difficulty,
+		jsonParam(optionsJSON), jsonParam(orderJSON), strings.TrimSpace(req.Explanation), difficulty,
 		len(boxes)-1, timeLimit, req.Publish, itemID,
 	); err != nil {
 		return "", fmt.Errorf("insert reorder question: %w", err)
@@ -1083,7 +1122,7 @@ func writeGroups(ctx context.Context, tx pgx.Tx, gc groupContext, groups []newGr
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			groupID, gc.passageID, gc.startPosition+gi, group.TypeID, spec.name,
 			strings.TrimSpace(group.Instructions), strings.TrimSpace(group.BoxTitle),
-			resourcesJSON, display,
+			jsonParam(resourcesJSON), display,
 			// Authored sets read in the order they were written; shuffling a
 			// sentence-completion paragraph, or gapped texts that track the
 			// passage top to bottom, would scramble the prose.
@@ -1155,7 +1194,7 @@ func writeGroups(ctx context.Context, tx pgx.Tx, gc groupContext, groups []newGr
 				newContentID("q", fmt.Sprintf("%s-%d", groupID, qi+1)), gc.versionFor(exams[0]), exams[0],
 				exams,
 				group.TypeID, spec.name, strings.TrimSpace(gc.title), strings.TrimSpace(question.Prompt),
-				optionsJSON, answersJSON, blanksJSON, contextPassage,
+				jsonParam(optionsJSON), jsonParam(answersJSON), jsonParam(blanksJSON), contextPassage,
 				strings.TrimSpace(question.Explanation), gc.difficulty, points,
 				gc.publish, gc.passageID, groupID, qi+1,
 			); err != nil {
