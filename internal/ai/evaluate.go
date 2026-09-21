@@ -133,6 +133,11 @@ type feedbackSpec struct {
 	MaxScore float64
 	Quotable string
 	TaskName string
+	// WithoutPronunciation marks feedback produced from a transcript rather
+	// than a recording. Pronunciation cannot be judged from words on a page, so
+	// the usual four-criterion IELTS shape does not apply and a model that
+	// returns one anyway is guessing.
+	WithoutPronunciation bool
 }
 
 // validateFeedback validates the parsed evaluation payload against the specification.

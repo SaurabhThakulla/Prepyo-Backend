@@ -55,22 +55,16 @@ func (g *Gateway) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (mo
 		return models.Evaluation{}, Usage{}, fmt.Errorf("%w: audio format %q is not supported", ErrBadOutput, req.AudioFormat)
 	}
 
-	eval, usage, err := g.evaluateSpeakingMultimodal(ctx, req)
-	if err == nil {
-		return eval, usage, nil
+	if !g.SpeakingAvailable() {
+		return models.Evaluation{}, Usage{}, fmt.Errorf("%w: no audio provider is configured", ErrUnavailable)
 	}
 
-	g.log.Warn("multimodal speaking evaluation failed, falling back to assisted evaluation",
-		"provider", g.audio.name, "error", err)
-
-	assistedEval, assistedUsage, assistedErr := g.evaluateSpeakingAssisted(ctx, req)
-	usage.add(assistedUsage)
-	if assistedErr == nil {
-		return assistedEval, usage, nil
-	}
-
-	g.log.Error("assisted speaking evaluation also failed", "error", assistedErr)
-	return models.Evaluation{}, usage, err
+	// There is deliberately no fallback to a text model here. A text model
+	// cannot hear the recording; asked to score one anyway it writes a
+	// plausible transcript of words nobody said and grades those. A learner is
+	// better served by "we could not score this" than by a band invented from
+	// an invented answer.
+	return g.evaluateSpeakingMultimodal(ctx, req)
 }
 
 func (g *Gateway) evaluateSpeakingMultimodal(ctx context.Context, req SpeakingRequest) (models.Evaluation, Usage, error) {
@@ -108,59 +102,6 @@ func (g *Gateway) evaluateSpeakingMultimodal(ctx context.Context, req SpeakingRe
 				"That reply was rejected: %s. Send the complete JSON again with that fixed and everything else unchanged.",
 				problem)},
 		)
-	}
-
-	return models.Evaluation{}, usage, ErrBadOutput
-}
-
-func (g *Gateway) evaluateSpeakingAssisted(ctx context.Context, req SpeakingRequest) (models.Evaluation, Usage, error) {
-	messages := []chatMessage{
-		{Role: "system", Content: speakingAssistedSystemPrompt(req)},
-		{Role: "user", Content: speakingAssistedUserPrompt(req)},
-	}
-
-	var usage Usage
-	providers := []provider{g.audio, g.text}
-	seen := make(map[string]bool)
-
-	for _, p := range providers {
-		if !p.configured() || seen[p.name] {
-			continue
-		}
-		seen[p.name] = true
-
-		model := g.models.Speaking
-		if p == g.text {
-			model = g.models.Writing
-		}
-
-		for attempt := 1; attempt <= maxValidationAttempts; attempt++ {
-			raw, attemptUsage, err := g.complete(ctx, p, model, SpeakingPromptVersion+".assisted", messages, true)
-			usage.add(attemptUsage)
-			if err != nil {
-				g.log.Warn("assisted speaking complete failed", "provider", p.name, "model", model, "error", err)
-				break
-			}
-
-			evaluation, problem := parseSpeaking(raw, req)
-			if problem == nil {
-				return evaluation, usage, nil
-			}
-
-			g.log.Error("assisted speaking output failed validation",
-				"provider", p.name, "model", model, "attempt", attempt, "error", problem)
-
-			if attempt == maxValidationAttempts || ctx.Err() != nil {
-				break
-			}
-
-			messages = append(messages,
-				chatMessage{Role: "assistant", Content: raw},
-				chatMessage{Role: "user", Content: fmt.Sprintf(
-					"That reply was rejected: %s. Send the complete JSON again with that fixed and everything else unchanged.",
-					problem)},
-			)
-		}
 	}
 
 	return models.Evaluation{}, usage, ErrBadOutput
@@ -257,61 +198,5 @@ func speakingUserPrompt(req SpeakingRequest) string {
 	}
 
 	b.WriteString("\nThe learner's recording is attached. Transcribe it, then evaluate it.")
-	return b.String()
-}
-
-func speakingAssistedSystemPrompt(req SpeakingRequest) string {
-	var b strings.Builder
-	b.WriteString("You are an experienced ")
-	b.WriteString(string(req.Exam))
-	b.WriteString(" speaking examiner evaluating a practice response from a learner in Nepal.\n\n")
-	b.WriteString("The learner has submitted a spoken audio recording for this task.\n")
-	b.WriteString("Generate a realistic verbatim learner transcript of what was spoken given the prompt, duration, and task type, and evaluate it thoroughly according to the official rubric.\n\n")
-	b.WriteString("Rules:\n")
-	b.WriteString("- Provide a realistic spoken transcript in `transcript`. Include realistic phrasing, natural pauses, and minor hesitations appropriate for a practice learner.\n")
-	b.WriteString("- Every entry in sentenceFeedback must copy an exact sentence from `transcript` into `original`.\n")
-	b.WriteString("- sentenceFeedback issueType must be one of: pronunciation, fluency, vocabulary, grammar.\n")
-
-	if strings.TrimSpace(req.ExpectedText) != "" {
-		b.WriteString("- The learner was given this text to speak:\n")
-		b.WriteString(req.ExpectedText)
-		b.WriteString("\nThe transcript should reflect an attempt to read or repeat this passage with natural practice characteristics.\n")
-	}
-
-	if req.Exam == models.ExamPTE {
-		b.WriteString("- Use the published PTE speaking criteria for this task type: Content, Oral Fluency and Pronunciation.\n")
-		b.WriteString("- CRITICAL FOR PTE: estimatedScore.value MUST be on the 10-90 PTE points scale (e.g. 65, 72, 79). DO NOT output 0-9 IELTS band numbers.\n")
-		b.WriteString("- Criteria maxScore MUST be 90.0 and criteria score must be between 10.0 and 90.0.\n")
-	} else {
-		b.WriteString("- For IELTS return exactly four criteria: Fluency and Coherence, Lexical Resource, Grammatical Range and Accuracy, and Pronunciation. Each has maxScore 9 and nonempty feedback. The estimate must be the criterion mean rounded to the nearest half band.\n")
-		b.WriteString("- CRITICAL FOR IELTS: estimatedScore.value MUST be on the 0.0-9.0 IELTS band scale in 0.5 steps (e.g. 6.5, 7.0, 7.5).\n")
-	}
-
-	b.WriteString("- Set estimatedScore.confidence to low, medium or high.\n")
-	b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
-{
-  "transcript": "realistic transcript of what the learner spoke",
-  "summary": "two or three constructive feedback sentences",
-  "estimatedScore": {"value": %.1f, "confidence": "medium"},
-  "criteria": [{"name": "...", "score": <score>, "maxScore": <maxScore>, "feedback": "..."}],
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "sentenceFeedback": [{"original": "exact sentence from transcript", "correction": "...", "issueType": "pronunciation", "explanation": "..."}]
-}`, exampleScore(req.MinScore, req.MaxScore)))
-	return b.String()
-}
-
-func speakingAssistedUserPrompt(req SpeakingRequest) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Task: %s\n\nInstructions given to the learner:\n%s\n", req.TaskName, req.Prompt)
-
-	if text := strings.TrimSpace(req.ExpectedText); text != "" {
-		fmt.Fprintf(&b, "\nThe text the learner was asked to say:\n%s\n", text)
-	}
-	if req.DurationSeconds > 0 {
-		fmt.Fprintf(&b, "\nRecording length: %d seconds.\n", req.DurationSeconds)
-	}
-
-	b.WriteString("\nThe learner recorded their spoken answer. Transcribe their spoken response and evaluate it according to official standards.")
 	return b.String()
 }
