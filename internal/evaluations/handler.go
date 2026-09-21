@@ -1,6 +1,7 @@
 package evaluations
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"github.com/prepyo/backend/internal/billing"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/reqctx"
+	"github.com/prepyo/backend/internal/scoring"
 	"github.com/prepyo/backend/pkg/httpx"
 )
 
@@ -30,6 +32,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/", h.list)
 	r.Post("/writing", h.evaluateWriting)
 	r.Post("/speaking", h.evaluateSpeaking)
+	r.Post("/speaking/transcript", h.evaluateSpeakingTranscript)
 	return r
 }
 
@@ -128,6 +131,15 @@ func (h *Handler) evaluateSpeaking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Checked before the recording is decoded, let alone uploaded: with no
+	// audio provider this request can only end one way, and spending a minute
+	// discovering that is worse for the learner than being told now.
+	if !h.service.SpeakingAvailable() {
+		httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeNotConfigured,
+			"Recordings are not being scored here. Send the transcript of your answer instead.")
+		return
+	}
+
 	// Decoding here rather than in the service means a corrupt upload is a
 	// rejected request, not a provider call the learner pays an allowance for.
 	audio, err := base64.StdEncoding.DecodeString(req.Audio)
@@ -164,6 +176,110 @@ func (h *Handler) evaluateSpeaking(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// maxTranscriptChars is generous for two minutes of speech and small enough
+// that a pasted essay is not smuggled in as a spoken answer.
+const maxTranscriptChars = 6000
+
+// evaluateSpeakingTranscript scores a spoken answer from the transcript the
+// learner's device produced, which is the only honest way to grade speaking on
+// a provider that serves text models only. It judges words, never delivery,
+// and the feedback it stores says so.
+func (h *Handler) evaluateSpeakingTranscript(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		QuestionID      string `json:"questionId"`
+		Transcript      string `json:"transcript"`
+		DurationSeconds int    `json:"durationSeconds"`
+		// Delivery is what the browser measured from the waveform. Absent on a
+		// browser that could not measure it, and then pace goes unjudged
+		// rather than guessed.
+		Delivery *struct {
+			DurationSeconds     int     `json:"durationSeconds"`
+			PauseCount          int     `json:"pauseCount"`
+			LongestPauseSeconds float64 `json:"longestPauseSeconds"`
+			SpeakingRatio       float64 `json:"speakingRatio"`
+		} `json:"delivery"`
+	}
+	if !httpx.Decode(w, r, &req, h.log, "evaluations.evaluateSpeakingTranscript") {
+		return
+	}
+
+	// When recordings can be scored properly, they should be: this path is the
+	// fallback, not a cheaper alternative to it.
+	if !h.service.SpeakingTranscriptAvailable() {
+		httpx.Error(w, http.StatusConflict, httpx.CodeConflict,
+			"Submit the recording itself for this task.")
+		return
+	}
+
+	transcript := strings.TrimSpace(req.Transcript)
+	problems := map[string]string{}
+	if strings.TrimSpace(req.QuestionID) == "" {
+		problems["questionId"] = "Required."
+	}
+	if transcript == "" {
+		problems["transcript"] = "We did not catch any words. Please record your answer again."
+	}
+	if len(transcript) > maxTranscriptChars {
+		problems["transcript"] = "That is longer than any speaking task allows."
+	}
+	if req.DurationSeconds <= 0 || req.DurationSeconds > maxRecordingSeconds {
+		problems["durationSeconds"] = "That recording is longer than any speaking task allows."
+	}
+	if len(problems) > 0 {
+		httpx.ValidationError(w, problems)
+		return
+	}
+
+	// Measurements arrive from the learner's own browser, so they are checked
+	// like any other client input: a "pause" longer than the recording, or a
+	// speaking ratio above 1, means the numbers are not describing a recording
+	// and are dropped rather than scored.
+	var delivery scoring.Delivery
+	if m := req.Delivery; m != nil {
+		sane := m.DurationSeconds > 0 && m.DurationSeconds <= maxRecordingSeconds &&
+			m.PauseCount >= 0 && m.PauseCount <= m.DurationSeconds &&
+			m.LongestPauseSeconds >= 0 && m.LongestPauseSeconds <= float64(m.DurationSeconds) &&
+			m.SpeakingRatio >= 0 && m.SpeakingRatio <= 1
+		if sane {
+			delivery = scoring.Delivery{
+				DurationSeconds:     m.DurationSeconds,
+				WordsSpoken:         len(strings.Fields(transcript)),
+				PauseCount:          m.PauseCount,
+				LongestPauseSeconds: m.LongestPauseSeconds,
+				SpeakingRatio:       m.SpeakingRatio,
+			}
+		} else {
+			h.log.Warn("ignored implausible delivery measurements",
+				"op", "evaluations.evaluateSpeakingTranscript", "delivery", m)
+		}
+	}
+
+	user := reqctx.MustUser(r.Context())
+	outcome, err := h.service.EvaluateSpeakingTranscript(r.Context(), TranscriptRequest{
+		User:            user,
+		QuestionID:      req.QuestionID,
+		Transcript:      transcript,
+		DurationSeconds: req.DurationSeconds,
+		Delivery:        delivery,
+	})
+	if err != nil {
+		h.writeError(w, err, "evaluations.evaluateSpeakingTranscript", map[string]string{
+			"transcript": "We caught too few words to give feedback on. Speak for a few seconds and try again.",
+		})
+		return
+	}
+
+	httpx.JSON(w, http.StatusCreated, map[string]any{
+		"evaluation":            outcome.Evaluation,
+		"reused":                outcome.Reused,
+		"xpAwarded":             outcome.XPAwarded,
+		"streak":                outcome.Streak,
+		"missions":              outcome.Missions,
+		"subscription":          outcome.Subscription,
+		"pronunciationAssessed": false,
+	})
+}
+
 // writeError maps a service error onto the response. `tooShort` is the wording
 // for a submission with nothing in it, which differs by skill: one learner
 // needs more words, the other needs to actually speak.
@@ -190,6 +306,14 @@ func (h *Handler) writeError(w http.ResponseWriter, err error, op string, tooSho
 	case errors.Is(err, ErrLimitReached):
 		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached,
 			"You have used all of today's practice sub-tests. They reset at midnight.")
+
+	// A deadline that ran out while the provider was answering is the same
+	// thing as an unavailable provider from the learner's side: nothing was
+	// stored, and trying again is the right advice. Left to the default it
+	// became a 500, which tells them we broke rather than that we were slow.
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeAIUnavailable,
+			"That took longer than we could wait. Your response was not lost - please try again.")
 
 	case errors.Is(err, ai.ErrUnavailable), errors.Is(err, ai.ErrBadOutput):
 		// Nothing was stored and no score was invented. The learner's work is
