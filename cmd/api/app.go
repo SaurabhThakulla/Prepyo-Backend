@@ -36,6 +36,21 @@ import (
 	"github.com/prepyo/backend/pkg/httpx"
 )
 
+// requestTimeout is the deadline for a route that only talks to our own
+// database. Anything slower than this is a bug, not a slow provider.
+const requestTimeout = 60 * time.Second
+
+// AIRouteTimeout is the deadline for the routes that wait on a model provider.
+//
+// One evaluation can spend AIRequestTimeout per provider call and a speaking
+// one makes more than a single call: the audio attempt, then a retry, then the
+// text fallback. Sized under the old blanket 60s, the request was cancelled
+// while the provider was still answering, and the learner was told something
+// had gone wrong on our side when nothing had.
+func AIRouteTimeout(cfg *config.Config) time.Duration {
+	return 3*cfg.AIRequestTimeout + 15*time.Second
+}
+
 type app struct {
 	cfg  *config.Config
 	pool *pgxpool.Pool
@@ -102,7 +117,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		examHandler:         exams.NewHandler(examRepo, log),
 		questionHandler:     questions.NewHandler(questionRepo, log),
 		readingHandler:      reading.NewHandler(readingService, readingRepo, log),
-		practiceHandler:     practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, examRepo, xpService, billingService, log),
+		practiceHandler:     practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, examRepo, xpService, billingService, speakingScorable(gateway), log),
 		mockHandler:         mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, mistakeRepo, log),
 		mistakeHandler:      mistakes.NewHandler(pool, mistakeRepo, xpService, log),
 		evaluationHandler:   evaluations.NewHandler(evaluationService, evaluationRepo, log),
@@ -118,6 +133,13 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	}
 }
 
+// speakingScorable reports whether a speaking answer can be graded at all, by
+// either route: the recording itself, or the transcript a device produced. Only
+// when neither works is a speaking task free practice that spends no credit.
+func speakingScorable(gateway *ai.Gateway) bool {
+	return gateway.SpeakingAvailable() || gateway.Available()
+}
+
 func (a *app) router() http.Handler {
 	r := chi.NewRouter()
 
@@ -125,7 +147,12 @@ func (a *app) router() http.Handler {
 	r.Use(trustedClientIP(a.cfg.TrustedProxyCIDRs))
 	r.Use(a.requestLogger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	// The router's own deadline is the longest any route may take, which is an
+	// AI-backed one. Everything else is held to requestTimeout below; giving the
+	// whole router the shorter deadline used to cancel speaking evaluations
+	// mid-flight, and a cancellation that landed after the provider replied cost
+	// the learner feedback that had already been paid for.
+	r.Use(middleware.Timeout(AIRouteTimeout(a.cfg)))
 
 	r.Use(cors.Handler(apiCORSOptions(a.cfg.AllowedOrigins)))
 
@@ -134,6 +161,8 @@ func (a *app) router() http.Handler {
 	r.Route("/api/v1", func(v1 chi.Router) {
 		// Public.
 		v1.Group(func(public chi.Router) {
+			public.Use(middleware.Timeout(requestTimeout))
+
 			public.With(rateLimit(10, time.Minute)).
 				Mount("/auth", a.authHandler.Routes())
 			public.Mount("/exams", a.examHandler.Routes())
@@ -146,21 +175,27 @@ func (a *app) router() http.Handler {
 			private.Use(a.authService.RequireUser)
 			private.Use(rateLimit(120, time.Minute))
 
-			private.Mount("/profile", a.userHandler.Routes())
-			private.Mount("/questions", a.questionHandler.Routes())
-			private.Mount("/reading", a.readingHandler.Routes())
-			private.Mount("/practice", a.practiceHandler.Routes())
-			private.Mount("/mocks", a.mockHandler.Routes())
-			private.With(a.authService.RequirePremium).
-				Mount("/mistakes", a.mistakeHandler.Routes())
-			private.Mount("/progress", a.progressHandler.Routes())
-			private.Mount("/gamification", a.gamificationHandler.Routes())
-			private.Mount("/leaderboards", a.leaderboardHandler.Routes())
-			private.Mount("/notifications", a.notificationHandler.Routes())
+			private.Group(func(quick chi.Router) {
+				quick.Use(middleware.Timeout(requestTimeout))
 
-			private.With(rateLimit(5, 10*time.Minute)).
-				Mount("/report", a.reportHandler.Routes())
+				quick.Mount("/profile", a.userHandler.Routes())
+				quick.Mount("/questions", a.questionHandler.Routes())
+				quick.Mount("/reading", a.readingHandler.Routes())
+				quick.Mount("/practice", a.practiceHandler.Routes())
+				quick.Mount("/mocks", a.mockHandler.Routes())
+				quick.With(a.authService.RequirePremium).
+					Mount("/mistakes", a.mistakeHandler.Routes())
+				quick.Mount("/progress", a.progressHandler.Routes())
+				quick.Mount("/gamification", a.gamificationHandler.Routes())
+				quick.Mount("/leaderboards", a.leaderboardHandler.Routes())
+				quick.Mount("/notifications", a.notificationHandler.Routes())
 
+				quick.With(rateLimit(5, 10*time.Minute)).
+					Mount("/report", a.reportHandler.Routes())
+			})
+
+			// These wait on a provider call, so they keep the router's longer
+			// deadline rather than the one every other route gets.
 			private.With(rateLimit(20, time.Minute)).
 				Mount("/evaluations", a.evaluationHandler.Routes())
 			private.With(rateLimit(20, time.Minute)).
@@ -169,6 +204,7 @@ func (a *app) router() http.Handler {
 
 		// Admin only.
 		v1.Group(func(adminOnly chi.Router) {
+			adminOnly.Use(middleware.Timeout(requestTimeout))
 			adminOnly.Use(a.authService.RequireUser, a.authService.RequireAdmin)
 			adminOnly.Mount("/admin", a.adminHandler.Routes())
 		})

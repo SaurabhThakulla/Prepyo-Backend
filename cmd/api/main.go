@@ -48,6 +48,13 @@ func run() error {
 		log.Warn("AI_AUDIO_API_KEY is not set: speaking evaluation will return 503, other AI endpoints are unaffected")
 	}
 
+	// A cap set too low truncates every reply, and a truncated reply fails
+	// validation, so nothing is ever scored and nothing is ever stored.
+	if cfg.AIMaxTokensTooLow() {
+		log.Warn("AI_MAX_TOKENS is too low for a full evaluation: replies will be truncated and every evaluation will fail",
+			"configured", cfg.AIMaxTokens, "minimumWorkable", config.WorkableAIMaxTokens)
+	}
+
 	if !cfg.GoogleSignInEnabled() {
 		log.Warn("GOOGLE_CLIENT_ID is not set: POST /auth/google returns 503 and nobody can sign in")
 	}
@@ -84,8 +91,11 @@ func run() error {
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// Long enough for a synchronous evaluation to finish while the learner
-		// waits. Moving evaluation onto a queue is what would bring this down.
-		WriteTimeout: cfg.AIRequestTimeout + 30*time.Second,
+		// waits, which means longer than the deadline those routes run under:
+		// the handler must be the one that gives up, so the learner gets our
+		// error rather than a dropped connection. Moving evaluation onto a
+		// queue is what would bring this down.
+		WriteTimeout: AIRouteTimeout(cfg) + 30*time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 
