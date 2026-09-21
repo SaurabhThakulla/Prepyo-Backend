@@ -34,6 +34,10 @@ type Config struct {
 	AIAPIKey       string
 	AIAudioBaseURL string
 	AIAudioAPIKey  string
+	// SpeakingEvaluated reports whether a recording can actually be scored.
+	// False means the product still records and plays back answers; it just
+	// does not pretend to grade them.
+	SpeakingEvaluated bool
 
 	AIModels         AIModels
 	AIRequestTimeout time.Duration
@@ -69,8 +73,24 @@ func (c Config) IsProduction() bool { return c.Env == "production" }
 // AIEnabled reports whether the AI provider is configured.
 func (c Config) AIEnabled() bool { return c.AIAPIKey != "" }
 
-// SpeakingEnabled reports whether the audio provider is configured.
-func (c Config) SpeakingEnabled() bool { return c.AIAudioAPIKey != "" }
+// SpeakingEnabled reports whether a recording can be sent to a provider that
+// accepts audio. Transcript-based speaking needs only the text provider, so it
+// works even when this is false.
+func (c Config) SpeakingEnabled() bool { return c.SpeakingEvaluated && c.AIAudioAPIKey != "" }
+
+// WorkableAIMaxTokens is the smallest completion cap a full evaluation fits in.
+//
+// One IELTS evaluation is a summary, three or four criteria with feedback,
+// strengths, weaknesses and sentence-level corrections: measured live, between
+// 2,500 and 4,000 completion tokens on reasoning models. Capped below that, the
+// provider returns a truncated reply, the gateway rejects it as invalid, and
+// every evaluation fails with nothing stored - which looks like a broken
+// product rather than a one-line setting.
+const WorkableAIMaxTokens = 4000
+
+// AIMaxTokensTooLow reports whether the configured cap will truncate ordinary
+// evaluations.
+func (c Config) AIMaxTokensTooLow() bool { return c.AIMaxTokens < WorkableAIMaxTokens }
 
 func Load() (*Config, error) {
 	loadDotEnv()
@@ -87,6 +107,16 @@ func Load() (*Config, error) {
 	aiKey := firstOf("AI_API_KEY", "CODE_CRAFT")
 	aiAudioKey := stringOr("AI_AUDIO_API_KEY", aiKey)
 
+	// Scoring a recording needs a provider that takes audio, and inheriting the
+	// text provider's key does not make it one. Deployed without AI_AUDIO_*, the
+	// old fallback sent recordings to the text endpoint, which rejected the
+	// model id after uploading the whole recording — three times, until the
+	// request ran out of deadline and the learner was told we had broken.
+	//
+	// Set AI_SPEAKING_ENABLED explicitly when the text provider does serve an
+	// audio-capable model on the same key.
+	audioConfigured := stringOr("AI_AUDIO_BASE_URL", "") != "" || stringOr("AI_AUDIO_API_KEY", "") != ""
+
 	cfg := &Config{
 		Env:               env,
 		Port:              stringOr("PORT", "8080"),
@@ -98,8 +128,9 @@ func Load() (*Config, error) {
 		AIBaseURL: aiBaseURL,
 		AIAPIKey:  aiKey,
 
-		AIAudioBaseURL: strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", aiBaseURL), "/"),
-		AIAudioAPIKey:  aiAudioKey,
+		AIAudioBaseURL:    strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", aiBaseURL), "/"),
+		AIAudioAPIKey:     aiAudioKey,
+		SpeakingEvaluated: boolOr("AI_SPEAKING_ENABLED", audioConfigured),
 
 		AIModels: AIModels{
 			Writing:  cleanAIModel(stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"), "gpt-5.6-luna"),

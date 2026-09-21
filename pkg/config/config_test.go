@@ -44,8 +44,12 @@ func TestLoadAudioKeyFallsBackToAIKey(t *testing.T) {
 	if cfg.AIAudioAPIKey != cfg.AIAPIKey {
 		t.Error("AIAudioAPIKey does not fall back to AIAPIKey")
 	}
-	if !cfg.SpeakingEnabled() {
-		t.Error("SpeakingEnabled() = false with a configured AI_API_KEY")
+	// The key falls back so a single-provider setup keeps working, but an
+	// inherited key does not make the text endpoint able to hear a recording.
+	// Treating it as though it did is what sent recordings to a provider that
+	// answered "that model does not exist" after the whole upload.
+	if cfg.SpeakingEnabled() {
+		t.Error("SpeakingEnabled() = true with no audio provider of its own")
 	}
 }
 
