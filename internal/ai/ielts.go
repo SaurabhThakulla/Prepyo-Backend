@@ -15,7 +15,11 @@ func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackS
 	required := map[string]bool{"lexical resource": false, "grammatical range and accuracy": false}
 	if spec.Skill == models.SkillSpeaking {
 		required["fluency and coherence"] = false
-		required["pronunciation"] = false
+		// A transcript cannot show pronunciation, so feedback built from one
+		// is three criteria, not four, and must not invent the fourth.
+		if !spec.WithoutPronunciation {
+			required["pronunciation"] = false
+		}
 	} else {
 		required["coherence and cohesion"] = false
 		task := "task response"
@@ -25,8 +29,9 @@ func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackS
 		}
 		required[task] = false
 	}
-	if len(criteria) != 4 {
-		return fmt.Errorf("IELTS score requires exactly four assessment criteria")
+	wanted := len(required)
+	if len(criteria) != wanted {
+		return fmt.Errorf("IELTS score requires exactly %d assessment criteria", wanted)
 	}
 	sum := 0.0
 	for _, c := range criteria {
@@ -38,8 +43,8 @@ func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackS
 		required[key] = true
 		sum += c.Score
 	}
-	if scoring.RoundIELTSBand(sum/4) != score {
-		return fmt.Errorf("IELTS estimate must equal the rounded mean of four equally weighted criteria")
+	if scoring.RoundIELTSBand(sum/float64(wanted)) != score {
+		return fmt.Errorf("IELTS estimate must equal the rounded mean of the %d equally weighted criteria", wanted)
 	}
 	return nil
 }
