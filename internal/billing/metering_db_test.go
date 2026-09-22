@@ -331,7 +331,7 @@ func TestMocksDoNotConsumeSubTests(t *testing.T) {
 	before := usage(t, svc, pool, user)
 
 	var mockID, examVersionID string
-	err := pool.QueryRow(ctx, `SELECT id, exam_version_id FROM mocks WHERE NOT is_diagnostic LIMIT 1`).
+	err := pool.QueryRow(ctx, `SELECT id, exam_version_id FROM mocks WHERE NOT is_diagnostic AND NOT is_generated LIMIT 1`).
 		Scan(&mockID, &examVersionID)
 	if err != nil {
 		t.Skipf("no non-diagnostic mock seeded: %v", err)

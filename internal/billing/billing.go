@@ -90,25 +90,27 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 	// Session starts are the credit ledger. Answers and AI feedback never add
 	// usage, and stopping or completing a session never refunds its start.
 	const subTestsToday = `
-		(SELECT count(*) FROM practice_sessions
+		(SELECT COALESCE(SUM(credits), 0) FROM practice_sessions
 		  WHERE user_id = $1 AND created_at >= $2 AND created_at < $3)`
 
 	// For free plans, full mocks are counted lifetime (1 included on signup +
 	// bonuses). For paid active plans, they are counted per calendar month.
+	// Generated mocks are single-section papers; they are paid for in
+	// sub-tests at start (SectionMockSubTests) and never touch this allowance.
 	var subTestsUsed, mocksUsed int
 	if plan.ID == "free" {
 		err = db.QueryRow(ctx, `
 			SELECT `+subTestsToday+`,
 				(SELECT count(*) FROM mock_attempts ma
 				  JOIN mocks m ON ma.mock_id = m.id
-				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic)`,
+				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND NOT m.is_generated)`,
 			user.ID, dayStart, dayEnd).Scan(&subTestsUsed, &mocksUsed)
 	} else {
 		err = db.QueryRow(ctx, `
 			SELECT `+subTestsToday+`,
 				(SELECT count(*) FROM mock_attempts ma
 				  JOIN mocks m ON ma.mock_id = m.id
-				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND ma.completed_at >= date_trunc('month', now()))`,
+				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND NOT m.is_generated AND ma.completed_at >= date_trunc('month', now()))`,
 			user.ID, dayStart, dayEnd).Scan(&subTestsUsed, &mocksUsed)
 	}
 
@@ -157,14 +159,25 @@ func LockUserForQuota(ctx context.Context, db database.DB, userID string) error 
 	return nil
 }
 
+// SectionMockSubTests is what one section mock (a full reading paper, and
+// later writing, listening or speaking) costs from the daily allowance.
+const SectionMockSubTests = 5
+
 // CheckSubTestAllowance checks whether a new session can spend one credit.
 // Submission uses RequireStartedSubTest instead; it must not need a second credit.
 func (s *Service) CheckSubTestAllowance(ctx context.Context, db database.DB, user models.User, _ string) (models.SubscriptionState, error) {
+	return s.CheckSubTestCredits(ctx, db, user, 1)
+}
+
+// CheckSubTestCredits checks whether a new session can spend `credits` at once.
+// It is all or nothing: a section mock needing 5 is refused with 4 left, rather
+// than started on credit the learner does not have.
+func (s *Service) CheckSubTestCredits(ctx context.Context, db database.DB, user models.User, credits int) (models.SubscriptionState, error) {
 	state, err := s.State(ctx, db, user)
 	if err != nil {
 		return state, err
 	}
-	if state.DailySubTestsUsed < state.DailySubTestsLimit {
+	if state.DailySubTestsUsed+credits <= state.DailySubTestsLimit {
 		return state, nil
 	}
 
@@ -210,12 +223,17 @@ func (s *Service) CheckMockAllowance(ctx context.Context, db database.DB, user m
 
 // RecordSessionStart records the start of a practice task or sub-test session, consuming allowance.
 func (s *Service) RecordSessionStart(ctx context.Context, db database.DB, user models.User, exam, skill, itemID string) (string, error) {
+	return s.RecordSessionStartCredits(ctx, db, user, exam, skill, itemID, 1)
+}
+
+// RecordSessionStartCredits records a session that spends `credits` sub-tests.
+func (s *Service) RecordSessionStartCredits(ctx context.Context, db database.DB, user models.User, exam, skill, itemID string, credits int) (string, error) {
 	var sessionID string
 	err := db.QueryRow(ctx, `
-		INSERT INTO practice_sessions (user_id, exam, skill, item_id, status)
-		VALUES ($1, $2, $3, $4, 'active')
+		INSERT INTO practice_sessions (user_id, exam, skill, item_id, status, credits)
+		VALUES ($1, $2, $3, $4, 'active', $5)
 		RETURNING id::text`,
-		user.ID, exam, skill, itemID,
+		user.ID, exam, skill, itemID, credits,
 	).Scan(&sessionID)
 	if err != nil {
 		return "", fmt.Errorf("record session start: %w", err)

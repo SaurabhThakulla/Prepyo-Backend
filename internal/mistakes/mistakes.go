@@ -60,22 +60,18 @@ type ListParams struct {
 }
 
 func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, int, error) {
-	const filter = `
+	filter := `
 		WHERE m.user_id = $1
 		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
 		  AND ($3 = '' OR LOWER(q.skill) = LOWER($3))
 		  AND (NOT $4 OR NOT m.resolved)
-		  AND (
-		      ($5 = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
-		      ($5 = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '29 days') OR
-		      ($5 = 'lifetime' OR $5 = '')
-		  )`
+		  AND ` + periodWindow("$5")
 
 	var total int
 	err := r.db.QueryRow(ctx, `
 		SELECT count(*) FROM mistakes m
 		JOIN questions q ON q.id = m.question_id`+filter,
-		p.UserID, p.Exam, p.Skill, p.UnresolvedOnly, p.Period).Scan(&total)
+		p.UserID, p.Exam, p.Skill, p.UnresolvedOnly, normalizePeriod(p.Period)).Scan(&total)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count mistakes: %w", err)
 	}
@@ -88,7 +84,7 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Mistake, 
 		JOIN questions q ON q.id = m.question_id`+filter+`
 		ORDER BY m.resolved, m.failed_count DESC, m.last_attempted_at DESC
 		LIMIT $6 OFFSET $7`,
-		p.UserID, p.Exam, p.Skill, p.UnresolvedOnly, p.Period, p.Limit, p.Offset)
+		p.UserID, p.Exam, p.Skill, p.UnresolvedOnly, normalizePeriod(p.Period), p.Limit, p.Offset)
 
 	if err != nil {
 		return nil, 0, fmt.Errorf("list mistakes: %w", err)
@@ -136,7 +132,7 @@ func (r *Repository) Resolve(ctx context.Context, db database.DB, userID, mistak
 type AnalyticsParams struct {
 	UserID string
 	Exam   models.ExamType
-	Period string // "weekly", "monthly", "lifetime"
+	Period string // "weekly" or "monthly"; anything else is weekly
 }
 
 type TimelinePoint struct {
@@ -163,10 +159,7 @@ type AnalyticsSummary struct {
 }
 
 func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (AnalyticsSummary, error) {
-	period := p.Period
-	if period != "monthly" && period != "lifetime" {
-		period = "weekly"
-	}
+	period := normalizePeriod(p.Period)
 
 	summary := AnalyticsSummary{
 		Period:   period,
@@ -176,7 +169,7 @@ func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (Analytic
 	}
 
 	// 1. Overall stats
-	const statsQuery = `
+	statsQuery := `
 		SELECT
 			count(*) as total,
 			count(*) FILTER (WHERE NOT m.resolved) as unresolved,
@@ -185,11 +178,7 @@ func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (Analytic
 		FROM mistakes m
 		WHERE m.user_id = $1
 		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
-		  AND (
-		      ($3 = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
-		      ($3 = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '29 days') OR
-		      ($3 = 'lifetime')
-		  )`
+		  AND ` + periodWindow("$3")
 
 	if err := r.db.QueryRow(ctx, statsQuery, p.UserID, p.Exam, period).Scan(
 		&summary.Total, &summary.Unresolved, &summary.Resolved, &summary.RepeatCount,
@@ -198,17 +187,13 @@ func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (Analytic
 	}
 
 	// 2. Breakdown by skill
-	const skillQuery = `
+	skillQuery := `
 		SELECT q.skill, count(m.id)
 		FROM mistakes m
 		JOIN questions q ON q.id = m.question_id
 		WHERE m.user_id = $1
 		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
-		  AND (
-		      ($3 = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
-		      ($3 = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '29 days') OR
-		      ($3 = 'lifetime')
-		  )
+		  AND ` + periodWindow("$3") + `
 		GROUP BY q.skill`
 
 	skillRows, err := r.db.Query(ctx, skillQuery, p.UserID, p.Exam, period)
@@ -224,17 +209,13 @@ func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (Analytic
 	}
 
 	// 3. Top tags
-	const tagQuery = `
+	tagQuery := `
 		SELECT m.error_tag, count(m.id)
 		FROM mistakes m
 		WHERE m.user_id = $1
 		  AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
 		  AND m.error_tag <> ''
-		  AND (
-		      ($3 = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
-		      ($3 = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '29 days') OR
-		      ($3 = 'lifetime')
-		  )
+		  AND ` + periodWindow("$3") + `
 		GROUP BY m.error_tag
 		ORDER BY count(m.id) DESC
 		LIMIT 5`
@@ -255,29 +236,19 @@ func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (Analytic
 	var timelineQuery string
 	switch period {
 	case "monthly":
+		// Four whole weeks, oldest first: the 1st week is 21-27 days ago, the 4th is the last 7 days.
 		timelineQuery = `
-			SELECT to_char(d, 'DD Mon') as label, to_char(d, 'YYYY-MM-DD') as date_str,
-			       count(m.id) as count,
-			       count(m.id) FILTER (WHERE m.resolved) as resolved
-			FROM generate_series(CURRENT_DATE - INTERVAL '29 days', CURRENT_DATE, '1 day'::interval) d
+			SELECT (ARRAY['1st week', '2nd week', '3rd week', '4th week'])[w + 1] AS label, to_char(ws.s, 'YYYY-MM-DD') AS date_str,
+			       count(m.id) AS count,
+			       count(m.id) FILTER (WHERE m.resolved) AS resolved
+			FROM generate_series(0, 3) w
+			CROSS JOIN LATERAL (SELECT CURRENT_DATE - 27 + w * 7 AS s) ws
 			LEFT JOIN (
 			    SELECT m.id, m.resolved, m.last_attempted_at FROM mistakes m
 			    WHERE m.user_id = $1 AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
-			) m ON m.last_attempted_at::date = d::date
-			GROUP BY d
-			ORDER BY d`
-	case "lifetime":
-		timelineQuery = `
-			SELECT to_char(d, 'Mon YY') as label, to_char(d, 'YYYY-MM') as date_str,
-			       count(m.id) as count,
-			       count(m.id) FILTER (WHERE m.resolved) as resolved
-			FROM generate_series(date_trunc('month', CURRENT_DATE - INTERVAL '5 months'), date_trunc('month', CURRENT_DATE), '1 month'::interval) d
-			LEFT JOIN (
-			    SELECT m.id, m.resolved, m.last_attempted_at FROM mistakes m
-			    WHERE m.user_id = $1 AND ($2 = '' OR UPPER(m.exam) = UPPER($2))
-			) m ON date_trunc('month', m.last_attempted_at) = d
-			GROUP BY d
-			ORDER BY d`
+			) m ON m.last_attempted_at::date BETWEEN ws.s AND ws.s + 6
+			GROUP BY w, ws.s
+			ORDER BY w`
 	default: // weekly
 		timelineQuery = `
 			SELECT to_char(d, 'Dy') as label, to_char(d, 'YYYY-MM-DD') as date_str,
@@ -306,4 +277,23 @@ func (r *Repository) Analytics(ctx context.Context, p AnalyticsParams) (Analytic
 	}
 
 	return summary, nil
+}
+
+// The mistake bank has two views: the last 7 days, and the last 4 weeks.
+func normalizePeriod(period string) string {
+	if period == "monthly" {
+		return "monthly"
+	}
+	return "weekly"
+}
+
+// periodWindow is the date filter for a period, against the SQL parameter that
+// carries it. One definition keeps the list, the totals and the graph on exactly
+// the same window. Monthly is four whole weeks so it splits into the 1st to 4th
+// week.
+func periodWindow(param string) string {
+	return fmt.Sprintf(`(
+		      (%[1]s = 'weekly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '6 days') OR
+		      (%[1]s = 'monthly' AND m.last_attempted_at >= CURRENT_DATE - INTERVAL '27 days')
+		  )`, param)
 }
