@@ -238,8 +238,11 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		return models.ReadingMockSession{}, err
 	}
 
+	// A section mock is paid for in sub-tests, not from the full-mock
+	// allowance. This early check only saves composing a paper that cannot be
+	// started; the binding check runs under the user lock below.
 	if s.billing != nil {
-		if _, err := s.billing.CheckMockAllowance(ctx, s.db, user); err != nil {
+		if _, err := s.billing.CheckSubTestCredits(ctx, s.db, user, billing.SectionMockSubTests); err != nil {
 			return models.ReadingMockSession{}, err
 		}
 	}
@@ -255,6 +258,17 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		return models.ReadingMockSession{}, fmt.Errorf("begin reading mock: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Serialise with every other credit spend for this learner, so two starts
+	// racing each other cannot both see enough credit left.
+	if s.billing != nil {
+		if err := billing.LockUserForQuota(ctx, tx, user.ID); err != nil {
+			return models.ReadingMockSession{}, err
+		}
+		if _, err := s.billing.CheckSubTestCredits(ctx, tx, user, billing.SectionMockSubTests); err != nil {
+			return models.ReadingMockSession{}, err
+		}
+	}
 
 	if err := s.repo.RecordExposure(ctx, tx, user.ID, exam, passageIDs, ContextMock); err != nil {
 		return models.ReadingMockSession{}, err
@@ -283,6 +297,16 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 			return s.hydrate(ctx, live)
 		}
 		return models.ReadingMockSession{}, err
+	}
+
+	// Charged in the same transaction as the paper, so a failed start costs
+	// nothing and a resumed paper (returned above, before this) is never
+	// charged twice.
+	if s.billing != nil {
+		if _, err := s.billing.RecordSessionStartCredits(ctx, tx, user, string(exam), string(models.SkillReading),
+			"mock:"+session.ID, billing.SectionMockSubTests); err != nil {
+			return models.ReadingMockSession{}, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

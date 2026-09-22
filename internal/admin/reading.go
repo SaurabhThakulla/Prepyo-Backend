@@ -91,7 +91,7 @@ type questionOption struct {
 // through createReorderItem rather than here.
 var supportedTypes = map[string]readingTypeSpec{
 	"fill-in-blanks-rw": {
-		name: "Reading & Writing: Fill in the Blanks", style: styleBlanks,
+		name: "Fill in the Blanks (Dropdown)", style: styleBlanks,
 		exams: examsPTE, display: "hidden",
 	},
 	"fill-in-blanks-r": {

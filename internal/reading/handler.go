@@ -1,6 +1,7 @@
 package reading
 
 import (
+	"fmt"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -226,9 +227,9 @@ func (h *Handler) startMock(w http.ResponseWriter, r *http.Request) {
 	session, err := h.svc.StartMock(r.Context(), user, exam)
 	if err != nil {
 		switch {
-		case errors.Is(err, billing.ErrMockLimitReached):
+		case errors.Is(err, billing.ErrLimitReached):
 			httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached,
-				"You have used all mock tests included in your plan. Upgrade or refer friends to unlock more.")
+				fmt.Sprintf("A section mock test uses %d of your daily practice sub-tests, and you don't have enough left today. They reset tomorrow, or upgrade your plan for more.", billing.SectionMockSubTests))
 		case errors.Is(err, ErrNoBlueprint):
 			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound,
 				"Reading mocks are not available for that exam yet.")
