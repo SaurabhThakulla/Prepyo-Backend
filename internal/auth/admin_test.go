@@ -92,3 +92,48 @@ func TestSignInAsAdminNotConfigured(t *testing.T) {
 		t.Fatalf("SignInAsAdmin() error = %v, want %v", err, ErrAdminLoginNotConfigured)
 	}
 }
+
+// Only wrong credentials count toward the lockout, and a correct sign-in wipes
+// the slate, so an admin who signs in normally is never throttled.
+func TestAdminLockoutCountsOnlyFailures(t *testing.T) {
+	const email = "admin@prepyo.online"
+	svc := newAdminTestService(email, "correct-horse-battery")
+	now := time.Now()
+
+	for i := 0; i < adminLoginMaxFailures-1; i++ {
+		svc.recordAdminFailure(email, now)
+	}
+	if svc.adminLoginLocked(email, now) {
+		t.Fatal("locked before reaching the failure limit")
+	}
+
+	svc.clearAdminFailures(email)
+	for i := 0; i < adminLoginMaxFailures-1; i++ {
+		svc.recordAdminFailure(email, now)
+	}
+	if svc.adminLoginLocked(email, now) {
+		t.Fatal("failures from before a successful sign-in still counted")
+	}
+
+	svc.recordAdminFailure(email, now)
+	if !svc.adminLoginLocked(email, now) {
+		t.Fatal("not locked after reaching the failure limit")
+	}
+	if svc.adminLoginLocked(email, now.Add(adminLoginWindow+time.Second)) {
+		t.Fatal("still locked after the window passed")
+	}
+}
+
+func TestSignInAsAdminLocksAfterRepeatedFailures(t *testing.T) {
+	const email = "admin@prepyo.online"
+	svc := newAdminTestService(email, "correct-horse-battery")
+
+	for i := 0; i < adminLoginMaxFailures; i++ {
+		if _, _, err := svc.SignInAsAdmin(context.Background(), email, "wrong"); !errors.Is(err, ErrAdminCredentials) {
+			t.Fatalf("attempt %d: error = %v, want %v", i+1, err, ErrAdminCredentials)
+		}
+	}
+	if _, _, err := svc.SignInAsAdmin(context.Background(), email, "wrong"); !errors.Is(err, ErrAdminLoginRateLimited) {
+		t.Fatalf("error = %v, want %v", err, ErrAdminLoginRateLimited)
+	}
+}

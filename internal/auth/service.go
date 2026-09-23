@@ -82,7 +82,7 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 	}
 
 	email = strings.ToLower(strings.TrimSpace(email))
-	if !s.allowAdminAttempt(email, time.Now()) {
+	if s.adminLoginLocked(email, time.Now()) {
 		return models.User{}, "", ErrAdminLoginRateLimited
 	}
 
@@ -91,8 +91,10 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 	emailOK := subtle.ConstantTimeCompare([]byte(email), []byte(s.adminEmail))
 	passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(s.adminPassword))
 	if emailOK&passwordOK != 1 {
+		s.recordAdminFailure(email, time.Now())
 		return models.User{}, "", ErrAdminCredentials
 	}
+	s.clearAdminFailures(email)
 
 	user, err := s.users.ByEmail(ctx, s.adminEmail)
 	if err != nil {
@@ -120,30 +122,51 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 	return user, token, nil
 }
 
-// Authenticate resolves a session token to its user.
 const adminLoginWindow = 10 * time.Minute
-const adminLoginMaxAttempts = 5
+const adminLoginMaxFailures = 5
 
-// allowAdminAttempt adds an account/email dimension to the outer IP limiter.
+// adminLoginLocked adds an account/email dimension to the outer IP limiter.
+// Only failed attempts count, so signing in correctly never locks anyone out.
 // The key is the normalized email, so changing IPs does not evade throttling.
-func (s *Service) allowAdminAttempt(email string, now time.Time) bool {
+func (s *Service) adminLoginLocked(email string, now time.Time) bool {
 	s.adminMu.Lock()
 	defer s.adminMu.Unlock()
+	return len(s.recentAdminFailures(email, now)) >= adminLoginMaxFailures
+}
 
+// recordAdminFailure notes a wrong email or password for email.
+func (s *Service) recordAdminFailure(email string, now time.Time) {
+	s.adminMu.Lock()
+	defer s.adminMu.Unlock()
+	s.adminAttempts[email] = append(s.recentAdminFailures(email, now), now)
+}
+
+// clearAdminFailures forgets past failures once the right credential is given.
+func (s *Service) clearAdminFailures(email string) {
+	s.adminMu.Lock()
+	defer s.adminMu.Unlock()
+	delete(s.adminAttempts, email)
+}
+
+// recentAdminFailures drops failures older than the window and returns the
+// rest. The caller must hold adminMu.
+func (s *Service) recentAdminFailures(email string, now time.Time) []time.Time {
 	cutoff := now.Add(-adminLoginWindow)
-	attempts := s.adminAttempts[email][:0]
+	failures := s.adminAttempts[email][:0]
 	for _, at := range s.adminAttempts[email] {
 		if at.After(cutoff) {
-			attempts = append(attempts, at)
+			failures = append(failures, at)
 		}
 	}
-	if len(attempts) >= adminLoginMaxAttempts {
-		s.adminAttempts[email] = attempts
-		return false
+	if len(failures) == 0 {
+		delete(s.adminAttempts, email)
+		return nil
 	}
-	s.adminAttempts[email] = append(attempts, now)
-	return true
+	s.adminAttempts[email] = failures
+	return failures
 }
+
+// Authenticate resolves a session token to its user.
 func (s *Service) Authenticate(ctx context.Context, token string) (models.User, error) {
 	hash := hashToken(token)
 
