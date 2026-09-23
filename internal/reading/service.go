@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/billing"
@@ -71,7 +72,53 @@ var (
 
 	// ErrNoAnswers means nothing in the submission belonged to the paper.
 	ErrNoAnswers = errors.New("no submitted answers belong to this mock")
+
+	// ErrNotAttempted means the paper has no answers at all. A blank paper is
+	// not a result; it is not recorded and does not set a band.
+	ErrNotAttempted = errors.New("no question on this paper has been answered")
+
+	// ErrExpiredUnattempted means time ran out on a paper with no answers.
+	// The paper is closed without a result.
+	ErrExpiredUnattempted = errors.New("time ran out before any question was answered")
+
+	// ErrPaperClosed means answers arrived for a paper that is no longer open.
+	ErrPaperClosed = errors.New("this paper is closed")
 )
+
+// SubmitGrace is how long after the deadline a submission is still taken as
+// sent: the browser submits when its timer reaches zero, and the request needs
+// time to arrive. Past it, the paper is graded from the answers saved in time.
+const SubmitGrace = 90 * time.Second
+
+// keepsTextOrder reports whether a task's questions must stay in the order the
+// author set. The official format says multiple choice, sentence completion
+// and short-answer questions follow the order of the text, and TFNG/YNNG sets
+// do in official and published practice papers; summary gaps sit in a printed
+// summary. Shuffling any of them would misrepresent the task, whatever the
+// group's own flag says.
+func keepsTextOrder(typeID string) bool {
+	switch typeID {
+	case TypeTrueFalse, TypeYesNoNotGiven, TypeSentenceCompletion,
+		"reading-summary-completion", "reading-short-answer",
+		TypeMCQSingle, TypeMCQMultiple:
+		return true
+	}
+	return false
+}
+
+// moduleFor is the IELTS module a learner's reading is drawn from. Modules are
+// an IELTS idea; every other exam reads as Academic, which filters nothing.
+func moduleFor(exam models.ExamType, user models.User) string {
+	if exam == models.ExamIELTS {
+		return user.IELTSModule()
+	}
+	return models.ModuleAcademic
+}
+
+// mayShuffle reports whether a group's questions may be dealt in random order.
+func mayShuffle(g Group) bool {
+	return g.ShuffleQuestions && !keepsTextOrder(g.TypeID)
+}
 
 type Service struct {
 	db        *pgxpool.Pool
@@ -140,7 +187,7 @@ func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeP
 		}
 	}
 
-	anchor, err := s.repo.PickPracticeGroup(ctx, user.ID, p.Exam, types)
+	anchor, err := s.repo.PickPracticeGroup(ctx, user.ID, p.Exam, moduleFor(p.Exam, user), types)
 	if err != nil {
 		return models.ReadingSet{}, err
 	}
@@ -227,21 +274,35 @@ func (s *Service) practiceReorder(ctx context.Context, user models.User, exam mo
 
 // StartMock deals or resumes a reading paper for the learner.
 func (s *Service) StartMock(ctx context.Context, user models.User, exam models.ExamType) (models.ReadingMockSession, error) {
-	blueprint, err := s.repo.GeneratedBlueprint(ctx, exam)
+	return s.startMock(ctx, user, exam, false)
+}
+
+// StartMockForFullMock deals a fresh IELTS paper for a full mock's Reading
+// section. It is not charged (the full mock was), and it is kept apart from
+// any reading mock the learner has open.
+func (s *Service) StartMockForFullMock(ctx context.Context, user models.User) (models.ReadingMockSession, error) {
+	return s.startMock(ctx, user, models.ExamIELTS, true)
+}
+
+func (s *Service) startMock(ctx context.Context, user models.User, exam models.ExamType, fullMock bool) (models.ReadingMockSession, error) {
+	charge := !fullMock && s.billing != nil
+	blueprint, err := s.repo.GeneratedBlueprint(ctx, exam, moduleFor(exam, user))
 	if err != nil {
 		return models.ReadingMockSession{}, err
 	}
 
-	if live, err := s.repo.LiveSession(ctx, user.ID, exam); err == nil {
-		return s.hydrate(ctx, live)
-	} else if !errors.Is(err, ErrSessionNotFound) {
-		return models.ReadingMockSession{}, err
+	if !fullMock {
+		if live, err := s.repo.LiveSession(ctx, user.ID, exam); err == nil {
+			return s.hydrate(ctx, live)
+		} else if !errors.Is(err, ErrSessionNotFound) {
+			return models.ReadingMockSession{}, err
+		}
 	}
 
 	// A section mock is paid for in sub-tests, not from the full-mock
 	// allowance. This early check only saves composing a paper that cannot be
 	// started; the binding check runs under the user lock below.
-	if s.billing != nil {
+	if charge {
 		if _, err := s.billing.CheckSubTestCredits(ctx, s.db, user, billing.SectionMockSubTests); err != nil {
 			return models.ReadingMockSession{}, err
 		}
@@ -261,7 +322,7 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 
 	// Serialise with every other credit spend for this learner, so two starts
 	// racing each other cannot both see enough credit left.
-	if s.billing != nil {
+	if charge {
 		if err := billing.LockUserForQuota(ctx, tx, user.ID); err != nil {
 			return models.ReadingMockSession{}, err
 		}
@@ -287,6 +348,7 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 		QuestionIDs:     questionIDs,
 		ReusedPassages:  reused,
 		DurationMinutes: blueprint.DurationMinutes,
+		InFullMock:      fullMock,
 	})
 	if err != nil {
 		if errors.Is(err, ErrSessionOpen) {
@@ -302,7 +364,7 @@ func (s *Service) StartMock(ctx context.Context, user models.User, exam models.E
 	// Charged in the same transaction as the paper, so a failed start costs
 	// nothing and a resumed paper (returned above, before this) is never
 	// charged twice.
-	if s.billing != nil {
+	if charge {
 		if _, err := s.billing.RecordSessionStartCredits(ctx, tx, user, string(exam), string(models.SkillReading),
 			"mock:"+session.ID, billing.SectionMockSubTests); err != nil {
 			return models.ReadingMockSession{}, err
@@ -399,7 +461,7 @@ func (s *Service) assignPassages(
 		if slot.Source != SourcePassage {
 			continue
 		}
-		candidates, err := s.repo.SlotPassageCandidates(ctx, userID, exam, slot.TypeIDs(), slot.Counts())
+		candidates, err := s.repo.SlotPassageCandidates(ctx, userID, exam, blueprint.Module, slot.PassageTag, slot.TypeIDs(), slot.Counts())
 		if err != nil {
 			return nil, err
 		}
@@ -483,7 +545,7 @@ func (s *Service) slotQuestions(
 					set = append(set, q)
 				}
 			}
-			if g.ShuffleQuestions {
+			if mayShuffle(g) {
 				rand.Shuffle(len(set), func(i, j int) { set[i], set[j] = set[j], set[i] })
 			}
 
@@ -497,6 +559,51 @@ func (s *Service) slotQuestions(
 		}
 	}
 	return ids, nil
+}
+
+// SaveDrafts records the answers given so far on an open paper. Answers for
+// questions that are not on the paper are dropped rather than stored.
+func (s *Service) SaveDrafts(ctx context.Context, user models.User, sessionID string, answers []models.AnswerSubmission) (models.ReadingMockSession, error) {
+	session, err := s.repo.SessionByID(ctx, s.db, user.ID, sessionID)
+	if err != nil {
+		return models.ReadingMockSession{}, err
+	}
+	if session.Status != StatusInProgress {
+		return models.ReadingMockSession{}, ErrPaperClosed
+	}
+
+	onPaper := make(map[string]bool, len(session.QuestionIDs))
+	for _, id := range session.QuestionIDs {
+		onPaper[id] = true
+	}
+	kept := make([]models.AnswerSubmission, 0, len(answers))
+	seen := make(map[string]bool, len(answers))
+	for _, answer := range answers {
+		if !onPaper[answer.QuestionID] || seen[answer.QuestionID] {
+			continue
+		}
+		seen[answer.QuestionID] = true
+		kept = append(kept, answer)
+	}
+
+	saved, err := s.repo.SaveDrafts(ctx, user.ID, sessionID, kept, SubmitGrace)
+	if err != nil {
+		return models.ReadingMockSession{}, err
+	}
+	if !saved {
+		return models.ReadingMockSession{}, ErrPaperClosed
+	}
+
+	fresh, err := s.repo.SessionByID(ctx, s.db, user.ID, sessionID)
+	if err != nil {
+		return models.ReadingMockSession{}, err
+	}
+	return models.ReadingMockSession{
+		ID:               fresh.ID,
+		Status:           fresh.Status,
+		ExpiresAt:        fresh.ExpiresAt,
+		SecondsRemaining: fresh.SecondsRemaining,
+	}, nil
 }
 
 // ResumeMock returns an in-progress paper for the learner.
@@ -547,12 +654,29 @@ func (s *Service) SubmitMock(
 		return MockResult{}, ErrAlreadySubmitted
 	}
 
+	// Time is the server's. A submission that arrives after the deadline and
+	// its grace period is graded from the answers saved while time remained,
+	// not from answers the browser may have kept collecting afterwards.
+	late := time.Now().After(session.ExpiresAt.Add(SubmitGrace))
+	if late {
+		answers = session.DraftAnswers
+	}
+
+	elapsed := int(time.Since(session.CreatedAt).Seconds())
+	if limit := session.DurationMinutes * 60; elapsed > limit {
+		elapsed = limit
+	}
+	if elapsed < 1 {
+		elapsed = 1
+	}
+	durationSeconds = elapsed
+
 	bank, err := s.questions.ByIDs(ctx, session.QuestionIDs)
 	if err != nil {
 		return MockResult{}, err
 	}
 
-	graded, err := mocks.GradeAnswers(bank, session.QuestionIDs, answers)
+	graded, err := mocks.GradeAnswersFor(session.Exam, bank, session.QuestionIDs, answers)
 	if errors.Is(err, mocks.ErrInvalidAnswers) {
 		return MockResult{}, ErrNoAnswers
 	}
@@ -562,6 +686,15 @@ func (s *Service) SubmitMock(
 	if graded.Total == 0 {
 		return MockResult{}, ErrNoAnswers
 	}
+	if graded.Answered == 0 {
+		if late || time.Now().After(session.ExpiresAt) {
+			if _, err := s.repo.CloseSession(ctx, s.db, session.ID, StatusAbandoned, nil); err != nil {
+				return MockResult{}, err
+			}
+			return MockResult{}, ErrExpiredUnattempted
+		}
+		return MockResult{}, ErrNotAttempted
+	}
 
 	version, err := s.exams.ByID(ctx, session.ExamVersionID)
 	if err != nil {
@@ -569,16 +702,21 @@ func (s *Service) SubmitMock(
 	}
 
 	scale := scoring.Scale{Min: version.MinScore, Max: version.MaxScore, Step: version.ScoreStep}
-	// Use the official IELTS raw-to-band conversion table when the exam and
-	// question count match (40-question IELTS Academic Reading). Falls back
-	// to linear interpolation for PTE or non-standard question counts.
-	userScore := scale.EstimateFromRawMarks(string(session.Exam), "reading", graded.Correct, graded.Total)
+	// IELTS converts marks through the indicative reading table for the
+	// learner's module, scaled to 40 when the paper is another size; PTE uses
+	// its own scale. Raw is marks under IELTS and correct items under PTE.
+	// The paper's own module decides the table, not whichever module the
+	// learner has chosen since it was dealt.
+	module, err := s.repo.ModuleForMock(ctx, session.MockID)
+	if err != nil {
+		return MockResult{}, err
+	}
+	userScore := scale.EstimateForModule(string(session.Exam), module, "reading", graded.Raw, graded.RawMax)
 
 	skillScores := make(map[models.SkillType]float64, len(graded.BySkill))
 	for skill := range graded.BySkill {
 		skillScores[skill] = userScore
 	}
-
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -593,9 +731,10 @@ func (s *Service) SubmitMock(
 		Exam:            session.Exam,
 		UserScore:       userScore,
 		SkillScores:     skillScores,
-		TotalCorrect:    graded.Correct,
-		TotalQuestions:  graded.Total,
+		TotalCorrect:    graded.Raw,
+		TotalQuestions:  graded.RawMax,
 		DurationSeconds: durationSeconds,
+		Answers:         answers,
 	})
 	if err != nil {
 		return MockResult{}, err
@@ -822,7 +961,7 @@ func buildGroup(g Group, list []models.Question, exam models.ExamType) models.Re
 		}
 		safe = append(safe, q.PublicQuestion())
 	}
-	if g.ShuffleQuestions {
+	if mayShuffle(g) {
 		rand.Shuffle(len(safe), func(i, j int) { safe[i], safe[j] = safe[j], safe[i] })
 	}
 

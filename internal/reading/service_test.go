@@ -160,3 +160,17 @@ func TestSupportsExamFallsBackToTheAuthoredExam(t *testing.T) {
 		t.Error("a legacy IELTS question became answerable under PTE")
 	}
 }
+
+// A set whose order follows the text is never dealt shuffled, whatever its
+// own flag says.
+func TestOrderedTasksNeverShuffle(t *testing.T) {
+	original := idsOf(sampleQuestions())
+	for _, typeID := range []string{TypeTrueFalse, TypeYesNoNotGiven, TypeSentenceCompletion, TypeMCQSingle, TypeMCQMultiple} {
+		for range 20 {
+			got := idsOf(buildGroup(Group{ReadingGroup: models.ReadingGroup{TypeID: typeID}, ShuffleQuestions: true}, sampleQuestions(), "").Questions)
+			if !equal(got, original) {
+				t.Fatalf("%s: order = %v, want the authored order", typeID, got)
+			}
+		}
+	}
+}

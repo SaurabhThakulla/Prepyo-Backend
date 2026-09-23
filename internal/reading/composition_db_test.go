@@ -106,7 +106,7 @@ func TestPassagesCarryNoExam(t *testing.T) {
 	// rp-time-01 was authored for PTE. An IELTS learner must reach it, because
 	// 000027 put IELTS tasks on it.
 	ieltsGroup, err := repo.PickPracticeGroup(ctx, newLearner(t, pool, models.ExamIELTS).ID,
-		models.ExamIELTS, []string{TypeMatchingInformation})
+		models.ExamIELTS, "", []string{TypeMatchingInformation})
 	if err != nil {
 		t.Fatalf("pick IELTS matching information: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestPassagesCarryNoExam(t *testing.T) {
 
 	// And a PTE learner must reach the passages that were authored for IELTS.
 	pteGroup, err := repo.PickPracticeGroup(ctx, newLearner(t, pool, models.ExamPTE).ID,
-		models.ExamPTE, []string{TypeMCQSingle})
+		models.ExamPTE, "", []string{TypeMCQSingle})
 	if err != nil {
 		t.Fatalf("pick PTE multiple choice: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestIELTSPaperKeepsItsShape(t *testing.T) {
 	repo := NewRepository(pool)
 	ctx := context.Background()
 
-	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamIELTS)
+	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamIELTS, "")
 	if err != nil {
 		t.Fatalf("IELTS blueprint: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestPTEPaperComposesIndependently(t *testing.T) {
 	repo := NewRepository(pool)
 	ctx := context.Background()
 
-	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamPTE)
+	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamPTE, "")
 	if err != nil {
 		t.Fatalf("PTE blueprint: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestAddingAQuestionDoesNotChangeADealtPaper(t *testing.T) {
 	repo := NewRepository(pool)
 	ctx := context.Background()
 
-	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamIELTS)
+	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamIELTS, "")
 	if err != nil {
 		t.Fatalf("blueprint: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestHydrateIsStableAcrossReads(t *testing.T) {
 	repo := NewRepository(pool)
 	ctx := context.Background()
 
-	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamIELTS)
+	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamIELTS, "")
 	if err != nil {
 		t.Fatalf("blueprint: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestPracticeDealsEveryGroupOfTheFamily(t *testing.T) {
 	}
 
 	// The anchor a learner is dealt still belongs to the family they chose.
-	anchor, err := repo.PickPracticeGroup(ctx, newLearner(t, pool, models.ExamPTE).ID, models.ExamPTE, family)
+	anchor, err := repo.PickPracticeGroup(ctx, newLearner(t, pool, models.ExamPTE).ID, models.ExamPTE, "", family)
 	if err != nil {
 		t.Fatalf("pick multiple choice: %v", err)
 	}

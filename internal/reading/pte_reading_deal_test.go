@@ -82,7 +82,7 @@ func TestPTEMockPaperComposition(t *testing.T) {
 	svc := NewService(pool, repo, questions.NewRepository(pool),
 		mocks.NewRepository(pool), exams.NewRepository(pool), gamification.NewService(), nil, nil)
 
-	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamPTE)
+	blueprint, err := repo.GeneratedBlueprint(ctx, models.ExamPTE, "")
 	if err != nil {
 		t.Fatalf("get PTE blueprint: %v", err)
 	}

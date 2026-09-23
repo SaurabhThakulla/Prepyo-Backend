@@ -3,8 +3,10 @@ package reading
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -201,7 +203,7 @@ func (r *Repository) GroupByID(ctx context.Context, id string) (Group, error) {
 }
 
 // TaskTypes returns reading task types available for an exam with their passage and question counts.
-func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]models.ReadingTaskType, error) {
+func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType, module string) ([]models.ReadingTaskType, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT type_id, type_name, passage_count, question_count FROM (
 			SELECT g.type_id                      AS type_id,
@@ -210,6 +212,7 @@ func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]mod
 			       count(q.id)                    AS question_count
 			FROM reading_question_groups g
 			JOIN reading_passages p ON p.id = g.passage_id AND p.is_published
+			                       AND ($1 <> 'IELTS' OR $2 = ANY(p.modules))
 			JOIN questions q ON q.group_id = g.id AND q.is_published
 			                AND ($1 = '' OR $1 = ANY(q.supported_exams))
 			GROUP BY g.type_id
@@ -226,7 +229,7 @@ func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]mod
 			WHERE i.is_published AND ($1 = '' OR i.exam = $1)
 			HAVING count(q.id) > 0
 		) menu
-		ORDER BY type_name`, exam)
+		ORDER BY type_name`, exam, moduleOrDefault(module))
 	if err != nil {
 		return nil, fmt.Errorf("list reading types: %w", err)
 	}
@@ -253,12 +256,13 @@ func (r *Repository) TaskTypes(ctx context.Context, exam models.ExamType) ([]mod
 // The group it returns is an anchor rather than the whole sitting: practice
 // deals every set of the requested types that the chosen passage carries, so
 // a heading covering two task types hands over both.
-func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam models.ExamType, typeIDs []string) (Group, error) {
+func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam models.ExamType, module string, typeIDs []string) (Group, error) {
 	var id string
 	err := r.db.QueryRow(ctx, `
 		SELECT g.id
 		FROM reading_question_groups g
 		JOIN reading_passages p ON p.id = g.passage_id AND p.is_published
+		                       AND ($3 <> 'IELTS' OR $4 = ANY(p.modules))
 		LEFT JOIN user_passage_exposures e
 		       ON e.user_id = $1 AND e.passage_id = p.id AND e.context = 'practice'
 		      AND ($3 = '' OR e.exam = $3)
@@ -267,7 +271,7 @@ func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam 
 		               WHERE q.group_id = g.id AND q.is_published
 		                 AND ($3 = '' OR $3 = ANY(q.supported_exams)))
 		ORDER BY e.last_seen_at ASC NULLS FIRST, random()
-		LIMIT 1`, userID, typeIDs, exam).Scan(&id)
+		LIMIT 1`, userID, typeIDs, exam, moduleOrDefault(module)).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Group{}, ErrNoPassage
 	}
@@ -396,14 +400,21 @@ type Blueprint struct {
 	DurationMinutes int
 	PassageCount    int
 	TotalQuestions  int
-	Slots           []BlueprintSlot
+	// Module is the IELTS module the paper is for (models.ModuleAcademic for
+	// PTE, where it has no meaning).
+	Module string
+	Slots  []BlueprintSlot
 }
 
 // BlueprintSlot is one section of a paper, filled from one passage.
 type BlueprintSlot struct {
 	Position int
 	Source   string
-	Tasks    []BlueprintTask
+	// PassageTag, when set, limits the section to passages carrying that tag:
+	// General Training section 1 wants everyday texts, section 2 workplace
+	// texts, which task counts alone cannot tell apart.
+	PassageTag string
+	Tasks      []BlueprintTask
 }
 
 // BlueprintTask is one task set within a section.
@@ -452,16 +463,19 @@ type ReorderPick struct {
 	QuestionID string
 }
 
-func (r *Repository) GeneratedBlueprint(ctx context.Context, exam models.ExamType) (Blueprint, error) {
+func (r *Repository) GeneratedBlueprint(ctx context.Context, exam models.ExamType, module string) (Blueprint, error) {
+	if module == "" {
+		module = models.ModuleAcademic
+	}
 	var b Blueprint
 	err := r.db.QueryRow(ctx, `
 		SELECT b.id, m.id, m.exam_version_id, m.title, b.duration_minutes,
-		       b.passage_count, b.total_questions
+		       b.passage_count, b.total_questions, b.module
 		FROM reading_mock_blueprints b
 		JOIN mocks m ON m.id = b.mock_id
-		WHERE b.exam = $1 AND b.is_active`, exam).
+		WHERE b.exam = $1 AND b.module = $2 AND b.is_active`, exam, module).
 		Scan(&b.ID, &b.MockID, &b.ExamVersionID, &b.Title, &b.DurationMinutes,
-			&b.PassageCount, &b.TotalQuestions)
+			&b.PassageCount, &b.TotalQuestions, &b.Module)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Blueprint{}, ErrNoBlueprint
 	}
@@ -479,7 +493,7 @@ func (r *Repository) GeneratedBlueprint(ctx context.Context, exam models.ExamTyp
 
 func (r *Repository) blueprintSlots(ctx context.Context, blueprintID string) ([]BlueprintSlot, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT position, type_id, question_count, source
+		SELECT position, type_id, question_count, source, COALESCE(passage_tag, '')
 		FROM reading_mock_blueprint_slots
 		WHERE blueprint_id = $1
 		ORDER BY position, ordinal`, blueprintID)
@@ -491,15 +505,15 @@ func (r *Repository) blueprintSlots(ctx context.Context, blueprintID string) ([]
 	var list []BlueprintSlot
 	for rows.Next() {
 		var position, count int
-		var typeID, source string
-		if err := rows.Scan(&position, &typeID, &count, &source); err != nil {
+		var typeID, source, tag string
+		if err := rows.Scan(&position, &typeID, &count, &source, &tag); err != nil {
 			return nil, fmt.Errorf("scan blueprint slot: %w", err)
 		}
 
 		// Rows arrive grouped by position, so a new section is a change of
 		// position rather than a lookup.
 		if len(list) == 0 || list[len(list)-1].Position != position {
-			list = append(list, BlueprintSlot{Position: position, Source: source})
+			list = append(list, BlueprintSlot{Position: position, Source: source, PassageTag: tag})
 		}
 		last := &list[len(list)-1]
 		last.Tasks = append(last.Tasks, BlueprintTask{TypeID: typeID, QuestionCount: count})
@@ -513,6 +527,8 @@ func (r *Repository) SlotPassageCandidates(
 	ctx context.Context,
 	userID string,
 	exam models.ExamType,
+	module string,
+	passageTag string,
 	typeIDs []string,
 	counts []int,
 ) ([]MockCandidate, error) {
@@ -526,6 +542,8 @@ func (r *Repository) SlotPassageCandidates(
 		       ON practised.user_id = $1 AND practised.passage_id = p.id
 		      AND practised.exam = $2 AND practised.context = 'practice'
 		WHERE p.is_published
+		  AND ($2 <> 'IELTS' OR $5 = ANY(p.modules))
+		  AND ($6 = '' OR $6 = ANY(p.tags))
 		  AND NOT EXISTS (
 			  SELECT 1
 			  FROM unnest($3::text[], $4::int[]) AS want(type_id, n)
@@ -542,7 +560,7 @@ func (r *Repository) SlotPassageCandidates(
 		ORDER BY (seen.passage_id IS NOT NULL),
 		         (practised.passage_id IS NOT NULL),
 		         seen.last_seen_at ASC NULLS FIRST,
-		         random()`, userID, exam, typeIDs, counts)
+		         random()`, userID, exam, typeIDs, counts, moduleOrDefault(module), passageTag)
 	if err != nil {
 		return nil, fmt.Errorf("list slot passages: %w", err)
 	}
@@ -635,7 +653,8 @@ type Session struct {
 const sessionFields = `
 	s.id, s.mock_id, m.title, s.exam, s.exam_version_id, s.status,
 	s.duration_minutes, s.passage_ids, s.question_ids, s.reused_passages,
-	s.created_at, s.submitted_at`
+	s.created_at, s.submitted_at, s.expires_at, s.draft_answers,
+	GREATEST(0, CEIL(EXTRACT(EPOCH FROM (s.expires_at - now()))))::int`
 
 const sessionFrom = ` FROM reading_mock_sessions s JOIN mocks m ON m.id = s.mock_id`
 
@@ -648,6 +667,9 @@ type CreateSessionParams struct {
 	QuestionIDs     []string
 	ReusedPassages  bool
 	DurationMinutes int
+	// InFullMock marks a full mock's Reading paper, kept apart from any
+	// reading mock the learner has open on its own.
+	InFullMock bool
 }
 
 // ErrSessionOpen means this learner already has a live paper for this exam.
@@ -659,13 +681,13 @@ func (r *Repository) CreateSession(ctx context.Context, db database.DB, p Create
 		WITH inserted AS (
 			INSERT INTO reading_mock_sessions (
 				user_id, mock_id, exam, exam_version_id, passage_ids, question_ids,
-				reused_passages, duration_minutes)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				reused_passages, duration_minutes, expires_at, in_full_mock)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $8), $9)
 			RETURNING *
 		)
 		SELECT `+sessionFields+` FROM inserted s JOIN mocks m ON m.id = s.mock_id`,
 		p.UserID, p.MockID, p.Exam, p.ExamVersionID, p.PassageIDs, p.QuestionIDs,
-		p.ReusedPassages, p.DurationMinutes)
+		p.ReusedPassages, p.DurationMinutes, p.InFullMock)
 
 	s, err := scanSession(row)
 	if err != nil {
@@ -681,7 +703,7 @@ func (r *Repository) CreateSession(ctx context.Context, db database.DB, p Create
 // LiveSession returns this learner's in-progress paper for an exam.
 func (r *Repository) LiveSession(ctx context.Context, userID string, exam models.ExamType) (Session, error) {
 	row := r.db.QueryRow(ctx, `SELECT `+sessionFields+sessionFrom+`
-		WHERE s.user_id = $1 AND s.exam = $2 AND s.status = 'in_progress'`, userID, exam)
+		WHERE s.user_id = $1 AND s.exam = $2 AND s.status = 'in_progress' AND NOT s.in_full_mock`, userID, exam)
 
 	s, err := scanSession(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -736,6 +758,26 @@ func (r *Repository) ListSessions(ctx context.Context, userID string, limit, off
 	return list, total, rows.Err()
 }
 
+// SaveDrafts stores the answers a learner has given so far on an open paper.
+// It refuses once the paper's time, plus the grace period, has run out: from
+// then on the saved answers are the ones that will be graded.
+func (r *Repository) SaveDrafts(ctx context.Context, userID, sessionID string, answers []models.AnswerSubmission, grace time.Duration) (bool, error) {
+	body, err := json.Marshal(answers)
+	if err != nil {
+		return false, fmt.Errorf("marshal draft answers: %w", err)
+	}
+	tag, err := r.db.Exec(ctx, `
+		UPDATE reading_mock_sessions
+		   SET draft_answers = $3, drafts_saved_at = now()
+		 WHERE id = $1 AND user_id = $2 AND status = 'in_progress'
+		   AND now() <= expires_at + make_interval(secs => $4)`,
+		sessionID, userID, string(body), grace.Seconds())
+	if err != nil {
+		return false, fmt.Errorf("save reading mock drafts: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // CloseSession transitions an in-progress session to the specified status.
 func (r *Repository) CloseSession(ctx context.Context, db database.DB, sessionID, status string, attemptID *string) (bool, error) {
 	tag, err := db.Exec(ctx, `
@@ -752,12 +794,45 @@ func (r *Repository) CloseSession(ctx context.Context, db database.DB, sessionID
 
 func scanSession(row pgx.Row) (Session, error) {
 	var s Session
+	var drafts []byte
 	err := row.Scan(&s.ID, &s.MockID, &s.MockTitle, &s.Exam, &s.ExamVersionID, &s.Status,
 		&s.DurationMinutes, &s.PassageIDs, &s.QuestionIDs, &s.ReusedPassages,
-		&s.CreatedAt, &s.SubmittedAt)
+		&s.CreatedAt, &s.SubmittedAt, &s.ExpiresAt, &drafts, &s.SecondsRemaining)
 	if err != nil {
 		return Session{}, err
 	}
+	if len(drafts) > 0 {
+		if err := json.Unmarshal(drafts, &s.DraftAnswers); err != nil {
+			return Session{}, fmt.Errorf("decode draft answers: %w", err)
+		}
+	}
+	if s.Status != StatusInProgress {
+		s.SecondsRemaining = 0
+	}
 	s.TotalQuestions = len(s.QuestionIDs)
 	return s, nil
+}
+
+// moduleOrDefault treats an unset module as Academic, the paper every learner
+// had before General Training existed.
+func moduleOrDefault(module string) string {
+	if module == models.ModuleGeneralTraining {
+		return module
+	}
+	return models.ModuleAcademic
+}
+
+// ModuleForMock is the IELTS module a generated mock was composed for.
+func (r *Repository) ModuleForMock(ctx context.Context, mockID string) (string, error) {
+	var module string
+	err := r.db.QueryRow(ctx, `
+		SELECT module FROM reading_mock_blueprints WHERE mock_id = $1
+		ORDER BY is_active DESC LIMIT 1`, mockID).Scan(&module)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.ModuleAcademic, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read mock module: %w", err)
+	}
+	return module, nil
 }

@@ -42,6 +42,20 @@ type ListParams struct {
 
 	// Random orders the results randomly instead of by id.
 	Random bool
+
+	// ExcludeTypeIDs leaves out task types the caller must not be dealt, such
+	// as the other IELTS module's Writing Task 1.
+	ExcludeTypeIDs []string
+}
+
+// IELTSModuleExclusions is the Writing Task 1 type the other IELTS module sets:
+// Academic learners describe a visual, General Training learners write a
+// letter, and neither should be dealt the other's task.
+func IELTSModuleExclusions(module string) []string {
+	if module == models.ModuleGeneralTraining {
+		return []string{"ielts-writing-task1-figure"}
+	}
+	return []string{"ielts-writing-task1-letter"}
 }
 
 // List returns published questions matching the filters.
@@ -52,11 +66,17 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question,
 		  AND ($2 = '' OR skill = $2)
 		  AND ($3 = '' OR type_id = $3
 		       OR (exam = 'PTE' AND skill = 'listening' AND type_id = ANY($5::text[])))
-		  AND ($4 OR (passage_id IS NULL AND reorder_item_id IS NULL))`
+		  AND ($4 OR (passage_id IS NULL AND reorder_item_id IS NULL))
+		  AND listening_group_id IS NULL
+		  AND NOT (type_id = ANY($6::text[]))`
 
 	var total int
+	exclude := p.ExcludeTypeIDs
+	if exclude == nil {
+		exclude = []string{}
+	}
 	err := r.db.QueryRow(ctx, `SELECT count(*) FROM questions`+where,
-		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, models.PTEListeningTypeIDs(p.TypeID)).Scan(&total)
+		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, models.PTEListeningTypeIDs(p.TypeID), exclude).Scan(&total)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count questions: %w", err)
 	}
@@ -69,8 +89,8 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question,
 	rows, err := r.db.Query(ctx, `
 		SELECT `+selectFields+` FROM questions`+where+`
 		`+orderClause+`
-		LIMIT $6 OFFSET $7`,
-		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, models.PTEListeningTypeIDs(p.TypeID), p.Limit, p.Offset)
+		LIMIT $7 OFFSET $8`,
+		p.Exam, p.Skill, p.TypeID, p.IncludePassageQuestions, models.PTEListeningTypeIDs(p.TypeID), exclude, p.Limit, p.Offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list questions: %w", err)
 	}

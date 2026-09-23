@@ -8,12 +8,21 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/reqctx"
+	"github.com/prepyo/backend/internal/speech"
 	"github.com/prepyo/backend/pkg/httpx"
 )
 
 type Handler struct {
-	repo *Repository
-	log  *slog.Logger
+	repo   *Repository
+	log    *slog.Logger
+	speech *speech.Service
+}
+
+// WithSpeech lets the handler serve server-spoken audio for listening scripts.
+func (h *Handler) WithSpeech(svc *speech.Service) *Handler {
+	h.speech = svc
+	return h
 }
 
 func NewHandler(repo *Repository, log *slog.Logger) *Handler {
@@ -25,6 +34,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/", h.list)
 	r.Get("/assets/{assetID}", h.getAsset)
 	r.Get("/{questionID}", h.get)
+	r.Get("/{questionID}/playback", h.playback)
+	r.Get("/{questionID}/playback/audio", h.playbackAudio)
 	return r
 }
 
@@ -66,13 +77,22 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A learner is dealt only their own IELTS module's Writing Task 1. Admins
+	// author both, so they see everything.
+	var exclude []string
+	if user, ok := reqctx.User(r.Context()); ok && !user.IsAdmin() &&
+		(exam == models.ExamIELTS || (exam == "" && user.TargetExam == models.ExamIELTS)) {
+		exclude = IELTSModuleExclusions(user.IELTSModule())
+	}
+
 	page := httpx.ReadPage(r)
 	list, total, err := h.repo.List(r.Context(), ListParams{
-		Exam:   exam,
-		Skill:  skill,
-		TypeID: query.Get("typeId"),
-		Limit:  page.Limit,
-		Offset: page.Offset,
+		ExcludeTypeIDs: exclude,
+		Exam:           exam,
+		Skill:          skill,
+		TypeID:         query.Get("typeId"),
+		Limit:          page.Limit,
+		Offset:         page.Offset,
 		// Opt-in, for tooling that wants to see the whole bank. A learner-facing
 		// caller wants /api/v1/reading, which serves these with their passage.
 		IncludePassageQuestions: query.Get("includePassageQuestions") == "true",
@@ -106,4 +126,46 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"question": q.PublicQuestion()})
+}
+
+// playback serves the script the browser reads aloud for a listening item
+// that has no recording. It is fetched when the learner presses play, so the
+// script (and the answers in it) is not part of the question payload.
+func (h *Handler) playback(w http.ResponseWriter, r *http.Request) {
+	q, err := h.repo.ByID(r.Context(), chi.URLParam(r, "questionID"))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That question does not exist.")
+			return
+		}
+		httpx.Internal(w, h.log, "questions.playback", err)
+		return
+	}
+	script := q.PlaybackScript()
+	if q.Skill != models.SkillListening || script == "" {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That question has no script to play.")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	httpx.JSON(w, http.StatusOK, map[string]any{"script": script})
+}
+
+// playbackAudio is the same script spoken on the server, as a list of short
+// clips with one voice per speaker, for browsers that cannot speak it.
+func (h *Handler) playbackAudio(w http.ResponseWriter, r *http.Request) {
+	q, err := h.repo.ByID(r.Context(), chi.URLParam(r, "questionID"))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That question does not exist.")
+			return
+		}
+		httpx.Internal(w, h.log, "questions.playbackAudio", err)
+		return
+	}
+	script := q.PlaybackScript()
+	if script == "" {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That question has no script to play.")
+		return
+	}
+	speech.WriteSegments(w, r, h.speech, h.log, script, nil)
 }

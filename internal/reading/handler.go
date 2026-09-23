@@ -1,8 +1,8 @@
 package reading
 
 import (
-	"fmt"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -38,6 +38,7 @@ func (h *Handler) Routes() chi.Router {
 		m.Post("/", h.startMock)
 		m.Get("/{sessionID}", h.getMock)
 		m.Delete("/{sessionID}", h.abandonMock)
+		m.Put("/{sessionID}/answers", h.saveDrafts)
 		m.Post("/{sessionID}/submit", h.submitMock)
 	})
 
@@ -62,7 +63,8 @@ func (h *Handler) types(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	list, err := h.repo.TaskTypes(r.Context(), exam)
+	module := moduleFor(exam, user)
+	list, err := h.repo.TaskTypes(r.Context(), exam, module)
 	if err != nil {
 		httpx.Internal(w, h.log, "reading.types", err)
 		return
@@ -70,7 +72,7 @@ func (h *Handler) types(w http.ResponseWriter, r *http.Request) {
 
 	required := []string{}
 	passageCount := 0
-	if blueprint, err := h.repo.GeneratedBlueprint(r.Context(), exam); err == nil {
+	if blueprint, err := h.repo.GeneratedBlueprint(r.Context(), exam, module); err == nil {
 		passageCount = blueprint.PassageCount
 		seen := map[string]bool{}
 		for _, slot := range blueprint.Slots {
@@ -287,6 +289,33 @@ type submitMockRequest struct {
 	DurationSeconds int                       `json:"durationSeconds"`
 }
 
+type saveDraftsRequest struct {
+	Answers []models.AnswerSubmission `json:"answers"`
+}
+
+// saveDrafts stores the answers a learner has given so far, so a paper that is
+// closed and reopened comes back as it was left, and one that runs out of time
+// is graded from what was answered in time.
+func (h *Handler) saveDrafts(w http.ResponseWriter, r *http.Request) {
+	var req saveDraftsRequest
+	if !httpx.Decode(w, r, &req, h.log, "reading.saveDrafts") {
+		return
+	}
+
+	user := reqctx.MustUser(r.Context())
+	session, err := h.svc.SaveDrafts(r.Context(), user, chi.URLParam(r, "sessionID"), req.Answers)
+	if err != nil {
+		if errors.Is(err, ErrPaperClosed) {
+			httpx.Error(w, http.StatusConflict, httpx.CodePaperExpired,
+				"This paper is closed. Its time has run out or it has been submitted.")
+			return
+		}
+		h.writeSessionError(w, "reading.saveDrafts", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"session": session})
+}
+
 func (h *Handler) submitMock(w http.ResponseWriter, r *http.Request) {
 	var req submitMockRequest
 	if !httpx.Decode(w, r, &req, h.log, "reading.submitMock") {
@@ -297,9 +326,18 @@ func (h *Handler) submitMock(w http.ResponseWriter, r *http.Request) {
 	result, err := h.svc.SubmitMock(r.Context(), user, chi.URLParam(r, "sessionID"),
 		req.Answers, req.DurationSeconds)
 	if err != nil {
-		if errors.Is(err, ErrNoAnswers) {
+		switch {
+		case errors.Is(err, ErrNoAnswers):
 			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest,
 				"None of the submitted answers belong to this mock.")
+			return
+		case errors.Is(err, ErrNotAttempted):
+			httpx.Error(w, http.StatusUnprocessableEntity, httpx.CodeNotAttempted,
+				"Answer at least one question before you submit. A blank paper does not get a band.")
+			return
+		case errors.Is(err, ErrExpiredUnattempted):
+			httpx.Error(w, http.StatusConflict, httpx.CodePaperExpired,
+				"Time ran out before any question was answered, so this paper was closed without a score.")
 			return
 		}
 		h.writeSessionError(w, "reading.submitMock", err)
