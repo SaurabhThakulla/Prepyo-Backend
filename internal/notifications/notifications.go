@@ -1,4 +1,3 @@
-// Package notifications stores in-app messages for a learner.
 package notifications
 
 import (
@@ -6,11 +5,26 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/models"
 )
 
 var ErrNotFound = errors.New("notification not found")
+
+// Notification types. The database check constraint lists the same set.
+const (
+	TypeStreak       = "streak"
+	TypeEvaluation   = "evaluation"
+	TypeMission      = "mission"
+	TypeSystem       = "system"
+	TypeReferral     = "referral"
+	TypePayment      = "payment"
+	TypePlan         = "plan"
+	TypeLimit        = "limit"
+	TypeReport       = "report"
+	TypeAnnouncement = "announcement"
+)
 
 type Repository struct {
 	db database.DB
@@ -26,21 +40,75 @@ type CreateParams struct {
 	Message   string
 	Type      string
 	ActionURL string
+	// DedupeKey, when set, makes the notice once-only: a second one with the
+	// same key for the same user is silently dropped.
+	DedupeKey string
+}
+
+func nullable(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// Send writes one notification through db, so a caller inside a transaction
+// gets it committed or rolled back with the rest of its work. It returns the
+// new id, or "" when the dedupe key had already been used.
+func Send(ctx context.Context, db database.DB, p CreateParams) (string, error) {
+	var id string
+	err := db.QueryRow(ctx, `
+		INSERT INTO notifications (user_id, title, message, type, action_url, dedupe_key)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+		RETURNING id`,
+		p.UserID, p.Title, p.Message, p.Type, nullable(p.ActionURL), nullable(p.DedupeKey)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("create notification: %w", err)
+	}
+	return id, nil
+}
+
+// SendToAdmins gives every admin account the same notice. UserID in p is
+// ignored; a DedupeKey applies per admin.
+func SendToAdmins(ctx context.Context, db database.DB, p CreateParams) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO notifications (user_id, title, message, type, action_url, dedupe_key)
+		SELECT id, $1, $2, $3, $4, $5 FROM users WHERE role = 'admin'
+		ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+		p.Title, p.Message, p.Type, nullable(p.ActionURL), nullable(p.DedupeKey))
+	if err != nil {
+		return fmt.Errorf("notify admins: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) Create(ctx context.Context, db database.DB, p CreateParams) error {
-	var actionURL *string
-	if p.ActionURL != "" {
-		actionURL = &p.ActionURL
-	}
-	_, err := db.Exec(ctx, `
+	_, err := Send(ctx, db, p)
+	return err
+}
+
+// Notify sends outside any caller transaction, on the repository's own pool.
+// For notices that must survive the request failing, such as "you have hit
+// today's limit", which is sent exactly when the request is refused.
+func (r *Repository) Notify(ctx context.Context, p CreateParams) error {
+	_, err := Send(ctx, r.db, p)
+	return err
+}
+
+// Announce sends one notice to every learner and returns how many got it.
+func (r *Repository) Announce(ctx context.Context, title, message, actionURL string) (int64, error) {
+	tag, err := r.db.Exec(ctx, `
 		INSERT INTO notifications (user_id, title, message, type, action_url)
-		VALUES ($1, $2, $3, $4, $5)`,
-		p.UserID, p.Title, p.Message, p.Type, actionURL)
+		SELECT id, $1, $2, 'announcement', $3 FROM users WHERE role <> 'admin'`,
+		title, message, nullable(actionURL))
 	if err != nil {
-		return fmt.Errorf("create notification: %w", err)
+		return 0, fmt.Errorf("announce: %w", err)
 	}
-	return nil
+	return tag.RowsAffected(), nil
 }
 
 func (r *Repository) List(ctx context.Context, userID string, limit, offset int) ([]models.Notification, int, int, error) {
