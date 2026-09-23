@@ -188,12 +188,13 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateRequest struct {
-	Name        *string  `json:"name"`
-	TargetExam  *string  `json:"targetExam"`
-	TargetScore *float64 `json:"targetScore"`
-	ExamDate    *string  `json:"examDate"`
-	NepalRegion *string  `json:"nepalRegion"`
-	Timezone    *string  `json:"timezone"`
+	Name         *string  `json:"name"`
+	TargetExam   *string  `json:"targetExam"`
+	TargetModule *string  `json:"targetModule"`
+	TargetScore  *float64 `json:"targetScore"`
+	ExamDate     *string  `json:"examDate"`
+	NepalRegion  *string  `json:"nepalRegion"`
+	Timezone     *string  `json:"timezone"`
 
 	StudyGoal     *string  `json:"studyGoal"`
 	Destination   *string  `json:"destination"`
@@ -238,6 +239,17 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 			problems["targetExam"] = "Your exam is fixed once you have chosen it."
 		} else {
 			params.TargetExam = &exam
+		}
+	}
+
+	// The IELTS module can change at any time: Academic and General Training
+	// share Listening, Speaking and Writing Task 2, and a learner may switch
+	// when their plans change.
+	if req.TargetModule != nil {
+		if models.ValidIELTSModule(*req.TargetModule) {
+			params.TargetModule = req.TargetModule
+		} else {
+			problems["targetModule"] = "Choose Academic or General Training."
 		}
 	}
 

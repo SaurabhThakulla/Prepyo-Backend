@@ -39,6 +39,12 @@ type Config struct {
 	// does not pretend to grade them.
 	SpeakingEvaluated bool
 
+	// AITTSModel and AITTSVoices drive server-side speech on the audio
+	// provider (Groq Orpheus by default), used when a browser cannot speak a
+	// listening script itself. Voices are handed out one per speaker.
+	AITTSModel  string
+	AITTSVoices []string
+
 	AIModels         AIModels
 	AIRequestTimeout time.Duration
 	// AIMaxTokens caps total completion tokens per request.
@@ -146,6 +152,8 @@ func Load() (*Config, error) {
 		AIAudioBaseURL:    strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", aiBaseURL), "/"),
 		AIAudioAPIKey:     aiAudioKey,
 		SpeakingEvaluated: boolOr("AI_SPEAKING_ENABLED", audioConfigured),
+		AITTSModel:        stringOr("AI_TTS_MODEL", "canopylabs/orpheus-v1-english"),
+		AITTSVoices:       listOr("AI_TTS_VOICES", []string{"diana", "daniel", "hannah", "austin", "autumn", "troy"}),
 
 		AIModels: AIModels{
 			Writing:  cleanAIModel(stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"), "gpt-5.6-luna"),

@@ -27,7 +27,7 @@ var (
 		plan_id, plan_started_at, plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at,
 		avatar_updated_at, cover_updated_at, COALESCE(google_sub, ''), onboarding_completed_at,
 		COALESCE(study_goal, ''), COALESCE(destination, ''), COALESCE(prior_attempt, ''), previous_score,
-		COALESCE(focus_skill, ''), daily_minutes`
+		COALESCE(focus_skill, ''), daily_minutes, target_module`
 )
 
 type Repository struct {
@@ -111,12 +111,15 @@ func (r *Repository) LinkGoogleSub(ctx context.Context, userID, sub string) (mod
 // UpdateProfile writes the onboarding and goal fields. Every argument is
 // optional; a nil pointer leaves that column alone.
 type UpdateProfileParams struct {
-	Name        *string
-	TargetExam  *models.ExamType
-	TargetScore *float64
-	ExamDate    *time.Time
-	NepalRegion *string
-	Timezone    *string
+	Name       *string
+	TargetExam *models.ExamType
+	// TargetModule is the IELTS module, models.ModuleAcademic or
+	// models.ModuleGeneralTraining.
+	TargetModule *string
+	TargetScore  *float64
+	ExamDate     *time.Time
+	NepalRegion  *string
+	Timezone     *string
 
 	StudyGoal     *string
 	Destination   *string
@@ -147,11 +150,13 @@ func (r *Repository) UpdateProfile(ctx context.Context, userID string, p UpdateP
 			previous_score = CASE WHEN $11 = 'first' THEN NULL ELSE COALESCE($12, previous_score) END,
 			focus_skill    = COALESCE($13, focus_skill),
 			daily_minutes  = COALESCE($14, daily_minutes),
+			target_module  = COALESCE($15, target_module),
 			updated_at   = now()
 		WHERE id = $1
 		RETURNING `+selectUserFields,
 		userID, p.Name, p.TargetExam, p.TargetScore, p.ExamDate, p.NepalRegion, p.Timezone, p.CompleteOnboarding,
-		p.StudyGoal, p.Destination, p.PriorAttempt, p.PreviousScore, p.FocusSkill, p.DailyMinutes)
+		p.StudyGoal, p.Destination, p.PriorAttempt, p.PreviousScore, p.FocusSkill, p.DailyMinutes,
+		p.TargetModule)
 
 	return r.scanOne(row, "update profile")
 }
@@ -200,6 +205,7 @@ func scanUser(row pgx.Row) (models.User, error) {
 		&u.CreatedAt, &u.AvatarUpdatedAt, &u.CoverUpdatedAt, &u.GoogleSub,
 		&u.OnboardingCompletedAt,
 		&u.StudyGoal, &u.Destination, &u.PriorAttempt, &u.PreviousScore, &u.FocusSkill, &u.DailyMinutes,
+		&u.TargetModule,
 	)
 	return u, err
 }

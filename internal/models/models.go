@@ -38,12 +38,15 @@ var AllSkills = []SkillType{SkillSpeaking, SkillWriting, SkillReading, SkillList
 
 // User represents a user account in the database.
 type User struct {
-	ID                   string
-	Email                string
-	GoogleSub            string
-	Name                 string
-	Role                 string
-	TargetExam           ExamType
+	ID         string
+	Email      string
+	GoogleSub  string
+	Name       string
+	Role       string
+	TargetExam ExamType
+	// TargetModule is the IELTS module the learner is preparing for:
+	// ModuleAcademic or ModuleGeneralTraining. Empty means Academic.
+	TargetModule         string
 	TargetScore          *float64
 	ExamDate             *time.Time
 	NepalRegion          string
@@ -107,6 +110,27 @@ func RoleForUser(u User) string {
 
 func (u User) IsAdmin() bool { return u.Role == RoleAdmin }
 
+// IELTS modules. Listening, Speaking and Writing Task 2 are the same paper in
+// both; Reading texts, Writing Task 1 and the Reading band table differ.
+const (
+	ModuleAcademic        = "academic"
+	ModuleGeneralTraining = "general_training"
+)
+
+// ValidIELTSModule reports whether a module name is one IELTS offers.
+func ValidIELTSModule(module string) bool {
+	return module == ModuleAcademic || module == ModuleGeneralTraining
+}
+
+// IELTSModule is the learner's IELTS module, Academic unless they chose
+// General Training.
+func (u User) IELTSModule() string {
+	if u.TargetModule == ModuleGeneralTraining {
+		return ModuleGeneralTraining
+	}
+	return ModuleAcademic
+}
+
 // HasActivePaidPlan reports whether the user is inside a live paid subscription.
 func (u User) HasActivePaidPlan() bool {
 	return u.PlanValidUntil != nil && u.PlanValidUntil.After(time.Now())
@@ -136,6 +160,7 @@ type UserProfile struct {
 	PaidPlanActive bool      `json:"paidPlanActive"`
 	DaysRemaining  int       `json:"daysRemaining"`
 	TargetExam     ExamType  `json:"targetExam"`
+	TargetModule   string    `json:"targetModule"`
 	TargetScore    *float64  `json:"targetScore"`
 	ExamDate       string    `json:"examDate,omitempty"`
 	NepalRegion    string    `json:"nepalRegion"`
@@ -180,6 +205,7 @@ func NewUserProfile(u User) UserProfile {
 		PaidPlanActive: u.HasActivePaidPlan(),
 		DaysRemaining:  u.DaysRemaining(),
 		TargetExam:     u.TargetExam,
+		TargetModule:   u.IELTSModule(),
 		TargetScore:    u.TargetScore,
 		NepalRegion:    u.NepalRegion,
 		XP:             u.XP,
@@ -223,6 +249,11 @@ type ScoreEstimate struct {
 	TargetGap   *float64  `json:"targetGap"`
 	Readiness   *int      `json:"readiness"` // percent of target reached
 	UpdatedAt   time.Time `json:"updatedAt"`
+	// SkillsCovered and SkillsRequired say how many skills the estimate rests
+	// on. An IELTS overall band needs all four; until then Value stays nil and
+	// these tell the learner what is missing. Zero for exams without the rule.
+	SkillsCovered  int `json:"skillsCovered,omitempty"`
+	SkillsRequired int `json:"skillsRequired,omitempty"`
 }
 
 type SubscriptionState struct {
@@ -383,6 +414,9 @@ type Blank struct {
 	ID            string   `json:"id"`
 	Options       []string `json:"options,omitempty"`
 	CorrectAnswer string   `json:"correctAnswer,omitempty"`
+	// AcceptedAnswers are other spellings the answer key allows for this gap,
+	// such as "10" for "ten". Like CorrectAnswer, never sent before submission.
+	AcceptedAnswers []string `json:"acceptedAnswers,omitempty"`
 }
 
 type Question struct {
@@ -407,10 +441,18 @@ type Question struct {
 	Tags             []string         `json:"tags"`
 	Points           int              `json:"points"`
 	SupportedExams   []ExamType       `json:"supportedExams,omitempty"`
-	CorrectAnswers   []string         `json:"-"`
-	ModelAnswer      string           `json:"-"`
-	Explanation      string           `json:"-"`
-	FigureData       string           `json:"-"`
+	// SelectCount is how many options an IELTS multiple-answer item asks for
+	// ("Choose TWO letters"). The prompt already says so; the field lets the
+	// answer control hold the learner to it, as the answer sheet does.
+	SelectCount int `json:"selectCount,omitempty"`
+	// ScriptOnRequest marks an IELTS listening item whose script is spoken by
+	// the browser. The script is the answer key, so it is not sent with the
+	// question; the browser fetches it when the learner presses play.
+	ScriptOnRequest bool     `json:"scriptOnRequest,omitempty"`
+	CorrectAnswers  []string `json:"-"`
+	ModelAnswer     string   `json:"-"`
+	Explanation     string   `json:"-"`
+	FigureData      string   `json:"-"`
 }
 
 // SupportsExam reports whether this question may be answered under an exam.
@@ -439,12 +481,45 @@ func (q Question) PublicQuestion() Question {
 	if safe.AudioURL != "" {
 		safe.AudioTranscript = ""
 	}
+	// An IELTS listening script holds every answer on the item, and IELTS
+	// plays a recording once, before anything is answered. It is served on
+	// request (at play time) rather than sitting in the question from the
+	// moment the page loads.
+	if q.isIELTSListening() && safe.AudioURL == "" && safe.AudioTranscript != "" {
+		safe.AudioTranscript = ""
+		safe.ScriptOnRequest = true
+	}
+	if q.isIELTSOnly() && len(q.Options) > 0 && len(q.CorrectAnswers) > 1 {
+		safe.SelectCount = len(q.CorrectAnswers)
+	}
 
 	safe.Blanks = make([]Blank, len(q.Blanks))
 	for i, b := range q.Blanks {
 		safe.Blanks[i] = Blank{ID: b.ID, Options: b.Options}
 	}
 	return safe
+}
+
+// isIELTSOnly reports whether only IELTS sets this question. Questions shared
+// with PTE keep PTE's rules, where the number of answers is not given away.
+func (q Question) isIELTSOnly() bool {
+	if len(q.SupportedExams) == 0 {
+		return q.Exam == ExamIELTS
+	}
+	return len(q.SupportedExams) == 1 && q.SupportedExams[0] == ExamIELTS
+}
+
+func (q Question) isIELTSListening() bool {
+	return q.Skill == SkillListening && q.isIELTSOnly()
+}
+
+// PlaybackScript is the text the browser speaks for an item with no recording.
+// Empty when the item has a recording or no script.
+func (q Question) PlaybackScript() string {
+	if q.AudioURL != "" {
+		return ""
+	}
+	return q.AudioTranscript
 }
 
 // ReviewQuestion is the question as shown after submission.
@@ -578,6 +653,14 @@ type ReadingMockSession struct {
 	SubmittedAt     *time.Time   `json:"submittedAt,omitempty"`
 	ReusedPassages  bool         `json:"reusedPassages"`
 	Sets            []ReadingSet `json:"sets,omitempty"`
+
+	// ExpiresAt is when the paper's time runs out, kept by the server.
+	// SecondsRemaining is the same thing measured on the server's clock when
+	// the session was read, so a browser with a wrong clock still counts down
+	// the right amount. DraftAnswers are the answers saved so far.
+	ExpiresAt        time.Time          `json:"expiresAt"`
+	SecondsRemaining int                `json:"secondsRemaining"`
+	DraftAnswers     []AnswerSubmission `json:"draftAnswers,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

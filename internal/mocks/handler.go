@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -68,7 +69,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		exam = user.TargetExam
 	}
 
-	list, err := h.repo.List(r.Context(), exam)
+	list, err := h.repo.List(r.Context(), exam, user.IELTSModule())
 	if err != nil {
 		httpx.Internal(w, h.log, "mocks.list", err)
 		return
@@ -162,7 +163,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	graded, err := gradeCanonical(bank, questionIDsOf(mock), req.Answers)
+	graded, err := gradeCanonicalFor(mock.Exam, bank, questionIDsOf(mock), req.Answers)
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Answers must match this mock's question list without duplicates.")
 		return
@@ -190,10 +191,12 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 
 	skillScores := make(map[models.SkillType]float64, len(graded.bySkill))
 	for skill, t := range graded.bySkill {
-		skillScores[skill] = scale.EstimateFromRawMarks(string(mock.Exam), string(skill), t.correct, t.total)
+		correct, total := t.raw(mock.Exam)
+		skillScores[skill] = scale.EstimateFromRawMarks(string(mock.Exam), string(skill), correct, total)
 	}
 
-	overall := scale.EstimateOverall(string(mock.Exam), skillScores, graded.correct, graded.total)
+	totalCorrect, totalQuestions := graded.raw(mock.Exam)
+	overall := scale.EstimateOverall(string(mock.Exam), skillScores, totalCorrect, totalQuestions)
 
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
@@ -209,8 +212,8 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		Exam:            mock.Exam,
 		UserScore:       overall,
 		SkillScores:     skillScores,
-		TotalCorrect:    graded.correct,
-		TotalQuestions:  graded.total,
+		TotalCorrect:    totalCorrect,
+		TotalQuestions:  totalQuestions,
 		DurationSeconds: req.DurationSeconds,
 		Answers:         req.Answers,
 	})
@@ -283,6 +286,30 @@ type tally struct {
 	max     float64
 	correct int
 	total   int
+	// marks and marksMax count numbered answers (see scoring.Result.Marks),
+	// which is what an IELTS raw score is made of.
+	marks    int
+	marksMax int
+}
+
+func (t *tally) add(graded scoring.Result) {
+	t.earned += graded.Score
+	t.max += graded.MaxScore
+	t.total++
+	if graded.IsCorrect {
+		t.correct++
+	}
+	t.marks += graded.Marks
+	t.marksMax += graded.MarksAvailable
+}
+
+// raw is the raw score an exam converts to a band: marks out of numbered
+// answers for IELTS, fully correct items out of items for everything else.
+func (t tally) raw(exam models.ExamType) (int, int) {
+	if exam == models.ExamIELTS {
+		return t.marks, t.marksMax
+	}
+	return t.correct, t.total
 }
 
 func (t tally) accuracy() float64 {
@@ -295,6 +322,12 @@ func (t tally) accuracy() float64 {
 var ErrInvalidAnswers = errors.New("answers do not match the canonical mock question list")
 
 func gradeCanonical(bank map[string]models.Question, canonicalIDs []string, answers []models.AnswerSubmission) (gradedMock, error) {
+	return gradeCanonicalFor("", bank, canonicalIDs, answers)
+}
+
+// gradeCanonicalFor grades under a named exam, so a question both exams set is
+// marked by the rules of the paper it appeared on.
+func gradeCanonicalFor(exam models.ExamType, bank map[string]models.Question, canonicalIDs []string, answers []models.AnswerSubmission) (gradedMock, error) {
 	result := gradedMock{bySkill: map[models.SkillType]tally{}}
 	canonical := make(map[string]bool, len(canonicalIDs))
 	submissions := make(map[string]models.AnswerSubmission, len(answers))
@@ -321,26 +354,36 @@ func gradeCanonical(bank map[string]models.Question, canonicalIDs []string, answ
 			result.ungraded++
 			continue
 		}
+		if answered(answer) {
+			result.answered++
+		}
+		if exam != "" {
+			answer.Exam = exam
+		}
 		graded, ok := scoring.Grade(question, answer)
 		if !ok {
 			return gradedMock{}, ErrInvalidAnswers
 		}
-		result.earned += graded.Score
-		result.max += graded.MaxScore
-		result.total++
-		if graded.IsCorrect {
-			result.correct++
-		}
+		result.add(graded)
+		result.correct, result.total = result.tally.correct, result.tally.total
 		skill := result.bySkill[question.Skill]
-		skill.earned += graded.Score
-		skill.max += graded.MaxScore
-		skill.total++
-		if graded.IsCorrect {
-			skill.correct++
-		}
+		skill.add(graded)
 		result.bySkill[question.Skill] = skill
 	}
 	return result, nil
+}
+
+// answered reports whether a submission carries any response at all.
+func answered(answer models.AnswerSubmission) bool {
+	if strings.TrimSpace(answer.TextResponse) != "" || len(answer.SelectedOptions) > 0 {
+		return true
+	}
+	for _, value := range answer.BlankResponses {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 type gradedMock struct {
@@ -348,6 +391,9 @@ type gradedMock struct {
 	correct  int
 	total    int
 	ungraded int
+	// answered counts items with any response at all. A paper with none was
+	// not attempted, which is not the same as a paper that scored zero.
+	answered int
 	bySkill  map[models.SkillType]tally
 }
 
@@ -374,20 +420,10 @@ func gradeAll(bank map[string]models.Question, answers []models.AnswerSubmission
 			continue
 		}
 
-		result.earned += graded.Score
-		result.max += graded.MaxScore
-		result.total++
-		if graded.IsCorrect {
-			result.correct++
-		}
-
+		result.add(graded)
+		result.correct, result.total = result.tally.correct, result.tally.total
 		skill := result.bySkill[question.Skill]
-		skill.earned += graded.Score
-		skill.max += graded.MaxScore
-		skill.total++
-		if graded.IsCorrect {
-			skill.correct++
-		}
+		skill.add(graded)
 		result.bySkill[question.Skill] = skill
 	}
 	return result
@@ -400,21 +436,36 @@ type GradedSet struct {
 	Ungraded int
 	Accuracy float64
 	BySkill  map[models.SkillType]float64
+	// Raw and RawMax are the score a band is read from: marks out of numbered
+	// answers under IELTS, correct items out of items otherwise.
+	Raw    int
+	RawMax int
+	// Answered counts items that received any response.
+	Answered int
 }
 
 // GradeAnswers grades a set of answers against a bank of questions.
 func GradeAnswers(bank map[string]models.Question, canonicalIDs []string, answers []models.AnswerSubmission) (GradedSet, error) {
-	graded, err := gradeCanonical(bank, canonicalIDs, answers)
+	return GradeAnswersFor("", bank, canonicalIDs, answers)
+}
+
+// GradeAnswersFor grades under a named exam; see gradeCanonicalFor.
+func GradeAnswersFor(exam models.ExamType, bank map[string]models.Question, canonicalIDs []string, answers []models.AnswerSubmission) (GradedSet, error) {
+	graded, err := gradeCanonicalFor(exam, bank, canonicalIDs, answers)
 	if err != nil {
 		return GradedSet{}, err
 	}
 
+	raw, rawMax := graded.raw(exam)
 	set := GradedSet{
 		Correct:  graded.correct,
 		Total:    graded.total,
 		Ungraded: graded.ungraded,
 		Accuracy: graded.accuracy(),
 		BySkill:  make(map[models.SkillType]float64, len(graded.bySkill)),
+		Raw:      raw,
+		RawMax:   rawMax,
+		Answered: graded.answered,
 	}
 	for skill, t := range graded.bySkill {
 		set.BySkill[skill] = t.accuracy()

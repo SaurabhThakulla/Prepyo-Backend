@@ -41,7 +41,7 @@ func TestMockResponsesPersistAndUnavailableMocksAreHidden(t *testing.T) {
 	if _, err = repo.ByID(ctx, unavailable); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unavailable mock exposed: %v", err)
 	}
-	list, err := repo.List(ctx, models.ExamIELTS)
+	list, err := repo.List(ctx, models.ExamIELTS, "")
 	if err != nil {
 		t.Fatal(err)
 	}

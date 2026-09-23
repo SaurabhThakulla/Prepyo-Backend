@@ -70,6 +70,10 @@ func (r *Repository) Plan(ctx context.Context, id string) (models.Plan, error) {
 	return p, nil
 }
 
+// FullMockID is the attempt row of an IELTS full mock, which is counted
+// against the allowance by its session rather than its attempt.
+const FullMockID = "mock-ielts-full"
+
 type Service struct {
 	repo          *Repository
 	notifications *notifications.Repository
@@ -98,20 +102,26 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 	// bonuses). For paid active plans, they are counted per calendar month.
 	// Generated mocks are single-section papers; they are paid for in
 	// sub-tests at start (SectionMockSubTests) and never touch this allowance.
+	// An IELTS full mock spends it when it starts (full_mock_sessions), so its
+	// attempt row is not counted a second time.
 	var subTestsUsed, mocksUsed int
 	if plan.ID == "free" {
 		err = db.QueryRow(ctx, `
 			SELECT `+subTestsToday+`,
 				(SELECT count(*) FROM mock_attempts ma
 				  JOIN mocks m ON ma.mock_id = m.id
-				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND NOT m.is_generated)`,
+				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND NOT m.is_generated AND m.id <> '`+FullMockID+`')
+				+ (SELECT count(*) FROM full_mock_sessions f WHERE f.user_id = $1)`,
 			user.ID, dayStart, dayEnd).Scan(&subTestsUsed, &mocksUsed)
 	} else {
 		err = db.QueryRow(ctx, `
 			SELECT `+subTestsToday+`,
 				(SELECT count(*) FROM mock_attempts ma
 				  JOIN mocks m ON ma.mock_id = m.id
-				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND NOT m.is_generated AND ma.completed_at >= date_trunc('month', now()))`,
+				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND NOT m.is_generated AND m.id <> '`+FullMockID+`'
+				    AND ma.completed_at >= date_trunc('month', now()))
+				+ (SELECT count(*) FROM full_mock_sessions f
+				    WHERE f.user_id = $1 AND f.created_at >= date_trunc('month', now()))`,
 			user.ID, dayStart, dayEnd).Scan(&subTestsUsed, &mocksUsed)
 	}
 
@@ -490,13 +500,15 @@ func (s *Service) ActivateQueuedPlan(ctx context.Context, pool *pgxpool.Pool, us
 		WHERE id = $1
 		RETURNING id, email, name, role, target_exam, target_score, exam_date, nepal_region,
 		          xp, streak_days, streak_last_active_date, timezone, plan_id, plan_started_at,
-		          plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at`,
+		          plan_valid_until, referral_code, bonus_mock_tests, bonus_pro_days, created_at,
+		          target_module`,
 		userID, planID, days, models.RoleForPlan(planID)).
 		Scan(&updated.ID, &updated.Email, &updated.Name, &updated.Role, &updated.TargetExam,
 			&updated.TargetScore, &updated.ExamDate, &updated.NepalRegion, &updated.XP,
 			&updated.StreakDays, &updated.StreakLastActiveDate, &updated.Timezone,
 			&updated.PlanID, &updated.PlanStartedAt, &updated.PlanValidUntil,
-			&updated.ReferralCode, &updated.BonusMockTests, &updated.BonusProDays, &updated.CreatedAt)
+			&updated.ReferralCode, &updated.BonusMockTests, &updated.BonusProDays, &updated.CreatedAt,
+			&updated.TargetModule)
 	if err != nil {
 		return models.User{}, fmt.Errorf("activate plan: %w", err)
 	}

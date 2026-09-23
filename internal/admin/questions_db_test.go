@@ -88,8 +88,17 @@ func TestAuthoredQuestionsAreStoredSoTheyGrade(t *testing.T) {
 				t.Fatalf("display or TTS script changed during storage: %+v", stored)
 			}
 			public := stored.PublicQuestion()
-			if public.ContextPassage != stored.ContextPassage || public.AudioTranscript != stored.AudioTranscript {
-				t.Fatal("learner response must preserve displayed text and the TTS script")
+			if public.ContextPassage != stored.ContextPassage {
+				t.Fatal("learner response must preserve displayed text")
+			}
+			// An IELTS listening script holds the answers, so it is served at
+			// play time rather than in the question; other items keep it.
+			if stored.Exam == models.ExamIELTS {
+				if public.AudioTranscript != "" || !public.ScriptOnRequest || stored.PlaybackScript() != q.audioTranscript {
+					t.Fatalf("IELTS script must be served on request: public %+v", public)
+				}
+			} else if public.AudioTranscript != stored.AudioTranscript {
+				t.Fatal("learner response must preserve the TTS script")
 			}
 			for _, blank := range public.Blanks {
 				if blank.CorrectAnswer != "" {

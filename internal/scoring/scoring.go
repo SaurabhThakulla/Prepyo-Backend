@@ -21,6 +21,13 @@ type Result struct {
 	UserDisplay        string
 	// ErrorTag groups mistakes in the mistake bank. Empty when correct.
 	ErrorTag string
+	// Marks and MarksAvailable count answer slots the way an IELTS paper does:
+	// one mark per numbered answer. A two-blank note completion is two marks, a
+	// "Choose TWO letters" item is two. Every other item is one mark, earned
+	// only when it is fully right. Raw IELTS scores are built from these, not
+	// from rows.
+	Marks          int
+	MarksAvailable int
 }
 
 // Deterministic reports whether a skill can be graded without a model.
@@ -30,6 +37,28 @@ func Deterministic(skill models.SkillType) bool {
 
 // Grade evaluates a submission against a question.
 func Grade(q models.Question, sub models.AnswerSubmission) (Result, bool) {
+	result, ok := grade(q, sub)
+	if ok && result.MarksAvailable == 0 {
+		result.MarksAvailable = 1
+		if result.IsCorrect {
+			result.Marks = 1
+		}
+	}
+	return result, ok
+}
+
+// ieltsMarking reports whether a submission is marked by IELTS rules: one mark
+// per correct answer and nothing taken away for a wrong one. The exam the
+// learner was working under decides; the question's own exam is the fallback
+// for callers that do not say.
+func ieltsMarking(q models.Question, sub models.AnswerSubmission) bool {
+	if sub.Exam != "" {
+		return sub.Exam == models.ExamIELTS
+	}
+	return q.Exam == models.ExamIELTS
+}
+
+func grade(q models.Question, sub models.AnswerSubmission) (Result, bool) {
 	switch {
 	case len(q.Blanks) > 0:
 		return gradeBlanks(q, sub), true
@@ -56,18 +85,35 @@ func gradeBlanks(q models.Question, sub models.AnswerSubmission) Result {
 	var correctParts, userParts []string
 
 	for _, blank := range q.Blanks {
-		given := normalise(sub.BlankResponses[blank.ID])
-		want := normalise(blank.CorrectAnswer)
-		if given != "" && given == want {
+		if blankAccepts(blank, sub.BlankResponses[blank.ID]) {
 			correct++
 		}
 		correctParts = append(correctParts, fmt.Sprintf("%s: %s", blank.ID, blank.CorrectAnswer))
 		userParts = append(userParts, fmt.Sprintf("%s: %s", blank.ID, orPlaceholder(sub.BlankResponses[blank.ID])))
 	}
 
-	return proportional(q, correct, len(q.Blanks),
+	result := proportional(q, correct, len(q.Blanks),
 		fmt.Sprintf("You filled %d of %d blanks correctly.", correct, len(q.Blanks)),
 		strings.Join(correctParts, ", "), strings.Join(userParts, ", "), "Vocabulary")
+	result.Marks, result.MarksAvailable = correct, len(q.Blanks)
+	return result
+}
+
+// blankAccepts compares one typed gap with its key and any accepted variants.
+// Answers are compared as words, so case, surrounding punctuation and spacing
+// never cost a mark ("Thursday." is Thursday), while a different or longer
+// answer still does: writing more words than the key is what IELTS marks wrong.
+func blankAccepts(blank models.Blank, given string) bool {
+	answer := phrase(given)
+	if answer == "" {
+		return false
+	}
+	for _, accepted := range append([]string{blank.CorrectAnswer}, blank.AcceptedAnswers...) {
+		if key := phrase(accepted); key != "" && key == answer {
+			return true
+		}
+	}
+	return false
 }
 
 // gradeReorder scores adjacent pairs for re-order tasks.
@@ -126,6 +172,8 @@ var shortAnswerTypes = map[string]bool{
 	"reading-sentence-completion": true,
 	"reading-summary-completion":  true,
 	"reading-short-answer":        true,
+	// Listening mock gaps: one numbered answer each, typed from what was heard.
+	"ielts-listening-completion": true,
 }
 
 // gradeShortAnswer marks a typed gap right when it matches any accepted spelling.
@@ -177,14 +225,35 @@ func gradeChoice(q models.Question, sub models.AnswerSubmission) Result {
 		}
 	}
 
+	required := len(q.CorrectAnswers)
+	correctDisplay := strings.Join(q.CorrectAnswers, ", ")
+	userDisplay := orPlaceholder(strings.Join(sub.SelectedOptions, ", "))
+	feedback := fmt.Sprintf("You selected %d of %d correct options.", hits, required)
+
+	if ieltsMarking(q, sub) {
+		// IELTS gives one mark per correct answer and takes nothing away for a
+		// wrong one. A "Choose TWO letters" item is two answer boxes, so a
+		// letter beyond the number asked for can only take the place of one
+		// that counts: each extra letter cancels one correct letter.
+		extra := hits + wrong - required
+		if extra < 0 {
+			extra = 0
+		}
+		marks := hits - extra
+		if marks < 0 {
+			marks = 0
+		}
+		result := proportional(q, marks, required, feedback, correctDisplay, userDisplay, "Comprehension")
+		result.Marks, result.MarksAvailable = marks, required
+		return result
+	}
+
 	net := hits - wrong
 	if net < 0 {
 		net = 0
 	}
 
-	return proportional(q, net, len(q.CorrectAnswers),
-		fmt.Sprintf("You selected %d of %d correct options.", hits, len(q.CorrectAnswers)),
-		strings.Join(q.CorrectAnswers, ", "), orPlaceholder(strings.Join(sub.SelectedOptions, ", ")), "Comprehension")
+	return proportional(q, net, required, feedback, correctDisplay, userDisplay, "Comprehension")
 }
 
 // gradeOrderedAnswers compares answers position by position.

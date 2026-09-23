@@ -40,6 +40,10 @@ type SkillBreakdown struct {
 
 // Estimate computes the learner's current standing for their target exam.
 func (s *Service) Estimate(ctx context.Context, db database.DB, user models.User) (models.ScoreEstimate, error) {
+	if user.TargetExam == models.ExamIELTS {
+		return s.ieltsEstimate(ctx, db, user)
+	}
+
 	version, err := s.exams.Current(ctx, user.TargetExam)
 	if err != nil {
 		return models.ScoreEstimate{}, err
@@ -158,6 +162,30 @@ func (s *Service) Skills(ctx context.Context, db database.DB, user models.User) 
 	available, completed, err := s.bankCoverage(ctx, db, user)
 	if err != nil {
 		return nil, err
+	}
+
+	if user.TargetExam == models.ExamIELTS {
+		bands, err := s.ieltsSkills(ctx, db, user)
+		if err != nil {
+			return nil, err
+		}
+		breakdown := make([]SkillBreakdown, 0, len(models.AllSkills))
+		for _, skill := range models.AllSkills {
+			row := SkillBreakdown{
+				Skill:     skill,
+				Status:    "no_data",
+				Available: available[skill],
+				Completed: completed[skill],
+			}
+			if band, ok := bands[skill]; ok && band.band != nil {
+				row.Attempts = band.attempts
+				row.Accuracy = int(math.Round(band.accuracy * 100))
+				row.Estimate = band.band
+				row.Status = statusFor(band.accuracy)
+			}
+			breakdown = append(breakdown, row)
+		}
+		return breakdown, nil
 	}
 
 	// Return all skills in stable order.

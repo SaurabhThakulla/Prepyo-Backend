@@ -25,23 +25,27 @@ func (s Scale) EstimateFromAccuracy(accuracy float64) float64 {
 	return clamp(raw, s.Min, s.Max)
 }
 
-// EstimateFromRawMarks converts a raw mark count into an official exam score
-// following industry standards:
-// - IELTS Academic Reading (40 questions): Official 40-mark band conversion table
-// - IELTS Academic Listening (40 questions): Official 40-mark band conversion table
-// - IELTS partial / generic tasks: Linear accuracy rounded with the official IELTS rounding rule
-// - PTE Academic: Official 10-90 scaled score with integer rounding
+// EstimateFromRawMarks converts a raw mark count into a practice estimate on
+// the exam's scale:
+//   - IELTS Reading and Listening use the indicative raw-to-band tables below.
+//     A paper that is not exactly 40 marks is scaled to 40 first, so 20/41 and
+//     20/40 land on the same band instead of a whole band apart.
+//   - Any other IELTS score is a linear estimate rounded with the IELTS rule.
+//   - PTE Academic is a linear 10-90 estimate with integer rounding.
 func (s Scale) EstimateFromRawMarks(exam, skill string, correct, total int) float64 {
+	return s.EstimateForModule(exam, "", skill, correct, total)
+}
+
+// EstimateForModule is EstimateFromRawMarks with the IELTS module named, since
+// General Training Reading converts raw marks to bands on its own table.
+func (s Scale) EstimateForModule(exam, module, skill string, correct, total int) float64 {
 	if total <= 0 {
 		return s.Min
 	}
 
 	if exam == "IELTS" {
-		if skill == "reading" && total == 40 {
-			return IELTSReadingBand(correct)
-		}
-		if skill == "listening" && total == 40 {
-			return IELTSListeningBand(correct)
+		if skill == "reading" || skill == "listening" {
+			return IELTSBandFromRawMarks(module, skill, correct, total)
 		}
 		accuracy := float64(correct) / float64(total)
 		return RoundIELTSBand(s.Min + accuracy*(s.Max-s.Min))
@@ -54,11 +58,40 @@ func (s Scale) EstimateFromRawMarks(exam, skill string, correct, total int) floa
 	return s.EstimateFromAccuracy(float64(correct) / float64(total))
 }
 
-// EstimateOverall computes the overall mock exam score according to official exam rules:
-// - IELTS: Arithmetic mean of communicative skill bands, rounded using official IELTS
-//   rules (.25 -> .5, .75 -> next whole band).
-// - PTE Academic: Arithmetic mean of communicative skill scores, rounded to the nearest
-//   integer on the 10-90 scale.
+// IELTS modules. Listening, Writing and Speaking are the same paper in both;
+// Reading texts and Writing Task 1 differ, and so does the Reading band table.
+const (
+	ModuleAcademic        = "academic"
+	ModuleGeneralTraining = "general_training"
+)
+
+// IELTSBandFromRawMarks maps marks on a Reading or Listening paper of any size
+// onto a band by scaling to the 40-mark paper the tables describe.
+func IELTSBandFromRawMarks(module, skill string, correct, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	scaled := correct
+	if total != 40 {
+		scaled = int(math.Round(float64(correct) * 40 / float64(total)))
+	}
+	switch {
+	case skill == "listening":
+		return IELTSListeningBand(scaled)
+	case module == ModuleGeneralTraining:
+		return IELTSGeneralTrainingReadingBand(scaled)
+	default:
+		return IELTSReadingBand(scaled)
+	}
+}
+
+// EstimateOverall computes the overall mock exam score:
+//   - IELTS: the mean of the section bands rounded with the official rule
+//     (.25 -> .5, .75 -> next whole band). Only a mean of all four sections is an
+//     IELTS overall band; with fewer it is a mean of the sections sat, and callers
+//     must label it that way.
+//   - PTE Academic: Arithmetic mean of communicative skill scores, rounded to the nearest
+//     integer on the 10-90 scale.
 func (s Scale) EstimateOverall(exam string, skillScores map[models.SkillType]float64, totalCorrect, totalQuestions int) float64 {
 	if len(skillScores) == 0 {
 		return s.EstimateFromRawMarks(exam, "", totalCorrect, totalQuestions)
@@ -182,14 +215,17 @@ func IELTSToPTEConcordance(ieltsBand float64) float64 {
 	}
 }
 
-
 // ---------------------------------------------------------------------------
-// IELTS Official Raw-to-Band Conversion Tables
+// IELTS indicative raw-to-band tables
 // ---------------------------------------------------------------------------
 //
-// These tables are based on widely published IELTS Academic score conversion
-// charts. Each entry maps a minimum raw mark to the corresponding band score.
-// The lookup scans from the highest threshold downward.
+// ielts.org publishes anchor points only (Listening 16/23/30/35 and Academic
+// Reading 15/23/30/35 for bands 5/6/7/8; General Training Reading 15/23/30/35
+// for bands 4/5/6/7) and says the exact marks "will vary slightly from test
+// version to test version". The rows between and beyond the anchors follow
+// widely used practice tables. These are practice estimates, not official
+// conversions. Each entry maps a minimum raw mark to a band; the lookup scans
+// from the highest threshold downward.
 
 // ieltsReadingTable maps minimum raw marks (out of 40) to IELTS Academic
 // Reading band scores.
@@ -218,6 +254,41 @@ var ieltsReadingTable = []struct {
 func IELTSReadingBand(correct int) float64 {
 	correct = int(clamp(float64(correct), 0, 40))
 	for _, entry := range ieltsReadingTable {
+		if correct >= entry.minRaw {
+			return entry.band
+		}
+	}
+	return 2.0
+}
+
+// ieltsGeneralTrainingReadingTable is the General Training Reading table. It
+// sits about a band below Academic for the same raw mark, because General
+// Training texts are easier. Anchors: 15->4, 23->5, 30->6, 35->7.
+var ieltsGeneralTrainingReadingTable = []struct {
+	minRaw int
+	band   float64
+}{
+	{40, 9.0},
+	{39, 8.5},
+	{37, 8.0},
+	{36, 7.5},
+	{34, 7.0},
+	{32, 6.5},
+	{30, 6.0},
+	{27, 5.5},
+	{23, 5.0},
+	{19, 4.5},
+	{15, 4.0},
+	{12, 3.5},
+	{9, 3.0},
+	{6, 2.5},
+}
+
+// IELTSGeneralTrainingReadingBand returns the General Training Reading band for
+// a raw mark out of 40.
+func IELTSGeneralTrainingReadingBand(correct int) float64 {
+	correct = int(clamp(float64(correct), 0, 40))
+	for _, entry := range ieltsGeneralTrainingReadingTable {
 		if correct >= entry.minRaw {
 			return entry.band
 		}
@@ -276,4 +347,3 @@ func Confidence(attempts int) string {
 func clamp(v, lo, hi float64) float64 {
 	return math.Min(math.Max(v, lo), hi)
 }
-

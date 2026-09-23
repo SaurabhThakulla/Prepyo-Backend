@@ -19,8 +19,10 @@ import (
 	"github.com/prepyo/backend/internal/billing"
 	"github.com/prepyo/backend/internal/evaluations"
 	"github.com/prepyo/backend/internal/exams"
+	"github.com/prepyo/backend/internal/fullmock"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/leaderboards"
+	"github.com/prepyo/backend/internal/listeningmock"
 	"github.com/prepyo/backend/internal/mistakes"
 	"github.com/prepyo/backend/internal/mocks"
 	"github.com/prepyo/backend/internal/notifications"
@@ -30,8 +32,11 @@ import (
 	"github.com/prepyo/backend/internal/reading"
 	"github.com/prepyo/backend/internal/referrals"
 	"github.com/prepyo/backend/internal/report"
+	"github.com/prepyo/backend/internal/speakingmock"
+	"github.com/prepyo/backend/internal/speech"
 	"github.com/prepyo/backend/internal/users"
 	"github.com/prepyo/backend/internal/web"
+	"github.com/prepyo/backend/internal/writingmock"
 	"github.com/prepyo/backend/pkg/config"
 	"github.com/prepyo/backend/pkg/httpx"
 )
@@ -59,24 +64,29 @@ type app struct {
 	authService *auth.Service
 	userRepo    *users.Repository
 
-	authHandler         *auth.Handler
-	userHandler         *users.Handler
-	examHandler         *exams.Handler
-	questionHandler     *questions.Handler
-	readingHandler      *reading.Handler
-	practiceHandler     *practice.Handler
-	mockHandler         *mocks.Handler
-	mistakeHandler      *mistakes.Handler
-	evaluationHandler   *evaluations.Handler
-	aiHandler           *ai.Handler
-	progressHandler     *progress.Handler
-	gamificationHandler *gamification.Handler
-	leaderboardHandler  *leaderboards.Handler
-	notificationHandler *notifications.Handler
-	billingHandler      *billing.Handler
-	referralHandler     *referrals.Handler
-	reportHandler       *report.Handler
-	adminHandler        *admin.Handler
+	authHandler          *auth.Handler
+	userHandler          *users.Handler
+	examHandler          *exams.Handler
+	questionHandler      *questions.Handler
+	readingHandler       *reading.Handler
+	practiceHandler      *practice.Handler
+	mockHandler          *mocks.Handler
+	mistakeHandler       *mistakes.Handler
+	evaluationHandler    *evaluations.Handler
+	writingMockHandler   *writingmock.Handler
+	speechHandler        *speech.Handler
+	listeningMockHandler *listeningmock.Handler
+	speakingMockHandler  *speakingmock.Handler
+	fullMockHandler      *fullmock.Handler
+	aiHandler            *ai.Handler
+	progressHandler      *progress.Handler
+	gamificationHandler  *gamification.Handler
+	leaderboardHandler   *leaderboards.Handler
+	notificationHandler  *notifications.Handler
+	billingHandler       *billing.Handler
+	referralHandler      *referrals.Handler
+	reportHandler        *report.Handler
+	adminHandler         *admin.Handler
 }
 
 func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
@@ -104,6 +114,12 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	gateway := ai.NewGateway(cfg, log)
 	evaluationService := evaluations.NewService(pool, evaluationRepo, questionRepo, examRepo, billingService, gateway, xpService)
 	readingService := reading.NewService(pool, readingRepo, questionRepo, mockRepo, examRepo, xpService, billingService, mistakeRepo)
+	writingMockService := writingmock.NewService(pool, questionRepo, mockRepo, billingService, xpService, evaluationService)
+	speechService := speech.NewService(pool, gateway, ai.MaxSpeechChars)
+	listeningMockService := listeningmock.NewService(pool, questionRepo, mockRepo, billingService, xpService)
+	speakingMockService := speakingmock.NewService(pool, mockRepo, billingService, xpService, gateway, evaluationService)
+	fullMockService := fullmock.NewService(pool, mockRepo, billingService,
+		fullmock.Starters(listeningMockService, readingService, writingMockService, speakingMockService))
 
 	return &app{
 		cfg:         cfg,
@@ -111,25 +127,30 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		log:         log,
 		authService: authService,
 
-		userRepo:            userRepo,
-		authHandler:         auth.NewHandler(authService, cfg.SecureCookies, cfg.SessionTTL),
-		userHandler:         users.NewHandler(pool, userRepo, progressService, billingService, log),
-		examHandler:         exams.NewHandler(examRepo, log),
-		questionHandler:     questions.NewHandler(questionRepo, log),
-		readingHandler:      reading.NewHandler(readingService, readingRepo, log),
-		practiceHandler:     practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, examRepo, xpService, billingService, speakingScorable(gateway), log),
-		mockHandler:         mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, mistakeRepo, log),
-		mistakeHandler:      mistakes.NewHandler(pool, mistakeRepo, xpService, log),
-		evaluationHandler:   evaluations.NewHandler(evaluationService, evaluationRepo, log),
-		aiHandler:           ai.NewHandler(gateway, pool, log),
-		progressHandler:     progress.NewHandler(pool, progressService, log),
-		gamificationHandler: gamification.NewHandler(pool, xpService, log),
-		leaderboardHandler:  leaderboards.NewHandler(leaderboardRepo, log),
-		notificationHandler: notifications.NewHandler(notificationRepo, log),
-		billingHandler:      billing.NewHandler(pool, planRepo, billingService, log),
-		referralHandler:     referrals.NewHandler(referralService, log),
-		reportHandler:       report.NewHandler(pool, log),
-		adminHandler:        admin.NewHandler(pool, log),
+		userRepo:             userRepo,
+		authHandler:          auth.NewHandler(authService, cfg.SecureCookies, cfg.SessionTTL),
+		userHandler:          users.NewHandler(pool, userRepo, progressService, billingService, log),
+		examHandler:          exams.NewHandler(examRepo, log),
+		questionHandler:      questions.NewHandler(questionRepo, log).WithSpeech(speechService),
+		readingHandler:       reading.NewHandler(readingService, readingRepo, log),
+		practiceHandler:      practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, examRepo, xpService, billingService, speakingScorable(gateway), log),
+		mockHandler:          mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, mistakeRepo, log),
+		mistakeHandler:       mistakes.NewHandler(pool, mistakeRepo, xpService, log),
+		evaluationHandler:    evaluations.NewHandler(evaluationService, evaluationRepo, log),
+		writingMockHandler:   writingmock.NewHandler(writingMockService, log),
+		speechHandler:        speech.NewHandler(speechService, log),
+		listeningMockHandler: listeningmock.NewHandler(listeningMockService, speechService, log),
+		speakingMockHandler:  speakingmock.NewHandler(speakingMockService, speechService, log),
+		fullMockHandler:      fullmock.NewHandler(fullMockService, log),
+		aiHandler:            ai.NewHandler(gateway, pool, log),
+		progressHandler:      progress.NewHandler(pool, progressService, log),
+		gamificationHandler:  gamification.NewHandler(pool, xpService, log),
+		leaderboardHandler:   leaderboards.NewHandler(leaderboardRepo, log),
+		notificationHandler:  notifications.NewHandler(notificationRepo, log),
+		billingHandler:       billing.NewHandler(pool, planRepo, billingService, log),
+		referralHandler:      referrals.NewHandler(referralService, log),
+		reportHandler:        report.NewHandler(pool, log),
+		adminHandler:         admin.NewHandler(pool, log),
 	}
 }
 
@@ -221,6 +242,16 @@ func (a *app) router() http.Handler {
 			// deadline rather than the one every other route gets.
 			private.With(rateLimitByDevice(20, time.Minute)).
 				Mount("/evaluations", a.evaluationHandler.Routes())
+			// Submitting rates two tasks, so it keeps the longer deadline too.
+			// Draft saves arrive every few seconds while the learner writes,
+			// which the ordinary per-device limit already allows.
+			private.Mount("/writing/mocks", a.writingMockHandler.Routes())
+			// Spoken clips are made on first play, which waits on the provider.
+			private.Mount("/speech", a.speechHandler.Routes())
+			private.Mount("/listening/mocks", a.listeningMockHandler.Routes())
+			// Answers upload a recording and wait on transcription; submit waits on rating.
+			private.Mount("/speaking/mocks", a.speakingMockHandler.Routes())
+			private.Mount("/full-mocks", a.fullMockHandler.Routes())
 			private.With(rateLimitByDevice(20, time.Minute)).
 				Mount("/ai", a.aiHandler.Routes())
 		})

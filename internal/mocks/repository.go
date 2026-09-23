@@ -27,13 +27,21 @@ func NewRepository(db database.DB) *Repository {
 }
 
 // List returns blueprints with their sections.
-func (r *Repository) List(ctx context.Context, exam models.ExamType) ([]models.Mock, error) {
+func (r *Repository) List(ctx context.Context, exam models.ExamType, module string) ([]models.Mock, error) {
+	if module == "" {
+		module = models.ModuleAcademic
+	}
+	// A generated IELTS paper belongs to one module; the other module's paper
+	// is not offered, because it would be dealt from the wrong kind of text.
 	rows, err := r.db.Query(ctx, `
 		SELECT id, exam_version_id, exam, title, description, total_duration_minutes,
 		       is_diagnostic, is_generated
 		FROM mocks
 		WHERE is_available AND ($1 = '' OR exam = $1)
-		ORDER BY is_diagnostic DESC, id`, exam)
+		  AND NOT EXISTS (
+			  SELECT 1 FROM reading_mock_blueprints b
+			   WHERE b.mock_id = mocks.id AND b.exam = 'IELTS' AND b.module <> $2)
+		ORDER BY is_diagnostic DESC, id`, exam, module)
 	if err != nil {
 		return nil, fmt.Errorf("list mocks: %w", err)
 	}

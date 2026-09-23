@@ -21,8 +21,12 @@ const (
 	CodeAIUnavailable  = "ai_unavailable"
 	CodeInternal       = "internal_error"
 	CodeTooManyRequest = "too_many_requests"
-	CodeNotConfigured = "not_configured"
-	CodeSendFailed    = "send_failed"
+	CodeNotConfigured  = "not_configured"
+	CodeSendFailed     = "send_failed"
+	// CodeNotAttempted means a paper was submitted with nothing answered.
+	CodeNotAttempted = "not_attempted"
+	// CodePaperExpired means a paper's time ran out and it was closed.
+	CodePaperExpired = "paper_expired"
 )
 
 const maxBodyBytes = 1 << 20 // 1 MiB
