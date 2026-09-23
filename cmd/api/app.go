@@ -162,21 +162,40 @@ func (a *app) router() http.Handler {
 	r.Get("/health", a.health)
 
 	r.Route("/api/v1", func(v1 chi.Router) {
+		// Rate limits count per device (see deviceKey), and a browser needs an
+		// id before it has signed in.
+		v1.Use(deviceCookie(a.cfg.SecureCookies))
+
 		// Public.
 		v1.Group(func(public chi.Router) {
 			public.Use(middleware.Timeout(requestTimeout))
 
-			public.With(rateLimit(10, time.Minute)).
+			// Nobody is signed in yet, so the device is the device cookie. That
+			// cookie can be thrown away, so a per-IP ceiling sits underneath,
+			// sized so a whole classroom signing in on one Wi-Fi never meets
+			// it. Guessing is stopped elsewhere: admin login locks per email,
+			// and Google verifies its own sign-ins.
+			public.With(rateLimit(600, time.Minute), rateLimitByDevice(60, time.Minute)).
 				Mount("/auth", a.authHandler.Routes())
 			public.Mount("/exams", a.examHandler.Routes())
-			public.Mount("/subscriptions", a.billingHandler.Routes(a.authService.RequireUser))
-			public.Mount("/referrals", a.referralHandler.Routes(a.authService.RequireUser))
+
+			// Plans are public; everything else here needs a session, and is
+			// limited per device once the session is known.
+			signedIn := func(next http.Handler) http.Handler {
+				return a.authService.RequireUser(rateLimitByDevice(60, time.Minute)(next))
+			}
+			public.Mount("/subscriptions", a.billingHandler.Routes(signedIn))
+			public.Mount("/referrals", a.referralHandler.Routes(signedIn))
 		})
 
 		// Signed in.
 		v1.Group(func(private chi.Router) {
+			// The per-IP ceiling is a backstop against one address running many
+			// accounts; it is high enough that a shared network never meets it
+			// through normal use. The real limit is per device.
+			private.Use(rateLimit(600, time.Minute))
 			private.Use(a.authService.RequireUser)
-			private.Use(rateLimit(120, time.Minute))
+			private.Use(rateLimitByDevice(60, time.Minute))
 
 			private.Group(func(quick chi.Router) {
 				quick.Use(middleware.Timeout(requestTimeout))
@@ -195,14 +214,14 @@ func (a *app) router() http.Handler {
 
 				// Only raising a report or replying is throttled; reading your
 				// own conversation is not.
-				quick.Mount("/report", a.reportHandler.Routes(rateLimit(5, 10*time.Minute)))
+				quick.Mount("/report", a.reportHandler.Routes(rateLimitByDevice(5, 10*time.Minute)))
 			})
 
 			// These wait on a provider call, so they keep the router's longer
 			// deadline rather than the one every other route gets.
-			private.With(rateLimit(20, time.Minute)).
+			private.With(rateLimitByDevice(20, time.Minute)).
 				Mount("/evaluations", a.evaluationHandler.Routes())
-			private.With(rateLimit(20, time.Minute)).
+			private.With(rateLimitByDevice(20, time.Minute)).
 				Mount("/ai", a.aiHandler.Routes())
 		})
 
@@ -243,7 +262,8 @@ func apiCORSOptions(origins []string) cors.Options {
 	}
 }
 
-// rateLimit throttles requests by client IP.
+// rateLimit throttles requests by client IP. Use it only as a generous
+// ceiling; the real limits are per device (rateLimitByDevice).
 func rateLimit(requests int, window time.Duration) func(http.Handler) http.Handler {
 	return httprate.LimitBy(requests, window, clientIPKey,
 		httprate.WithLimitHandler(httpx.RateLimited))

@@ -9,6 +9,10 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+
+	"github.com/prepyo/backend/internal/auth"
+	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/reqctx"
 )
 
 func TestRateLimitIgnoresSpoofedForwardingHeaders(t *testing.T) {
@@ -94,5 +98,77 @@ func TestSecurityHeaders(t *testing.T) {
 	securityHeaders(true)(ok).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Header().Get("Strict-Transport-Security") == "" {
 		t.Error("HSTS missing when served over HTTPS")
+	}
+}
+
+// Learners behind one address (a classroom's Wi-Fi, a carrier's shared IP)
+// each get their own allowance: one device using its limit up blocks nobody
+// else. Signed in, the device is the session; signed out, the device cookie.
+func TestRateLimitIsPerDevice(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	handler := trustedClientIP(nil)(deviceCookie(false)(rateLimitByDevice(2, time.Minute)(ok)))
+
+	send := func(session, device string) int {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "203.0.113.7:1234"
+		if session != "" {
+			req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: session})
+			req = req.WithContext(reqctx.WithUser(req.Context(), models.User{ID: "learner-" + session}))
+		}
+		if device != "" {
+			req.AddCookie(&http.Cookie{Name: deviceCookieName, Value: device})
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Signed in: one session runs out, a classmate's session on the same IP does not.
+	send("busy-session", "")
+	send("busy-session", "")
+	if code := send("busy-session", ""); code != http.StatusTooManyRequests {
+		t.Fatalf("busy device over its limit = %d, want 429", code)
+	}
+	if code := send("classmate-session", ""); code != http.StatusNoContent {
+		t.Fatalf("classmate on the same IP was blocked: %d", code)
+	}
+
+	// Signed out: each browser's device cookie is its own bucket.
+	phone := newDeviceID()
+	laptop := newDeviceID()
+	send("", phone)
+	send("", phone)
+	if code := send("", phone); code != http.StatusTooManyRequests {
+		t.Fatalf("signed-out device over its limit = %d, want 429", code)
+	}
+	if code := send("", laptop); code != http.StatusNoContent {
+		t.Fatalf("another signed-out device on the same IP was blocked: %d", code)
+	}
+}
+
+// A browser without a device id is given one, and a malformed id is replaced
+// rather than trusted as a bucket of its own.
+func TestDeviceCookieIsIssued(t *testing.T) {
+	handler := deviceCookie(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+
+	for _, existing := range []string{"", "not a real id"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		if existing != "" {
+			req.AddCookie(&http.Cookie{Name: deviceCookieName, Value: existing})
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		cookies := rec.Result().Cookies()
+		if len(cookies) != 1 || !deviceIDPattern.MatchString(cookies[0].Value) || !cookies[0].HttpOnly || !cookies[0].Secure {
+			t.Fatalf("existing=%q: got cookies %+v, want one fresh HttpOnly, Secure device id", existing, cookies)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: deviceCookieName, Value: newDeviceID()})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("a valid device id was replaced")
 	}
 }
