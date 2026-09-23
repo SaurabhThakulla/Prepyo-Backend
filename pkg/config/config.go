@@ -23,7 +23,6 @@ type Config struct {
 
 	DatabaseURL string
 	AutoMigrate bool
-	RedisURL    string
 
 	SessionTTL time.Duration
 	// SecureCookies must be true anywhere the app is served over HTTPS.
@@ -123,7 +122,6 @@ func Load() (*Config, error) {
 		AllowedOrigins:    listOr("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
 		TrustedProxyCIDRs: listOr("TRUSTED_PROXY_CIDRS", nil),
 		WebAppURL:         stringOr("WEB_APP_URL", "http://localhost:3000"),
-		RedisURL:          os.Getenv("REDIS_URL"),
 
 		AIBaseURL: aiBaseURL,
 		AIAPIKey:  aiKey,

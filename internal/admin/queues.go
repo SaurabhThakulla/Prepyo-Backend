@@ -203,11 +203,10 @@ func (h *Handler) payments(w http.ResponseWriter, r *http.Request) {
 // a payment id.
 func (h *Handler) paymentProof(w http.ResponseWriter, r *http.Request) {
 	var image []byte
-	var mime string
 
 	err := h.db.QueryRow(r.Context(),
-		`SELECT proof_image, COALESCE(proof_image_type, 'image/jpeg')
-		 FROM subscription_payments WHERE id = $1`, chi.URLParam(r, "id")).Scan(&image, &mime)
+		`SELECT proof_image FROM subscription_payments WHERE id = $1`,
+		chi.URLParam(r, "id")).Scan(&image)
 	if errors.Is(err, pgx.ErrNoRows) || len(image) == 0 {
 		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "No proof was attached to that payment.")
 		return
@@ -217,7 +216,13 @@ func (h *Handler) paymentProof(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", mime)
+	// Rows stored before uploads were sniffed carry whatever type the learner's
+	// request claimed, so the bytes decide here too. nosniff and a sandbox mean
+	// that even such a row, opened directly in a tab, cannot run script as the
+	// admin.
+	w.Header().Set("Content-Type", http.DetectContentType(image))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(image)

@@ -257,6 +257,14 @@ func (s *Service) SignInWithGoogle(ctx context.Context, idToken, referralCode st
 
 	user, err = s.users.ByEmail(ctx, identity.Email)
 	if err == nil {
+		// Linking by email would let whoever controls an admin's mailbox mint a
+		// Google account for it and walk in past the password and its lockout.
+		// Admins who sign in with Google were linked before they were promoted,
+		// so they match on the subject above and never reach this.
+		if user.IsAdmin() {
+			s.log.Warn("google sign-in refused: would link to an admin account", "email", identity.Email)
+			return models.User{}, "", ErrEmailTaken
+		}
 		linked, err := s.users.LinkGoogleSub(ctx, user.ID, identity.Subject)
 		if err != nil {
 			return models.User{}, "", err

@@ -50,3 +50,28 @@ func healthPayload() map[string]any {
 		"version": "2026-09-15",
 	}
 }
+
+// securityHeaders sets the browser protections every response should carry.
+//
+// A page-wide script CSP is left out on purpose: Google sign-in loads its own
+// scripts and frames, and a policy that blocks them locks everyone out. What is
+// here costs nothing and closes the cheap attacks: framing the app to trick a
+// signed-in learner into clicking (clickjacking), MIME sniffing an upload into
+// something runnable, and leaking full URLs to other sites.
+func securityHeaders(hsts bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+			// The recorder needs the microphone; nothing needs the camera or location.
+			h.Set("Permissions-Policy", "camera=(), geolocation=(), microphone=(self)")
+			if hsts {
+				h.Set("Strict-Transport-Security", "max-age=31536000")
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

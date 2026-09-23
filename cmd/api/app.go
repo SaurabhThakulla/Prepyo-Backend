@@ -121,7 +121,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		mockHandler:         mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, mistakeRepo, log),
 		mistakeHandler:      mistakes.NewHandler(pool, mistakeRepo, xpService, log),
 		evaluationHandler:   evaluations.NewHandler(evaluationService, evaluationRepo, log),
-		aiHandler:           ai.NewHandler(gateway, log),
+		aiHandler:           ai.NewHandler(gateway, pool, log),
 		progressHandler:     progress.NewHandler(pool, progressService, log),
 		gamificationHandler: gamification.NewHandler(pool, xpService, log),
 		leaderboardHandler:  leaderboards.NewHandler(leaderboardRepo, log),
@@ -144,6 +144,9 @@ func (a *app) router() http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
+	// HSTS only where cookies are already HTTPS-only, so a plain-HTTP dev
+	// server never tells a browser to refuse it.
+	r.Use(securityHeaders(a.cfg.SecureCookies))
 	r.Use(trustedClientIP(a.cfg.TrustedProxyCIDRs))
 	r.Use(a.requestLogger)
 	r.Use(middleware.Recoverer)

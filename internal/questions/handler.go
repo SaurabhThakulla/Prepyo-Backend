@@ -44,6 +44,10 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(asset.Data)))
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Question images may be SVG, which can carry script. An <img> never runs
+	// it, but the same URL opened directly would, on our origin; the sandbox
+	// stops that without affecting how the image or audio is embedded.
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(asset.Data)
 }

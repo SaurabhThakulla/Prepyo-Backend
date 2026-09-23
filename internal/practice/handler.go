@@ -162,6 +162,17 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One started task can be submitted again (the mistake bank's "Try again"
+	// relies on it), but only the first submission of the day is new work.
+	// Counting the rest let a learner complete paid-out missions by sending the
+	// same answer over and over.
+	resubmitted, err := h.repo.AttemptedBetween(ctx, tx, user.ID, question.ID,
+		gamification.LocalDayStart(user), gamification.LocalDayEnd(user))
+	if err != nil {
+		httpx.Internal(w, h.log, "practice.submit.earlier", err)
+		return
+	}
+
 	attempt, err := h.repo.Save(ctx, tx, SaveParams{
 		UserID:             user.ID,
 		QuestionID:         question.ID,
@@ -216,10 +227,13 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	missions, err := h.xp.RecordActivity(ctx, tx, user, question.Skill)
-	if err != nil {
-		httpx.Internal(w, h.log, "practice.submit.missions", err)
-		return
+	missions := []models.DailyMission{}
+	if !resubmitted {
+		missions, err = h.xp.RecordActivity(ctx, tx, user, question.Skill)
+		if err != nil {
+			httpx.Internal(w, h.log, "practice.submit.missions", err)
+			return
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

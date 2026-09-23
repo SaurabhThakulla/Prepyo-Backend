@@ -427,6 +427,12 @@ func (q Question) PublicQuestion() Question {
 	safe.ModelAnswer = ""
 	safe.Explanation = ""
 	safe.FigureData = ""
+	// With a recording to play, the transcript is only an answer key: for
+	// Write from Dictation it is the answer word for word. It is kept only when
+	// there is no file, because the browser then reads it aloud instead.
+	if safe.AudioURL != "" {
+		safe.AudioTranscript = ""
+	}
 
 	safe.Blanks = make([]Blank, len(q.Blanks))
 	for i, b := range q.Blanks {

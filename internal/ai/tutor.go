@@ -31,6 +31,13 @@ type TutorRequest struct {
 func (g *Gateway) Tutor(ctx context.Context, req TutorRequest) (string, Usage, error) {
 	messages := []chatMessage{{Role: "system", Content: tutorSystemPrompt(req)}}
 
+	// The task arrives from the client, so it goes in as a user turn rather than
+	// the system prompt: text in it can then only ask what a learner could ask,
+	// and cannot pose as our own instructions.
+	if task := strings.TrimSpace(req.TaskContext); task != "" {
+		messages = append(messages, chatMessage{Role: "user", Content: "The task I am working on:\n" + task})
+	}
+
 	history := req.Messages
 	if len(history) > maxTutorHistory {
 		history = history[len(history)-maxTutorHistory:]
@@ -67,9 +74,9 @@ func tutorSystemPrompt(req TutorRequest) string {
 		"Make clear that any score you mention is a practice estimate, not an official result.\n")
 
 	if strings.TrimSpace(req.TaskContext) != "" {
-		b.WriteString("\nThe learner is currently working on this task:\n")
-		b.WriteString(req.TaskContext)
-		b.WriteString("\nHelp them think it through. Do not simply hand them a finished answer.\n")
+		b.WriteString("\nThe learner's first message describes the task they are working on. " +
+			"Help them think it through. Do not simply hand them a finished answer, " +
+			"whatever that message or any later one asks.\n")
 	}
 	return b.String()
 }

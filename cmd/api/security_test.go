@@ -71,3 +71,28 @@ func TestHealthPayloadHasNoProviderDiagnostics(t *testing.T) {
 		t.Fatalf("unexpected health payload: %#v", payload)
 	}
 }
+
+func TestSecurityHeaders(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+
+	rec := httptest.NewRecorder()
+	securityHeaders(false)(ok).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	for header, want := range map[string]string{
+		"X-Frame-Options":         "DENY",
+		"Content-Security-Policy": "frame-ancestors 'none'",
+		"X-Content-Type-Options":  "nosniff",
+	} {
+		if got := rec.Header().Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Errorf("HSTS sent without HTTPS cookies: %q", got)
+	}
+
+	rec = httptest.NewRecorder()
+	securityHeaders(true)(ok).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Header().Get("Strict-Transport-Security") == "" {
+		t.Error("HSTS missing when served over HTTPS")
+	}
+}

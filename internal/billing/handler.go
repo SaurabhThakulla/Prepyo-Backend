@@ -82,7 +82,7 @@ func (h *Handler) checkout(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 	var req checkoutRequest
-	if !httpx.Decode(w, r, &req, h.log, "billing.confirm") {
+	if !httpx.DecodeLimit(w, r, &req, h.log, "billing.confirm", maxConfirmBodyBytes) {
 		return
 	}
 
@@ -186,8 +186,6 @@ func decodeProof(raw string) ([]byte, string, error) {
 		return nil, "", errors.New("Attach an image of the payment.")
 	}
 
-	mime, _, _ := strings.Cut(strings.TrimPrefix(prefix, "data:"), ";")
-
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, "", errors.New("That image could not be read. Try another screenshot.")
@@ -195,12 +193,33 @@ func decodeProof(raw string) ([]byte, string, error) {
 	if len(decoded) > maxProofBytes {
 		return nil, "", errors.New("That image is too large. Please keep it under 4 MB.")
 	}
+
+	// The type the data URL claims is ignored: the bytes are what an admin's
+	// browser is later served, so the bytes decide. Trusting the label let an
+	// SVG carrying a script be stored as an "image".
+	mime := http.DetectContentType(decoded)
+	if !allowedProofTypes[mime] {
+		return nil, "", errors.New("Attach a JPEG, PNG, WebP or GIF screenshot.")
+	}
 	return decoded, mime, nil
 }
 
 // maxProofBytes caps the screenshot. Payment rows are listed in the admin
 // queue, and an unbounded blob per row makes that listing expensive.
 const maxProofBytes = 4 << 20
+
+// maxConfirmBodyBytes fits a maxProofBytes screenshot once base64 has grown it
+// by a third, plus the other fields. The default 1 MiB body limit rejected
+// ordinary phone screenshots.
+const maxConfirmBodyBytes = maxProofBytes*4/3 + 64<<10
+
+// allowedProofTypes are the sniffed types a proof may be stored and served as.
+var allowedProofTypes = map[string]bool{
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/webp": true,
+	"image/gif":  true,
+}
 
 // webhookUnavailable never reads or acts on attacker-controlled payment data.
 // Re-enable only with provider signature verification and server-side lookup.

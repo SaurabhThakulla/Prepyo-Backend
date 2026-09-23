@@ -14,7 +14,6 @@ services:
       PORT: "8080"
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://prepyo:prepyo_pass@postgres:5432/prepyo_db?sslmode=disable}
-      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379}
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
       AI_BASE_URL: ${AI_BASE_URL:-https://codecraftapi.com/v1}
       AI_API_KEY: ${AI_API_KEY:-}
@@ -30,8 +29,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
       interval: 10s
@@ -45,8 +42,10 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: prepyo-postgres
+    # Local development only: bound to this machine, so the default password
+    # never faces a network. The root docker-compose.yml is the deploy file.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-prepyo}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prepyo_pass}
@@ -62,25 +61,8 @@ services:
       - prepyo-net
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: prepyo-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    volumes:
-      - redisdata:/data
-    networks:
-      - prepyo-net
-    restart: unless-stopped
-
 volumes:
   pgdata:
-  redisdata:
 
 networks:
   prepyo-net:

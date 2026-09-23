@@ -8,6 +8,7 @@ package practice
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/models"
@@ -33,6 +34,21 @@ type SaveParams struct {
 	UserResponse       string
 	Feedback           string
 	TimeSpentSeconds   int
+}
+
+// AttemptedBetween reports whether the learner already submitted this question
+// in [from, to), which is how a resubmission is told apart from new work.
+func (r *Repository) AttemptedBetween(ctx context.Context, db database.DB, userID, questionID string, from, to time.Time) (bool, error) {
+	var seen bool
+	err := db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM practice_attempts
+			WHERE user_id = $1 AND question_id = $2 AND created_at >= $3 AND created_at < $4)`,
+		userID, questionID, from, to).Scan(&seen)
+	if err != nil {
+		return false, fmt.Errorf("read earlier attempt: %w", err)
+	}
+	return seen, nil
 }
 
 func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (models.PracticeAttempt, error) {
