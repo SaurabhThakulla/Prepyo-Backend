@@ -13,6 +13,7 @@ import (
 	"github.com/prepyo/backend/internal/auth"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/reqctx"
+	"github.com/prepyo/backend/pkg/config"
 )
 
 func TestRateLimitIgnoresSpoofedForwardingHeaders(t *testing.T) {
@@ -170,5 +171,33 @@ func TestDeviceCookieIsIssued(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if len(rec.Result().Cookies()) != 0 {
 		t.Fatal("a valid device id was replaced")
+	}
+}
+
+// With nginx on the same server, the app sees nginx's local address and reads
+// the visitor from X-Forwarded-For. A visitor who writes the header
+// themselves only adds entries to the left, which are never used, and one
+// who connects directly is not believed at all.
+func TestLocalProxyRevealsTheVisitor(t *testing.T) {
+	var got string
+	handler := trustedClientIP(config.LocalProxyCIDRs)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = middleware.GetClientIP(r.Context())
+	}))
+	cases := []struct {
+		name, peer, xff, want string
+	}{
+		{"nginx through Docker's bridge", "172.18.0.1:40000", "198.51.100.23", "198.51.100.23"},
+		{"nginx on loopback", "127.0.0.1:40000", "198.51.100.23", "198.51.100.23"},
+		{"visitor forges a header, nginx appends the real one", "172.18.0.1:40000", "1.1.1.1, 198.51.100.23", "198.51.100.23"},
+		{"visitor connects directly with a forged header", "203.0.113.9:5000", "1.1.1.1", "203.0.113.9"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = tc.peer
+		req.Header.Set("X-Forwarded-For", tc.xff)
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+		if got != tc.want {
+			t.Errorf("%s: client IP = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

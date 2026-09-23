@@ -18,6 +18,7 @@ type Config struct {
 	Port           string
 	AllowedOrigins []string
 	// TrustedProxyCIDRs enumerates reverse proxies allowed to supply X-Forwarded-For.
+	// Defaults to LocalProxyCIDRs.
 	TrustedProxyCIDRs []string
 	WebAppURL         string
 
@@ -91,6 +92,22 @@ const WorkableAIMaxTokens = 4000
 // evaluations.
 func (c Config) AIMaxTokensTooLow() bool { return c.AIMaxTokens < WorkableAIMaxTokens }
 
+// LocalProxyCIDRs are the addresses a reverse proxy on the same machine or
+// private network connects from: nginx on the host reaches the app through
+// loopback or Docker's bridge. Nothing on the internet can send from these, so
+// trusting them by default lets the app see each visitor's real IP behind such
+// a proxy with no configuration, while a visitor connecting directly still
+// cannot forge X-Forwarded-For. Set TRUSTED_PROXY_CIDRS to add a CDN or an
+// external load balancer.
+var LocalProxyCIDRs = []string{
+	"127.0.0.0/8",
+	"::1/128",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"fc00::/7",
+}
+
 func Load() (*Config, error) {
 	loadDotEnv()
 
@@ -120,7 +137,7 @@ func Load() (*Config, error) {
 		Env:               env,
 		Port:              stringOr("PORT", "8080"),
 		AllowedOrigins:    listOr("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
-		TrustedProxyCIDRs: listOr("TRUSTED_PROXY_CIDRS", nil),
+		TrustedProxyCIDRs: listOr("TRUSTED_PROXY_CIDRS", LocalProxyCIDRs),
 		WebAppURL:         stringOr("WEB_APP_URL", "http://localhost:3000"),
 
 		AIBaseURL: aiBaseURL,
