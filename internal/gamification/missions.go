@@ -7,6 +7,7 @@ import (
 
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/notifications"
 )
 
 // TodayMissions lists the active missions with this learner's progress for the
@@ -105,13 +106,28 @@ func (s *Service) RecordActivity(ctx context.Context, db database.DB, user model
 			Scan(&title, &reward); err != nil {
 			return nil, fmt.Errorf("read mission reward: %w", err)
 		}
-		if _, err := s.Award(ctx, db, AwardParams{
+		sourceKey := fmt.Sprintf("mission:%s:%s", p.missionID, day.Format(time.DateOnly))
+		awarded, err := s.Award(ctx, db, AwardParams{
 			UserID:    user.ID,
 			Amount:    reward,
 			Reason:    "Daily mission: " + title,
-			SourceKey: fmt.Sprintf("mission:%s:%s", p.missionID, day.Format(time.DateOnly)),
-		}); err != nil {
+			SourceKey: sourceKey,
+		})
+		if err != nil {
 			return nil, err
+		}
+		// A completed mission stays completed for the rest of the day, so it
+		// comes through here on every later task; only the first payout is news.
+		if awarded > 0 {
+			if _, err := notifications.Send(ctx, db, notifications.CreateParams{
+				UserID: user.ID, Type: notifications.TypeMission,
+				Title:     fmt.Sprintf("Mission complete: +%d XP", awarded),
+				Message:   "You finished \"" + title + "\". Nice work.",
+				ActionURL: "/dashboard",
+				DedupeKey: sourceKey,
+			}); err != nil {
+				return nil, err
+			}
 		}
 	}
 

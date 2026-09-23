@@ -87,12 +87,13 @@ func (h *Handler) evaluateWriting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, http.StatusCreated, map[string]any{
-		"evaluation":   outcome.Evaluation,
-		"reused":       outcome.Reused,
-		"xpAwarded":    outcome.XPAwarded,
-		"streak":       outcome.Streak,
-		"missions":     outcome.Missions,
-		"subscription": outcome.Subscription,
+		"evaluation":     outcome.Evaluation,
+		"reused":         outcome.Reused,
+		"xpAwarded":      outcome.XPAwarded,
+		"streak":         outcome.Streak,
+		"missions":       outcome.Missions,
+		"subscription":   outcome.Subscription,
+		"notificationId": outcome.NotificationID,
 	})
 }
 
@@ -167,12 +168,13 @@ func (h *Handler) evaluateSpeaking(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, http.StatusCreated, map[string]any{
-		"evaluation":   outcome.Evaluation,
-		"reused":       outcome.Reused,
-		"xpAwarded":    outcome.XPAwarded,
-		"streak":       outcome.Streak,
-		"missions":     outcome.Missions,
-		"subscription": outcome.Subscription,
+		"evaluation":     outcome.Evaluation,
+		"reused":         outcome.Reused,
+		"xpAwarded":      outcome.XPAwarded,
+		"streak":         outcome.Streak,
+		"missions":       outcome.Missions,
+		"subscription":   outcome.Subscription,
+		"notificationId": outcome.NotificationID,
 	})
 }
 
@@ -276,6 +278,7 @@ func (h *Handler) evaluateSpeakingTranscript(w http.ResponseWriter, r *http.Requ
 		"streak":                outcome.Streak,
 		"missions":              outcome.Missions,
 		"subscription":          outcome.Subscription,
+		"notificationId":        outcome.NotificationID,
 		"pronunciationAssessed": false,
 	})
 }

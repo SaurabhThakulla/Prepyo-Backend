@@ -193,8 +193,9 @@ func (a *app) router() http.Handler {
 				quick.Mount("/leaderboards", a.leaderboardHandler.Routes())
 				quick.Mount("/notifications", a.notificationHandler.Routes())
 
-				quick.With(rateLimit(5, 10*time.Minute)).
-					Mount("/report", a.reportHandler.Routes())
+				// Only raising a report or replying is throttled; reading your
+				// own conversation is not.
+				quick.Mount("/report", a.reportHandler.Routes(rateLimit(5, 10*time.Minute)))
 			})
 
 			// These wait on a provider call, so they keep the router's longer
@@ -283,7 +284,8 @@ func (a *app) requestLogger(next http.Handler) http.Handler {
 	})
 }
 
-// reconcileRoles updates user roles for expired subscriptions on a periodic schedule.
+// reconcileRoles updates user roles for expired subscriptions on a periodic
+// schedule, then sends the date-driven notifications that depend on them.
 func (a *app) reconcileRoles(ctx context.Context) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
@@ -306,6 +308,15 @@ func (a *app) reconcileRoles(ctx context.Context) {
 		}
 		if changed > 0 {
 			a.log.Info("reconciled subscription roles", "count", changed)
+		}
+
+		// After plans have moved on, so "your plan has ended" is never sent to
+		// someone whose queued plan has just started.
+		sent, err := notifications.NewRepository(a.pool).RunScheduled(ctx)
+		if err != nil {
+			a.log.Error("scheduled notifications failed", "error", err)
+		} else if sent > 0 {
+			a.log.Info("sent scheduled notifications", "count", sent)
 		}
 	}
 

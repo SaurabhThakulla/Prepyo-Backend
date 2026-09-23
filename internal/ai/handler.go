@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/notifications"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
 )
@@ -157,6 +158,14 @@ func (h *Handler) tutor(w http.ResponseWriter, r *http.Request) {
 		msg := fmt.Sprintf("You have used today's %d tutor messages. They reset at midnight.", tutorAllowance(user))
 		if tutorAllowance(user) == freeTutorMessagesPerDay {
 			msg += " Upgrade your plan for more."
+		}
+		if err := notifications.NewRepository(h.db).Notify(context.WithoutCancel(r.Context()), notifications.CreateParams{
+			UserID: user.ID, Type: notifications.TypeLimit,
+			Title: "Daily tutor limit reached", Message: msg,
+			ActionURL: "/subscription",
+			DedupeKey: "limit:tutor:" + gamification.LocalDay(user),
+		}); err != nil {
+			h.log.Warn("tutor limit notification failed", "error", err)
 		}
 		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached, msg)
 		return

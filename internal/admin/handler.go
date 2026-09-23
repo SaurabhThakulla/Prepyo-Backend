@@ -50,7 +50,11 @@ func (h *Handler) Routes() chi.Router {
 	r.Delete("/questions/{id}", h.deleteQuestion)
 
 	r.Get("/reports", h.reports)
+	r.Get("/reports/{id}", h.report)
+	r.Post("/reports/{id}/replies", h.replyReport)
 	r.Patch("/reports/{id}/resolve", h.resolveReport)
+
+	r.Post("/announcements", h.announce)
 
 	r.Get("/payments", h.payments)
 	r.Get("/payments/{id}/proof", h.paymentProof)

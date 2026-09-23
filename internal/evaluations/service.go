@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/prepyo/backend/internal/exams"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/notifications"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/scoring"
 )
@@ -104,6 +106,9 @@ type Outcome struct {
 	Streak       int
 	Missions     []models.DailyMission
 	Subscription models.SubscriptionState
+	// NotificationID is the "feedback ready" notice. A learner still on the
+	// page marks it read at once; one who left finds it waiting.
+	NotificationID string
 }
 
 // EvaluateWriting runs the full flow: allowance, deduplication, provider call,
@@ -440,6 +445,21 @@ func (s *Service) persist(ctx context.Context, p persistParams) (Outcome, error)
 		return Outcome{}, err
 	}
 
+	scoreLine := "Open it to see the full breakdown."
+	if saved.EstimatedScore != nil {
+		scoreLine = fmt.Sprintf("Estimated score: %s. Open it to see the full breakdown.",
+			strconv.FormatFloat(*saved.EstimatedScore, 'f', -1, 64))
+	}
+	notificationID, err := notifications.Send(ctx, tx, notifications.CreateParams{
+		UserID: p.User.ID, Type: notifications.TypeEvaluation,
+		Title:     "Your " + string(p.Question.Skill) + " feedback is ready",
+		Message:   p.Question.Title + ". " + scoreLine,
+		ActionURL: "/evaluations",
+	})
+	if err != nil {
+		return Outcome{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return Outcome{}, fmt.Errorf("commit evaluation: %w", err)
 	}
@@ -451,11 +471,12 @@ func (s *Service) persist(ctx context.Context, p persistParams) (Outcome, error)
 	}
 
 	return Outcome{
-		Evaluation:   saved,
-		XPAwarded:    awarded,
-		Streak:       streak,
-		Missions:     missions,
-		Subscription: state,
+		Evaluation:     saved,
+		XPAwarded:      awarded,
+		Streak:         streak,
+		Missions:       missions,
+		Subscription:   state,
+		NotificationID: notificationID,
 	}, nil
 }
 

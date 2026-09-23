@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -181,7 +182,34 @@ func (s *Service) CheckSubTestCredits(ctx context.Context, db database.DB, user 
 		return state, nil
 	}
 
+	// Only once the day's allowance is really gone: a five-credit section mock
+	// refused with four left is not "you have used everything".
+	if state.DailySubTestsUsed >= state.DailySubTestsLimit {
+		message := fmt.Sprintf("You have used all %d practice tasks for today. They reset at midnight.", state.DailySubTestsLimit)
+		if !user.HasActivePaidPlan() {
+			message += " Upgrade for a bigger daily allowance."
+		}
+		s.notifyOnce(ctx, notifications.CreateParams{
+			UserID: user.ID, Type: notifications.TypeLimit,
+			Title: "Daily practice limit reached", Message: message,
+			ActionURL: "/subscription",
+			DedupeKey: "limit:practice:" + gamification.LocalDay(user),
+		})
+	}
 	return state, ErrLimitReached
+}
+
+// notifyOnce sends a notice on its own connection, outside the caller's
+// transaction: it goes out exactly when the request is being refused, and that
+// refusal rolls the transaction back. A failure is logged, never returned; a
+// missed notice must not turn a clear "limit reached" into a server error.
+func (s *Service) notifyOnce(ctx context.Context, p notifications.CreateParams) {
+	if s.notifications == nil {
+		return
+	}
+	if err := s.notifications.Notify(context.WithoutCancel(ctx), p); err != nil {
+		slog.Default().Warn("limit notification failed", "type", p.Type, "error", err)
+	}
 }
 
 var ErrSessionRequired = errors.New("start this task before submitting answers")
@@ -216,6 +244,18 @@ func (s *Service) CheckMockAllowance(ctx context.Context, db database.DB, user m
 		return state, err
 	}
 	if state.MockTestsUsed >= state.TotalMockTestsAllowed {
+		validUntil := "none"
+		if user.PlanValidUntil != nil {
+			validUntil = user.PlanValidUntil.Format(time.DateOnly)
+		}
+		s.notifyOnce(ctx, notifications.CreateParams{
+			UserID: user.ID, Type: notifications.TypeLimit,
+			Title:     "All mock tests used",
+			Message:   fmt.Sprintf("You have taken all %d full mock tests in your plan. Upgrade or renew to take more.", state.TotalMockTestsAllowed),
+			ActionURL: "/subscription",
+			// Once per plan period, not once a day: the allowance does not reset daily.
+			DedupeKey: "limit:mock:" + user.PlanID + ":" + validUntil,
+		})
 		return state, ErrMockLimitReached
 	}
 	return state, nil
@@ -342,6 +382,29 @@ func (s *Service) RequestPayment(ctx context.Context, pool *pgxpool.Pool, p Requ
 			return ErrDuplicateTransaction
 		}
 		return fmt.Errorf("record payment request: %w", err)
+	}
+
+	// The learner hears that it arrived; every admin hears there is one to check.
+	if _, err := notifications.Send(ctx, tx, notifications.CreateParams{
+		UserID:    p.UserID,
+		Type:      notifications.TypePayment,
+		Title:     "Payment received for " + p.Plan.Name,
+		Message:   "We are checking it now and will activate your plan within a few hours.",
+		ActionURL: "/subscription",
+	}); err != nil {
+		return err
+	}
+	var learner string
+	if err := tx.QueryRow(ctx, `SELECT name FROM users WHERE id = $1`, p.UserID).Scan(&learner); err != nil {
+		return fmt.Errorf("read payer name: %w", err)
+	}
+	if err := notifications.SendToAdmins(ctx, tx, notifications.CreateParams{
+		Type:      notifications.TypePayment,
+		Title:     "New payment to review",
+		Message:   fmt.Sprintf("%s submitted NPR %d for %s via %s.", learner, p.Plan.PriceNPR, p.Plan.Name, p.PaymentGateway),
+		ActionURL: "/admin/payments",
+	}); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

@@ -11,7 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/prepyo/backend/internal/billing"
+	"github.com/prepyo/backend/internal/notifications"
 	"github.com/prepyo/backend/internal/referrals"
+	"github.com/prepyo/backend/internal/report"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
 )
@@ -32,6 +34,10 @@ type issueReport struct {
 	Message   string `json:"message"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"createdAt"`
+	// ReplyCount and LastFromLearner let the queue show which conversations
+	// are waiting on the team.
+	ReplyCount      int  `json:"replyCount"`
+	LastFromLearner bool `json:"lastFromLearner"`
 }
 
 // reports lists issue reports, open first. ?status=resolved shows the closed
@@ -54,7 +60,10 @@ func (h *Handler) reports(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.Query(r.Context(), `
-		SELECT r.id, r.user_id, u.name, COALESCE(u.email, ''), r.path, r.message, r.status, r.created_at
+		SELECT r.id, r.user_id, u.name, COALESCE(u.email, ''), r.path, r.message, r.status, r.created_at,
+		       (SELECT count(*) FROM issue_report_replies p WHERE p.report_id = r.id),
+		       COALESCE((SELECT NOT p.from_staff FROM issue_report_replies p
+		                 WHERE p.report_id = r.id ORDER BY p.created_at DESC LIMIT 1), true)
 		FROM issue_reports r
 		JOIN users u ON u.id = r.user_id `+where+`
 		ORDER BY r.status = 'open' DESC, r.created_at DESC
@@ -70,7 +79,7 @@ func (h *Handler) reports(w http.ResponseWriter, r *http.Request) {
 		var item issueReport
 		var created time.Time
 		if err := rows.Scan(&item.ID, &item.UserID, &item.UserName, &item.UserEmail,
-			&item.Path, &item.Message, &item.Status, &created); err != nil {
+			&item.Path, &item.Message, &item.Status, &created, &item.ReplyCount, &item.LastFromLearner); err != nil {
 			httpx.Internal(w, h.log, "admin.reports.scan", err)
 			return
 		}
@@ -98,21 +107,180 @@ func (h *Handler) reports(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) resolveReport(w http.ResponseWriter, r *http.Request) {
 	actor := reqctx.MustUser(r.Context())
 
-	tag, err := h.db.Exec(r.Context(), `
-		UPDATE issue_reports
-		SET status = 'resolved', resolved_by = $2, resolved_at = now()
-		WHERE id = $1 AND status = 'open'`, chi.URLParam(r, "id"), actor.ID)
+	ctx := r.Context()
+	tx, err := h.db.Begin(ctx)
 	if err != nil {
+		httpx.Internal(w, h.log, "admin.resolveReport.begin", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	if err := resolveReportTx(ctx, tx, chi.URLParam(r, "id"), actor.ID); err != nil {
+		if errors.Is(err, report.ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound,
+				"That report no longer exists, or is already resolved.")
+			return
+		}
 		httpx.Internal(w, h.log, "admin.resolveReport", err)
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound,
-			"That report no longer exists, or is already resolved.")
+	if err := tx.Commit(ctx); err != nil {
+		httpx.Internal(w, h.log, "admin.resolveReport.commit", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"resolved": true})
+}
+
+// resolveReportTx closes an open report and tells the learner.
+func resolveReportTx(ctx context.Context, tx pgx.Tx, reportID, actorID string) error {
+	var learnerID string
+	err := tx.QueryRow(ctx, `
+		UPDATE issue_reports
+		SET status = 'resolved', resolved_by = $2, resolved_at = now()
+		WHERE id = $1 AND status = 'open'
+		RETURNING user_id`, reportID, actorID).Scan(&learnerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return report.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("resolve report: %w", err)
+	}
+	_, err = notifications.Send(ctx, tx, notifications.CreateParams{
+		UserID: learnerID, Type: notifications.TypeReport,
+		Title:     "Your report has been resolved",
+		Message:   "Thanks for flagging it. If something is still not right, send us a new report.",
+		ActionURL: "/reports?report=" + reportID,
+	})
+	return err
+}
+
+// report returns one report with its whole conversation.
+func (h *Handler) report(w http.ResponseWriter, r *http.Request) {
+	rep, err := report.Load(r.Context(), h.db, chi.URLParam(r, "id"), "")
+	if errors.Is(err, report.ErrNotFound) {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That report no longer exists.")
+		return
+	}
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.report", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"report": rep})
+}
+
+type replyReportRequest struct {
+	Message string `json:"message"`
+	// Resolve closes the report in the same step, for "here is the fix".
+	Resolve bool `json:"resolve"`
+}
+
+// replyReport answers a learner, and tells them in their notifications.
+func (h *Handler) replyReport(w http.ResponseWriter, r *http.Request) {
+	actor := reqctx.MustUser(r.Context())
+
+	var req replyReportRequest
+	if !httpx.Decode(w, r, &req, h.log, "admin.replyReport") {
+		return
+	}
+	message := report.Clip(strings.TrimSpace(req.Message))
+	if message == "" {
+		httpx.ValidationError(w, map[string]string{"message": "Write a reply first."})
 		return
 	}
 
-	httpx.JSON(w, http.StatusOK, map[string]any{"resolved": true})
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+	rep, err := report.Load(ctx, h.db, id, "")
+	if errors.Is(err, report.ErrNotFound) {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That report no longer exists.")
+		return
+	}
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.replyReport.load", err)
+		return
+	}
+
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.replyReport.begin", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	if err := report.AddReply(ctx, tx, id, actor.ID, true, message); err != nil {
+		httpx.Internal(w, h.log, "admin.replyReport", err)
+		return
+	}
+	if _, err := notifications.Send(ctx, tx, notifications.CreateParams{
+		UserID: rep.UserID, Type: notifications.TypeReport,
+		Title:     "Prepyo team replied to your report",
+		Message:   report.Snippet(message),
+		ActionURL: "/reports?report=" + id,
+	}); err != nil {
+		httpx.Internal(w, h.log, "admin.replyReport.notify", err)
+		return
+	}
+	if req.Resolve && rep.Status == "open" {
+		if err := resolveReportTx(ctx, tx, id, actor.ID); err != nil {
+			httpx.Internal(w, h.log, "admin.replyReport.resolve", err)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		httpx.Internal(w, h.log, "admin.replyReport.commit", err)
+		return
+	}
+
+	updated, err := report.Load(ctx, h.db, id, "")
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.replyReport.reload", err)
+		return
+	}
+	h.log.Info("admin replied to a report", "actor", actor.Email, "report", id, "resolved", req.Resolve)
+	httpx.JSON(w, http.StatusOK, map[string]any{"report": updated})
+}
+
+type announcementRequest struct {
+	Title     string `json:"title"`
+	Message   string `json:"message"`
+	ActionURL string `json:"actionUrl"`
+}
+
+// announce sends one notice to every learner.
+func (h *Handler) announce(w http.ResponseWriter, r *http.Request) {
+	actor := reqctx.MustUser(r.Context())
+
+	var req announcementRequest
+	if !httpx.Decode(w, r, &req, h.log, "admin.announce") {
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	message := strings.TrimSpace(req.Message)
+	fields := map[string]string{}
+	if title == "" || len([]rune(title)) > 120 {
+		fields["title"] = "Give it a title of up to 120 characters."
+	}
+	if message == "" || len([]rune(message)) > 1000 {
+		fields["message"] = "Write a message of up to 1000 characters."
+	}
+	// Only links inside the app: an announcement is not a way to send
+	// learners somewhere else under Prepyo's name.
+	link := strings.TrimSpace(req.ActionURL)
+	if link != "" && (!strings.HasPrefix(link, "/") || strings.HasPrefix(link, "//")) {
+		fields["actionUrl"] = "Use a page inside Prepyo, starting with /."
+	}
+	if len(fields) > 0 {
+		httpx.ValidationError(w, fields)
+		return
+	}
+
+	sent, err := notifications.NewRepository(h.db).Announce(r.Context(), title, message, link)
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.announce", err)
+		return
+	}
+	h.log.Info("admin sent an announcement", "actor", actor.Email, "recipients", sent)
+	httpx.JSON(w, http.StatusOK, map[string]any{"sent": sent})
 }
 
 type paymentRequest struct {
@@ -316,7 +484,24 @@ func (h *Handler) applyPaymentReview(ctx context.Context, paymentID, actorID str
 		return 0, false, fmt.Errorf("update payment status: %w", err)
 	}
 
+	var planName string
+	if err := tx.QueryRow(ctx, `SELECT name FROM plans WHERE id = $1`, planID).Scan(&planName); err != nil {
+		return 0, false, fmt.Errorf("read plan name: %w", err)
+	}
+
 	if !req.Approve {
+		message := "We could not verify this payment, so the plan was not activated."
+		if note != "" {
+			message += " Note from our team: " + note
+		}
+		if _, err := notifications.Send(ctx, tx, notifications.CreateParams{
+			UserID: userID, Type: notifications.TypePayment,
+			Title:     "Payment for " + planName + " not approved",
+			Message:   message + " Reply through Report an issue if you think this is a mistake.",
+			ActionURL: "/subscription",
+		}); err != nil {
+			return 0, false, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return 0, false, fmt.Errorf("commit rejection: %w", err)
 		}
@@ -329,6 +514,25 @@ func (h *Handler) applyPaymentReview(ctx context.Context, paymentID, actorID str
 
 	queued, err := billing.GrantPurchase(ctx, tx, userID, planID, paymentID, days)
 	if err != nil {
+		return 0, false, err
+	}
+
+	// A queued plan starts when the running one ends; either way the learner
+	// is told the date that matters to them.
+	var validUntil time.Time
+	if err := tx.QueryRow(ctx, `SELECT plan_valid_until FROM users WHERE id = $1`, userID).Scan(&validUntil); err != nil {
+		return 0, false, fmt.Errorf("read plan end: %w", err)
+	}
+	message := fmt.Sprintf("Your %s plan is active until %s. Enjoy your practice!", planName, validUntil.Format("2 Jan 2006"))
+	if queued {
+		message = fmt.Sprintf("Your %s plan (%d days) will start when your current plan ends on %s.", planName, days, validUntil.Format("2 Jan 2006"))
+	}
+	if _, err := notifications.Send(ctx, tx, notifications.CreateParams{
+		UserID: userID, Type: notifications.TypePayment,
+		Title:     "Payment approved",
+		Message:   message,
+		ActionURL: "/subscription",
+	}); err != nil {
 		return 0, false, err
 	}
 	if err = tx.Commit(ctx); err != nil {
