@@ -343,9 +343,10 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	remaining := state.DailySubTestsLimit - state.DailySubTestsUsed - 1
-	if remaining < 0 {
-		remaining = 0
+	// nil on an unlimited plan: there is no count to show.
+	var remaining any
+	if !state.Unlimited {
+		remaining = max(0, state.DailySubTestsLimit-state.DailySubTestsUsed-1)
 	}
 
 	httpx.JSON(w, http.StatusOK, map[string]any{

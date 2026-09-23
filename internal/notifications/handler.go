@@ -24,7 +24,36 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/", h.list)
 	r.Post("/read-all", h.markAllRead)
 	r.Post("/{notificationID}/read", h.markRead)
+	r.Delete("/", h.clearAll)
+	r.Delete("/{notificationID}", h.remove)
 	return r
+}
+
+// remove deletes one of the learner's own notifications.
+func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
+	user := reqctx.MustUser(r.Context())
+
+	if err := h.repo.Delete(r.Context(), user.ID, chi.URLParam(r, "notificationID")); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That notification does not exist.")
+			return
+		}
+		httpx.Internal(w, h.log, "notifications.remove", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, nil)
+}
+
+// clearAll empties the learner's inbox.
+func (h *Handler) clearAll(w http.ResponseWriter, r *http.Request) {
+	user := reqctx.MustUser(r.Context())
+
+	removed, err := h.repo.DeleteAll(r.Context(), user.ID)
+	if err != nil {
+		httpx.Internal(w, h.log, "notifications.clearAll", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"removed": removed})
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

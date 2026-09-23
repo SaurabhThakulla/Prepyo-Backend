@@ -49,6 +49,9 @@ func tutorAllowance(user models.User) int {
 	switch {
 	case user.IsAdmin():
 		return -1
+	// Udaan is the unlimited plan. The per-minute rate limit still applies.
+	case user.HasActivePaidPlan() && user.Role == models.RoleUdaan:
+		return -1
 	case user.HasActivePaidPlan() && user.Role != models.RoleSuru:
 		return paidTutorMessagesPerDay
 	default:

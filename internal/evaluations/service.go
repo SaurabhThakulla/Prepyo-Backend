@@ -271,9 +271,9 @@ type TranscriptRequest struct {
 	Delivery scoring.Delivery
 }
 
-// minTranscriptWords is the point below which there is nothing to give feedback
-// on. Two or three recognised words is a learner who was not heard, and they
-// should be told that rather than handed a band for it.
+// minTranscriptWords is the point below which a model has nothing to judge.
+// The answer is still accepted and scored (see tooFewWordsEvaluation); it is
+// only not sent to the provider, which would be paying to be told the same.
 const minTranscriptWords = 8
 
 // EvaluateSpeakingTranscript scores a spoken answer from its transcript.
@@ -285,9 +285,6 @@ const minTranscriptWords = 8
 func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req TranscriptRequest) (Outcome, error) {
 	transcript := strings.TrimSpace(req.Transcript)
 	words := len(strings.Fields(transcript))
-	if words < minTranscriptWords {
-		return Outcome{}, ErrEmptyResponse
-	}
 
 	question, err := s.questions.ByID(ctx, req.QuestionID)
 	if err != nil {
@@ -336,6 +333,24 @@ func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req Transcript
 				Provider:      "prepyo",
 				Model:         "verbatim-alignment",
 				PromptVersion: verbatimScoringVersion,
+			},
+			XPReason: "Speaking evaluated: " + question.TypeName,
+		})
+	}
+
+	// An answer is always accepted: a learner who recorded one is not sent back
+	// to record it again. Too little was heard for a model to judge, so it is
+	// marked here, at the bottom of the scale, and says why.
+	if words < minTranscriptWords {
+		return s.persist(ctx, persistParams{
+			User:        req.User,
+			Question:    question,
+			Fingerprint: fingerprint,
+			Evaluation:  tooFewWordsEvaluation(question, version, transcript, words),
+			Usage: ai.Usage{
+				Provider:      "prepyo",
+				Model:         "too-few-words",
+				PromptVersion: tooFewWordsVersion,
 			},
 			XPReason: "Speaking evaluated: " + question.TypeName,
 		})

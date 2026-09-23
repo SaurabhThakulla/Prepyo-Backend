@@ -247,6 +247,8 @@ type SubscriptionState struct {
 	TotalMockTestsAllowed int    `json:"totalMockTestsAllowed"`
 	MockTestsUsed         int    `json:"mockTestsUsed"`
 	BonusDays             int    `json:"bonusDays"`
+	// Unlimited means none of the limits above apply; see models.Plan.
+	Unlimited bool `json:"unlimited"`
 }
 
 type Plan struct {
@@ -267,6 +269,10 @@ type Plan struct {
 
 	MockTestsIncluded int  `json:"mockTestsIncluded"`
 	IsPopular         bool `json:"isPopular"`
+
+	// Unlimited plans have no daily sub-test, mock or tutor allowance; the
+	// numeric limits above are then not enforced and not shown.
+	Unlimited bool `json:"unlimited"`
 }
 
 // ---------------------------------------------------------------------------

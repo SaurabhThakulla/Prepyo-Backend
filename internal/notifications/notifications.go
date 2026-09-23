@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/prepyo/backend/internal/database"
@@ -11,6 +12,10 @@ import (
 )
 
 var ErrNotFound = errors.New("notification not found")
+
+// uuidPattern screens ids from the URL, so a malformed one is "not found"
+// rather than a database error.
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Notification types. The database check constraint lists the same set.
 const (
@@ -115,7 +120,7 @@ func (r *Repository) List(ctx context.Context, userID string, limit, offset int)
 	var total, unread int
 	err := r.db.QueryRow(ctx, `
 		SELECT count(*), count(*) FILTER (WHERE NOT read)
-		FROM notifications WHERE user_id = $1`, userID).Scan(&total, &unread)
+		FROM notifications WHERE user_id = $1 AND NOT dismissed`, userID).Scan(&total, &unread)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("count notifications: %w", err)
 	}
@@ -123,7 +128,7 @@ func (r *Repository) List(ctx context.Context, userID string, limit, offset int)
 	rows, err := r.db.Query(ctx, `
 		SELECT id, title, message, type, read, COALESCE(action_url, ''), created_at
 		FROM notifications
-		WHERE user_id = $1
+		WHERE user_id = $1 AND NOT dismissed
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3`, userID, limit, offset)
 	if err != nil {
@@ -163,3 +168,59 @@ func (r *Repository) MarkAllRead(ctx context.Context, userID string) error {
 	}
 	return nil
 }
+
+// Delete removes one notification. As with MarkRead, the user_id condition is
+// the ownership check.
+//
+// A once-only notice (one with a dedupe key) is hidden rather than deleted, so
+// its key still stops it being sent again: clearing "daily limit reached" must
+// not make it come straight back. Hidden rows are also marked read, so the
+// scheduled cleanup prunes them like any other old read notice.
+func (r *Repository) Delete(ctx context.Context, userID, notificationID string) error {
+	if !uuidPattern.MatchString(notificationID) {
+		return ErrNotFound
+	}
+	tag, err := r.db.Exec(ctx, `
+		WITH target AS (
+			SELECT id, dedupe_key IS NOT NULL AS keep_key
+			FROM notifications WHERE id = $1 AND user_id = $2 AND NOT dismissed
+		), gone AS (
+			DELETE FROM notifications n USING target t
+			WHERE n.id = t.id AND NOT t.keep_key
+			RETURNING n.id
+		), hidden AS (
+			UPDATE notifications n SET dismissed = TRUE, read = TRUE
+			FROM target t
+			WHERE n.id = t.id AND t.keep_key
+			RETURNING n.id
+		)
+		SELECT id FROM gone UNION ALL SELECT id FROM hidden`, notificationID, userID)
+	if err != nil {
+		return fmt.Errorf("delete notification: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteAll clears the whole inbox, on the same terms as Delete.
+func (r *Repository) DeleteAll(ctx context.Context, userID string) (int64, error) {
+	var removed int64
+	err := r.db.QueryRow(ctx, `
+		WITH gone AS (
+			DELETE FROM notifications
+			WHERE user_id = $1 AND dedupe_key IS NULL
+			RETURNING 1
+		), hidden AS (
+			UPDATE notifications SET dismissed = TRUE, read = TRUE
+			WHERE user_id = $1 AND dedupe_key IS NOT NULL AND NOT dismissed
+			RETURNING 1
+		)
+		SELECT (SELECT count(*) FROM gone) + (SELECT count(*) FROM hidden)`, userID).Scan(&removed)
+	if err != nil {
+		return 0, fmt.Errorf("clear notifications: %w", err)
+	}
+	return removed, nil
+}
+

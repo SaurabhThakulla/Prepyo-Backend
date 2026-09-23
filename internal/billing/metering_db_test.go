@@ -468,3 +468,46 @@ func mustInsertAt(t *testing.T, pool *pgxpool.Pool, user models.User, q models.Q
 		t.Fatalf("record attempt at %s: %v", at, err)
 	}
 }
+
+// Udaan has no daily sub-test limit and no mock limit: a learner far past the
+// numbers the plan row still carries is never refused.
+func TestUnlimitedPlanIsNeverRefused(t *testing.T) {
+	pool := testPool(t)
+	svc := newService(pool)
+	ctx := context.Background()
+	user := newLearner(t, pool)
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE users SET plan_id = 'elite', role = 'udaan',
+		       plan_valid_until = CURRENT_DATE + 30 WHERE id = $1`, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	valid := time.Now().AddDate(0, 0, 30)
+	user.PlanID, user.PlanValidUntil = "elite", &valid
+
+	// Well past the 60 sub-tests a day the row still lists.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO practice_sessions (user_id, exam, skill, item_id, status, credits)
+		SELECT $1, 'PTE', 'reading', 'item-' || g, 'stopped', 1 FROM generate_series(1, 75) g`, user.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := svc.CheckSubTestCredits(ctx, pool, user, 5)
+	if err != nil {
+		t.Fatalf("unlimited plan refused a sub-test: %v", err)
+	}
+	if !state.Unlimited || state.DailySubTestsUsed != 75 {
+		t.Fatalf("state = %+v, want unlimited with 75 used", state)
+	}
+	if _, err := svc.CheckMockAllowance(ctx, pool, user); err != nil {
+		t.Fatalf("unlimited plan refused a mock: %v", err)
+	}
+
+	plan, err := NewRepository(pool).Plan(ctx, "elite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DurationDays != 30 || plan.BonusDays != 3 || !plan.Unlimited {
+		t.Fatalf("elite plan = %+v, want 30 + 3 days, unlimited", plan)
+	}
+}

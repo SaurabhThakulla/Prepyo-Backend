@@ -33,7 +33,7 @@ func NewRepository(db database.DB) *Repository {
 	return &Repository{db: db}
 }
 
-const planFields = `id, name, price_npr, duration_months, duration_days, bonus_days, features, sub_tests_per_day, mock_tests_included, is_popular`
+const planFields = `id, name, price_npr, duration_months, duration_days, bonus_days, features, sub_tests_per_day, mock_tests_included, is_popular, unlimited`
 
 func (r *Repository) Plans(ctx context.Context) ([]models.Plan, error) {
 	rows, err := r.db.Query(ctx, `SELECT `+planFields+` FROM plans ORDER BY sort_order`)
@@ -46,7 +46,7 @@ func (r *Repository) Plans(ctx context.Context) ([]models.Plan, error) {
 	for rows.Next() {
 		var p models.Plan
 		if err := rows.Scan(&p.ID, &p.Name, &p.PriceNPR, &p.DurationMonths, &p.DurationDays, &p.BonusDays,
-			&p.Features, &p.SubTestsPerDay, &p.MockTestsIncluded, &p.IsPopular); err != nil {
+			&p.Features, &p.SubTestsPerDay, &p.MockTestsIncluded, &p.IsPopular, &p.Unlimited); err != nil {
 			return nil, fmt.Errorf("scan plan: %w", err)
 		}
 		p.AIEvaluationsPerDay = p.SubTestsPerDay // deprecated duplicate, see models.Plan
@@ -59,7 +59,7 @@ func (r *Repository) Plan(ctx context.Context, id string) (models.Plan, error) {
 	var p models.Plan
 	err := r.db.QueryRow(ctx, `SELECT `+planFields+` FROM plans WHERE id = $1`, id).
 		Scan(&p.ID, &p.Name, &p.PriceNPR, &p.DurationMonths, &p.DurationDays, &p.BonusDays,
-			&p.Features, &p.SubTestsPerDay, &p.MockTestsIncluded, &p.IsPopular)
+			&p.Features, &p.SubTestsPerDay, &p.MockTestsIncluded, &p.IsPopular, &p.Unlimited)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return models.Plan{}, ErrPlanNotFound
 	}
@@ -137,6 +137,7 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 		TotalMockTestsAllowed: totalMockTestsAllowed,
 		MockTestsUsed:         mocksUsed,
 		BonusDays:             plan.BonusDays,
+		Unlimited:             plan.Unlimited,
 	}
 	if user.PlanValidUntil != nil {
 		state.ValidUntil = user.PlanValidUntil.Format(time.DateOnly)
@@ -178,7 +179,7 @@ func (s *Service) CheckSubTestCredits(ctx context.Context, db database.DB, user 
 	if err != nil {
 		return state, err
 	}
-	if state.DailySubTestsUsed+credits <= state.DailySubTestsLimit {
+	if state.Unlimited || state.DailySubTestsUsed+credits <= state.DailySubTestsLimit {
 		return state, nil
 	}
 
@@ -243,7 +244,7 @@ func (s *Service) CheckMockAllowance(ctx context.Context, db database.DB, user m
 	if err != nil {
 		return state, err
 	}
-	if state.MockTestsUsed >= state.TotalMockTestsAllowed {
+	if !state.Unlimited && state.MockTestsUsed >= state.TotalMockTestsAllowed {
 		validUntil := "none"
 		if user.PlanValidUntil != nil {
 			validUntil = user.PlanValidUntil.Format(time.DateOnly)

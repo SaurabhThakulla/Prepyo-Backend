@@ -162,3 +162,49 @@ func TestCleanupKeepsUnreadAndRecent(t *testing.T) {
 		t.Fatalf("got %d left, want 2 (only the old read one removed)", got)
 	}
 }
+
+// Deleting removes a notice from the inbox for good, only the owner can do it,
+// and clearing a once-only notice does not let it be sent a second time.
+func TestDeleteAndClear(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	repo := NewRepository(pool)
+	owner := newUser(t, pool, "suru", "free", "")
+	stranger := newUser(t, pool, "suru", "free", "")
+
+	plain, err := Send(ctx, pool, CreateParams{UserID: owner, Type: TypeSystem, Title: "Plain", Message: "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := CreateParams{UserID: owner, Type: TypeLimit, Title: "Limit", Message: "m", DedupeKey: "limit:practice:today"}
+	if _, err := Send(ctx, pool, limit); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Delete(ctx, stranger, plain); err != ErrNotFound {
+		t.Fatalf("another user deleted the notice: err=%v", err)
+	}
+	if err := repo.Delete(ctx, owner, "not-a-uuid"); err != ErrNotFound {
+		t.Fatalf("malformed id: err=%v, want ErrNotFound", err)
+	}
+	if err := repo.Delete(ctx, owner, plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Delete(ctx, owner, plain); err != ErrNotFound {
+		t.Fatalf("second delete: err=%v, want ErrNotFound", err)
+	}
+
+	removed, err := repo.DeleteAll(ctx, owner)
+	if err != nil || removed != 1 {
+		t.Fatalf("clear all: removed=%d err=%v, want 1", removed, err)
+	}
+	list, total, unread, err := repo.List(ctx, owner, 10, 0)
+	if err != nil || len(list) != 0 || total != 0 || unread != 0 {
+		t.Fatalf("inbox after clearing: %d listed, total=%d unread=%d err=%v", len(list), total, unread, err)
+	}
+
+	// The cleared limit notice keeps its key, so the same day's notice is not sent again.
+	if id, err := Send(ctx, pool, limit); err != nil || id != "" {
+		t.Fatalf("cleared once-only notice was sent again: id=%q err=%v", id, err)
+	}
+}

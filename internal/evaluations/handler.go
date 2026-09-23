@@ -218,9 +218,8 @@ func (h *Handler) evaluateSpeakingTranscript(w http.ResponseWriter, r *http.Requ
 	if strings.TrimSpace(req.QuestionID) == "" {
 		problems["questionId"] = "Required."
 	}
-	if transcript == "" {
-		problems["transcript"] = "We did not catch any words. Please record your answer again."
-	}
+	// An empty transcript is still an answer: it is scored at the bottom of the
+	// scale rather than refused (see tooFewWordsEvaluation).
 	if len(transcript) > maxTranscriptChars {
 		problems["transcript"] = "That is longer than any speaking task allows."
 	}
