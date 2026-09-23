@@ -12,7 +12,7 @@ import (
 // SpeakingPromptVersion is stamped on every stored evaluation. Change it
 // whenever the prompt below changes, so old feedback stays traceable to the
 // wording that produced it.
-const SpeakingPromptVersion = "speaking.v3"
+const SpeakingPromptVersion = "speaking.v4"
 
 // AudioFormats are the encodings the provider accepts inline. Callers convert
 // a browser recording to one of these before submitting; the gateway does not
@@ -176,6 +176,10 @@ func validateSpeaking(p speakingPayload, req SpeakingRequest) (models.Evaluation
 }
 
 func speakingSystemPrompt(req SpeakingRequest) string {
+	if isIELTS(req.Exam) {
+		return ieltsSpeakingSystemPrompt(req)
+	}
+
 	var b strings.Builder
 	b.WriteString("You are a strict, certified senior ")
 	b.WriteString(string(req.Exam))
@@ -196,7 +200,7 @@ func speakingSystemPrompt(req SpeakingRequest) string {
 	if strings.TrimSpace(req.ExpectedText) != "" {
 		b.WriteString("- The learner was given a fixed text to say. Compare what you heard against it and treat omissions, substitutions and additions as content errors.\n")
 	}
-	b.WriteString(responseMaterialRules(req.SourceText, req.ReferenceAnswer))
+	b.WriteString(responseMaterialRules(req.Exam, req.SourceText, req.ReferenceAnswer))
 
 	if req.Exam == models.ExamPTE {
 		b.WriteString("- Use the published PTE speaking criteria for this task type: content, oral fluency and pronunciation.\n")
@@ -222,14 +226,50 @@ func speakingSystemPrompt(req SpeakingRequest) string {
 	return b.String()
 }
 
+// ieltsSpeakingSystemPrompt scores one recorded IELTS answer from its audio.
+func ieltsSpeakingSystemPrompt(req SpeakingRequest) string {
+	var b strings.Builder
+	b.WriteString("You are an experienced IELTS Speaking assessor giving practice feedback on one recorded answer. You are not an official IELTS examiner, and your estimate is not an official score.\n\n")
+	b.WriteString("You are given one audio recording of the learner's spoken response.\n")
+	b.WriteString("- First transcribe what you actually hear into `transcript`, verbatim. Include the learner's own errors, repetitions and false starts. Do not tidy them up.\n")
+	b.WriteString("- If the recording is silent, unintelligible, or contains no speech, set `transcript` to \"\" and estimatedScore.value to null, and say so plainly in the summary.\n")
+	b.WriteString("- Judge pronunciation and fluency from the audio itself, not from the transcript alone.\n")
+	b.WriteString("- Every entry in sentenceFeedback must copy an exact sentence from `transcript` into `original` and give an improved version with a short explanation. Never quote or invent words the learner did not say.\n\n")
+	b.WriteString(ieltsSpeakingGuidance(req.TaskName, true))
+	b.WriteString(responseMaterialRules(req.Exam, req.SourceText, req.ReferenceAnswer))
+	fmt.Fprintf(&b, "\nReturn exactly four criteria: %s. Each has maxScore 9, a whole-band score, and feedback that cites evidence from the recording. ", ieltsSpeakingCriteria(true))
+	b.WriteString("estimatedScore.value is the mean of the four criteria rounded to the nearest half band (.25 rounds up to the next half band, .75 up to the next whole band). It is a practice estimate for this answer, not a Speaking band.\n")
+	b.WriteString("Set estimatedScore.confidence to low, medium or high according to how much the recording gives you. A very short recording is low confidence.\n")
+	b.WriteString("The example below already uses this exam's scale. Copy its shape, never its numbers.\n\n")
+	b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
+{
+  "transcript": "exactly what the learner said",
+  "summary": "two or three sentences of evidence-based assessment",
+  "estimatedScore": {"value": %.1f, "confidence": "medium"},
+  "criteria": [{"name": "...", "score": <whole-band score>, "maxScore": 9, "feedback": "..."}],
+  "strengths": ["..."],
+  "weaknesses": ["..."],
+  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "..."}]
+}`, exampleScore(req.MinScore, req.MaxScore)))
+	return b.String()
+}
+
 // responseMaterialRules tells the model how to use the material behind a task
 // that is answered in the learner's own words. Without it, a lecture or a
 // question handed over as "text" reads as something to repeat, and a correct
 // retelling or a one-word answer is marked down for every word it leaves out.
-func responseMaterialRules(source, reference string) string {
+func responseMaterialRules(exam models.ExamType, source, reference string) string {
 	var b strings.Builder
 	if strings.TrimSpace(source) != "" {
 		b.WriteString("- The learner was not asked to repeat the material supplied. They were asked to respond to it: retell, summarise, answer or reply in their own words. Judge content by how accurately and fully the response does what the task asks. Never penalise paraphrase, and never count words of the material the learner did not repeat as omissions.\n")
+	}
+	// IELTS Speaking has no content-accuracy criterion: a sample answer is only
+	// an illustration, and an answer with different ideas is not wrong.
+	if isIELTS(exam) {
+		if strings.TrimSpace(reference) != "" {
+			b.WriteString("- A sample answer is supplied only to illustrate one possible response. Different ideas or opinions are equally valid; never score an answer by how closely its content matches the sample.\n")
+		}
+		return b.String()
 	}
 	if strings.TrimSpace(reference) != "" {
 		b.WriteString("- A reference answer is supplied for calibration. It shows the content a strong response covers; any wording that conveys the same content earns full content credit. For a short-answer question, any answer with the same meaning as the reference is correct, and an answer with a different meaning is wrong however fluent it is.\n")

@@ -23,8 +23,7 @@ func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackS
 	} else {
 		required["coherence and cohesion"] = false
 		task := "task response"
-		name := strings.ToLower(spec.TaskName)
-		if strings.Contains(name, "figure") || strings.Contains(name, "task 1") {
+		if ieltsWritingTask(spec.TypeID, spec.TaskName) != ieltsTask2 {
 			task = "task achievement"
 		}
 		required[task] = false
@@ -40,9 +39,16 @@ func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackS
 		if !known || seen || c.MaxScore != 9 || math.IsNaN(c.Score) || math.IsInf(c.Score, 0) || c.Score < 0 || c.Score > 9 || strings.TrimSpace(c.Feedback) == "" {
 			return fmt.Errorf("invalid or duplicate IELTS criterion %q", c.Name)
 		}
+		// The descriptors define whole-band levels only: a criterion is rated
+		// at the band whose positive features the response fully fits.
+		if c.Score != math.Trunc(c.Score) {
+			return fmt.Errorf("IELTS criterion %q must be a whole band, got %.2f", c.Name, c.Score)
+		}
 		required[key] = true
 		sum += c.Score
 	}
+	// Combining the criteria with the overall-band rounding rule is Prepyo's
+	// convention for a single task; IELTS does not publish a per-task rule.
 	if scoring.RoundIELTSBand(sum/float64(wanted)) != score {
 		return fmt.Errorf("IELTS estimate must equal the rounded mean of the %d equally weighted criteria", wanted)
 	}
