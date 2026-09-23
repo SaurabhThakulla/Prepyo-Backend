@@ -58,6 +58,7 @@ func (g *Gateway) Synthesize(ctx context.Context, voice, text string) ([]byte, e
 	if err != nil {
 		return nil, fmt.Errorf("create speech request: %w", err)
 	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+g.audio.apiKey)
 

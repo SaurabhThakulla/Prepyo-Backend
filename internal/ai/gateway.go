@@ -313,11 +313,14 @@ func requestTimedOut(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err)
 }
 
+const defaultAIUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
 func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, promptVersion string, started time.Time) (string, Usage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.completionsURL(), bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, err
 	}
+	req.Header.Set("User-Agent", defaultAIUserAgent)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
@@ -411,6 +414,7 @@ func (g *Gateway) transcribeAudio(ctx context.Context, req SpeakingRequest) (str
 	if err != nil {
 		return "", Usage{}, fmt.Errorf("create transcription request: %w", err)
 	}
+	httpReq.Header.Set("User-Agent", defaultAIUserAgent)
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
 	httpReq.Header.Set("Authorization", "Bearer "+g.audio.apiKey)
 
