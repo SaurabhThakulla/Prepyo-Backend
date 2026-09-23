@@ -80,8 +80,11 @@ owner).
   `GET /speech/{id}`. The org admin must accept the Orpheus model terms in the
   Groq console first. Until then the endpoint answers `not_configured`. The
   browser player holds each utterance, since Chrome can drop the end event of
-  one it has collected, and has a watchdog, so a silent engine fails over
-  instead of hanging.
+  one it has collected. A voice that is listed but never starts (Brave's
+  shields can do this) switches to the server clips after about 2 seconds,
+  and the rest of that page uses the server clips too. The browser is
+  detected by what it can do, never by its name. The start button unlocks
+  audio, because iOS Safari only plays sound that starts from a tap.
 - Listening mock (000074, 000075, `internal/listeningmock`,
   `/listening/mocks`): four parts and 40 questions in recording order, each
   recording played once. The learner gets reading time before each part and
