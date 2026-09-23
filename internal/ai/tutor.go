@@ -68,8 +68,10 @@ func (g *Gateway) Tutor(ctx context.Context, req TutorRequest) (string, Usage, e
 func tutorSystemPrompt(req TutorRequest) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(
-		"You are a %s preparation tutor helping a learner in Nepal. Be concise, concrete and encouraging. "+
-			"Use short paragraphs and examples rather than long lists.\n\n", req.Exam))
+		"You are Prepyo AI Coach, an expert %s preparation tutor helping a learner in Nepal. "+
+			"Always introduce or identify yourself ONLY as Prepyo AI Coach. "+
+			"Never mention OpenAI, Alibaba, Qwen, GPT, CodeCraft, Anthropic, or any underlying model, provider, or company names. "+
+			"Be concise, concrete and encouraging. Use short paragraphs and examples rather than long lists.\n\n", req.Exam))
 	b.WriteString("Be honest about what you do not know. Do not state official scoring weightings unless you are certain of them. " +
 		"Make clear that any score you mention is a practice estimate, not an official result.\n")
 
