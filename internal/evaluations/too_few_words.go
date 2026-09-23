@@ -17,6 +17,9 @@ const tooFewWordsVersion = "too-few-words.v1"
 // summary says plainly that this is about what was heard, since the usual
 // cause is the microphone or the browser's speech recognition, not the learner.
 func tooFewWordsEvaluation(question models.Question, version models.ExamVersion, transcript string, words int) models.Evaluation {
+	if question.Exam == models.ExamIELTS {
+		return ieltsTooFewWordsEvaluation(question, transcript, words)
+	}
 	score := version.MinScore
 
 	heard := "No words could be made out in your recording"
@@ -54,4 +57,34 @@ func pluralWord(n int) string {
 		return "word"
 	}
 	return "words"
+}
+
+// ieltsTooFewWordsEvaluation reports an IELTS answer that was barely heard.
+//
+// It carries no band. IELTS Band 0 means the candidate did not attend, and a
+// few words picked up by a microphone are not evidence of any band: the
+// likelier cause is the recording, not the learner. Rating it would put a
+// number on the learner's progress that says nothing about their speaking.
+func ieltsTooFewWordsEvaluation(question models.Question, transcript string, words int) models.Evaluation {
+	heard := "No words could be made out in your recording"
+	if words > 0 {
+		heard = fmt.Sprintf("Only %d %s could be made out in your recording", words, pluralWord(words))
+	}
+	return models.Evaluation{
+		Exam:              question.Exam,
+		Skill:             models.SkillSpeaking,
+		EvaluationVersion: ai.EvaluationVersion,
+		EstimatedScore:    nil,
+		ScoreConfidence:   "low",
+		Summary: heard + ", which is not enough speech to rate, so no band estimate was given. " +
+			"If you did speak, the microphone or your browser's speech recognition may not have picked you up: " +
+			"try Chrome or Edge, speak a little closer to the microphone, and record the task again.",
+		Criteria:  []models.EvaluationCriterion{},
+		Strengths: []string{},
+		Weaknesses: []string{
+			"Answer fully: Part 1 answers usually run to a few sentences, and the Part 2 long turn lasts up to two minutes.",
+		},
+		SentenceFeedback: []models.SentenceFeedback{},
+		Transcript:       transcript,
+	}
 }

@@ -84,6 +84,8 @@ type Gateway struct {
 	text      provider
 	audio     provider
 	speaking  bool
+	ttsModel  string
+	ttsVoices []string
 	models    config.AIModels
 	maxTokens int
 	log       *slog.Logger
@@ -95,6 +97,8 @@ func NewGateway(cfg *config.Config, log *slog.Logger) *Gateway {
 		text:      newProvider(cfg.AIBaseURL, cfg.AIAPIKey),
 		audio:     newProvider(cfg.AIAudioBaseURL, cfg.AIAudioAPIKey),
 		speaking:  cfg.SpeakingEvaluated,
+		ttsModel:  cfg.AITTSModel,
+		ttsVoices: cfg.AITTSVoices,
 		models:    cfg.AIModels,
 		maxTokens: cfg.AIMaxTokens,
 		log:       log,

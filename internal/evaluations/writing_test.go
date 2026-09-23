@@ -25,7 +25,8 @@ func TestWritingResponseThreshold(t *testing.T) {
 		{"short essay", models.ExamPTE, models.SkillWriting, "pte-write-essay", 19, ErrEmptyResponse},
 		{"essay feedback minimum", models.ExamPTE, models.SkillWriting, "pte-write-essay", 20, nil},
 		{"IELTS figure", models.ExamIELTS, models.SkillWriting, "ielts-writing-task1-figure", 20, nil},
-		{"summary exception only for PTE", models.ExamIELTS, models.SkillWriting, "summarize-written-text", 5, ErrEmptyResponse},
+		{"IELTS short response is rated, not refused", models.ExamIELTS, models.SkillWriting, "ielts-writing-task2-opinion", 5, nil},
+		{"IELTS empty response", models.ExamIELTS, models.SkillWriting, "ielts-writing-task2-opinion", 0, ErrEmptyResponse},
 		{"reject other skill", models.ExamPTE, models.SkillReading, "summarize-written-text", 20, ErrWrongWritingSkill},
 		{"empty", models.ExamPTE, models.SkillWriting, "summarize-written-text", 0, ErrEmptyResponse},
 	} {

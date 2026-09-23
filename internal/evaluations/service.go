@@ -32,7 +32,12 @@ var (
 
 // minWordsToEvaluate is a feedback threshold, not the full exam word limit.
 // PTE summaries explicitly permit a single sentence of as few as five words.
+// IELTS takes any response: one of 20 words or fewer is rated by the Band 1
+// rule rather than refused.
 func minWordsToEvaluate(q models.Question) int {
+	if q.Exam == models.ExamIELTS {
+		return 1
+	}
 	if q.Exam == models.ExamPTE && q.TypeID == "summarize-written-text" {
 		return 5
 	}
@@ -152,13 +157,36 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 		return Outcome{}, err
 	}
 
+	var wordCount, minimumWords int
+	if question.Exam == models.ExamIELTS {
+		wordCount = IELTSWordCount(text, question.Prompt)
+		minimumWords = ai.IELTSMinimumWords(question.TypeID, question.TypeName)
+		if wordCount <= ieltsBand1WordLimit {
+			return s.persist(ctx, persistParams{
+				User:        req.User,
+				Question:    question,
+				Fingerprint: fingerprint,
+				Evaluation:  ieltsShortWritingEvaluation(question, wordCount),
+				Usage: ai.Usage{
+					Provider:      "prepyo",
+					Model:         "ielts-length-rule",
+					PromptVersion: ieltsShortWritingVersion,
+				},
+				XPReason: "Writing evaluated: " + question.TypeName,
+			})
+		}
+	}
+
 	evaluation, usage, err := s.gateway.EvaluateWriting(ctx, ai.WritingRequest{
 		Exam:           question.Exam,
+		TypeID:         question.TypeID,
 		TaskName:       question.TypeName,
 		Prompt:         question.Prompt,
 		FigureData:     question.FigureData,
 		ContextPassage: question.ContextPassage,
 		LearnerText:    text,
+		WordCount:      wordCount,
+		MinimumWords:   minimumWords,
 		MinScore:       version.MinScore,
 		MaxScore:       version.MaxScore,
 	})

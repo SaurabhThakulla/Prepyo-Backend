@@ -12,13 +12,16 @@ import (
 )
 
 // WritingPromptVersion identifies the active writing evaluation prompt version.
-const WritingPromptVersion = "writing.v3" // Validates IELTS criterion structure and mean.
+const WritingPromptVersion = "writing.v4" // IELTS guidance follows the public band descriptors.
 
 // EvaluationVersion is the evaluation schema version.
 const EvaluationVersion = "v1"
 
 type WritingRequest struct {
-	Exam        models.ExamType
+	Exam models.ExamType
+	// TypeID identifies the task (for IELTS: Academic Task 1, General
+	// Training Task 1 letter, or Task 2), which decides the first criterion.
+	TypeID      string
 	TaskName    string
 	Prompt      string
 	LearnerText string
@@ -26,8 +29,13 @@ type WritingRequest struct {
 	ContextPassage string
 	// FigureData is the tabular data behind an image prompt, if applicable.
 	FigureData string
-	MinScore   float64
-	MaxScore   float64
+	// WordCount is Prepyo's count of the learner's words, with wording copied
+	// from the task left out; MinimumWords is what the task asks for. Both are
+	// zero when not counted.
+	WordCount    int
+	MinimumWords int
+	MinScore     float64
+	MaxScore     float64
 }
 
 // evaluationPayload mirrors the raw JSON returned by the model.
@@ -123,6 +131,7 @@ func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation
 		MaxScore: req.MaxScore,
 		Quotable: req.LearnerText,
 		TaskName: req.TaskName,
+		TypeID:   req.TypeID,
 	})
 }
 
@@ -133,6 +142,7 @@ type feedbackSpec struct {
 	MaxScore float64
 	Quotable string
 	TaskName string
+	TypeID   string
 	// WithoutPronunciation marks feedback produced from a transcript rather
 	// than a recording. Pronunciation cannot be judged from words on a page, so
 	// the usual four-criterion IELTS shape does not apply and a model that
@@ -225,6 +235,22 @@ func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation
 }
 
 func writingSystemPrompt(req WritingRequest) string {
+	if isIELTS(req.Exam) {
+		var b strings.Builder
+		b.WriteString(ieltsWritingGuidance(req))
+		b.WriteString("\nThe example below already uses this exam's scale. Copy its shape, never its numbers.\n\n")
+		b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
+{
+  "summary": "two or three sentences of evidence-based assessment",
+  "estimatedScore": {"value": %.1f, "confidence": "medium"},
+  "criteria": [{"name": "...", "score": <whole-band score>, "maxScore": 9, "feedback": "..."}],
+  "strengths": ["..."],
+  "weaknesses": ["..."],
+  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "..."}]
+}`, exampleScore(req.MinScore, req.MaxScore)))
+		return b.String()
+	}
+
 	var b strings.Builder
 	b.WriteString("You are a strict, certified senior ")
 	b.WriteString(string(req.Exam))
@@ -274,6 +300,9 @@ func writingUserPrompt(req WritingRequest) string {
 	fmt.Fprintf(&b, "Task: %s\n\nPrompt:\n%s\n", req.TaskName, req.Prompt)
 	if passage := strings.TrimSpace(req.ContextPassage); passage != "" {
 		fmt.Fprintf(&b, "\nSource passage (reference material, not the learner's response):\n%s\n", passage)
+	}
+	if req.WordCount > 0 && req.MinimumWords > 0 {
+		fmt.Fprintf(&b, "\nWord count: %d (minimum for this task: %d).\n", req.WordCount, req.MinimumWords)
 	}
 	if figure := strings.TrimSpace(req.FigureData); figure != "" {
 		fmt.Fprintf(&b, "\nThe learner was shown this figure as an image. They could not read "+
