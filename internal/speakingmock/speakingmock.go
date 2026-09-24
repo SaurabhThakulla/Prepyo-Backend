@@ -220,6 +220,9 @@ func (s *Service) start(ctx context.Context, user models.User, charge, fullMock 
 		if _, err := s.billing.CheckSubTestCredits(ctx, s.db, user, billing.SectionMockSubTests); err != nil {
 			return Session{}, err
 		}
+		if _, err := s.billing.CheckAIGradings(ctx, s.db, user, billing.IELTSSpeakingMockUnits); err != nil {
+			return Session{}, err
+		}
 	}
 
 	var setID string
@@ -247,6 +250,9 @@ func (s *Service) start(ctx context.Context, user models.User, charge, fullMock 
 		if _, err := s.billing.CheckSubTestCredits(ctx, tx, user, billing.SectionMockSubTests); err != nil {
 			return Session{}, err
 		}
+		if _, err := s.billing.CheckAIGradings(ctx, tx, user, billing.IELTSSpeakingMockUnits); err != nil {
+			return Session{}, err
+		}
 	}
 	var id string
 	err = tx.QueryRow(ctx, `
@@ -267,6 +273,10 @@ func (s *Service) start(ctx context.Context, user models.User, charge, fullMock 
 	if charge {
 		if _, err := s.billing.RecordSessionStartCredits(ctx, tx, user, string(models.ExamIELTS),
 			string(models.SkillSpeaking), "speaking-mock:"+id, billing.SectionMockSubTests); err != nil {
+			return Session{}, err
+		}
+		// The AI marks this paper, so it takes its cost from the grading pool.
+		if err := s.billing.RecordAIGrading(ctx, tx, user.ID, billing.IELTSSpeakingMockUnits, "mock-ielts-speaking", id); err != nil {
 			return Session{}, err
 		}
 	}

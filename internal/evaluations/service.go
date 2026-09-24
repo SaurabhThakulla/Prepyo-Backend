@@ -177,6 +177,11 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 		}
 	}
 
+	// Every answer the AI marks is one grading, a re-submitted draft included.
+	if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.UnitsPerGrading); err != nil {
+		return Outcome{}, err
+	}
+
 	evaluation, usage, err := s.gateway.EvaluateWriting(ctx, ai.WritingRequest{
 		Exam:           question.Exam,
 		TypeID:         question.TypeID,
@@ -195,12 +200,14 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 	}
 
 	return s.persist(ctx, persistParams{
-		User:        req.User,
-		Question:    question,
-		Fingerprint: fingerprint,
-		Evaluation:  evaluation,
-		Usage:       usage,
-		XPReason:    "Writing evaluated: " + question.TypeName,
+		User:          req.User,
+		Question:      question,
+		Fingerprint:   fingerprint,
+		Evaluation:    evaluation,
+		Usage:         usage,
+		XPReason:      "Writing evaluated: " + question.TypeName,
+		GradingUnits:  billing.UnitsPerGrading,
+		GradingSource: "practice-writing",
 	})
 }
 
@@ -260,6 +267,36 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 	}
 
 	material := speakingMaterialOf(question)
+
+	// Read Aloud and Repeat Sentence have one right answer, word for word, so
+	// the recording is transcribed and aligned with its text rather than sent
+	// to a model: the same marking as the mock, at the cost of the
+	// transcription alone, which is a fifth of a grading.
+	if strings.TrimSpace(material.expected) != "" {
+		if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.WordMatchUnits); err != nil {
+			return Outcome{}, err
+		}
+		transcript, usage, err := s.gateway.Transcribe(ctx, req.Audio, req.AudioFormat)
+		if err != nil {
+			return Outcome{}, err
+		}
+		evaluation := verbatimEvaluation(question, version, material.expected, strings.TrimSpace(transcript), scoring.Delivery{})
+		usage.Model, usage.PromptVersion = usage.Model+"+verbatim-alignment", verbatimScoringVersion
+		return s.persist(ctx, persistParams{
+			User:          req.User,
+			Question:      question,
+			Fingerprint:   fingerprint,
+			Evaluation:    evaluation,
+			Usage:         usage,
+			XPReason:      "Speaking evaluated: " + question.TypeName,
+			GradingUnits:  billing.WordMatchUnits,
+			GradingSource: "practice-read-repeat",
+		})
+	}
+
+	if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.UnitsPerGrading); err != nil {
+		return Outcome{}, err
+	}
 	evaluation, usage, err := s.gateway.EvaluateSpeaking(ctx, ai.SpeakingRequest{
 		Exam:            question.Exam,
 		TaskName:        question.TypeName,
@@ -278,12 +315,14 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 	}
 
 	return s.persist(ctx, persistParams{
-		User:        req.User,
-		Question:    question,
-		Fingerprint: fingerprint,
-		Evaluation:  evaluation,
-		Usage:       usage,
-		XPReason:    "Speaking evaluated: " + question.TypeName,
+		User:          req.User,
+		Question:      question,
+		Fingerprint:   fingerprint,
+		Evaluation:    evaluation,
+		Usage:         usage,
+		XPReason:      "Speaking evaluated: " + question.TypeName,
+		GradingUnits:  billing.UnitsPerGrading,
+		GradingSource: "practice-speaking",
 	})
 }
 
@@ -384,6 +423,9 @@ func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req Transcript
 		})
 	}
 
+	if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.UnitsPerGrading); err != nil {
+		return Outcome{}, err
+	}
 	evaluation, usage, err := s.gateway.EvaluateSpokenTranscript(ctx, ai.SpokenTranscriptRequest{
 		Exam:            question.Exam,
 		TaskName:        question.TypeName,
@@ -403,12 +445,14 @@ func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req Transcript
 	}
 
 	return s.persist(ctx, persistParams{
-		User:        req.User,
-		Question:    question,
-		Fingerprint: fingerprint,
-		Evaluation:  evaluation,
-		Usage:       usage,
-		XPReason:    "Speaking evaluated: " + question.TypeName,
+		User:          req.User,
+		Question:      question,
+		Fingerprint:   fingerprint,
+		Evaluation:    evaluation,
+		Usage:         usage,
+		XPReason:      "Speaking evaluated: " + question.TypeName,
+		GradingUnits:  billing.UnitsPerGrading,
+		GradingSource: "practice-speaking",
 	})
 }
 
@@ -419,6 +463,12 @@ type persistParams struct {
 	Evaluation  models.Evaluation
 	Usage       ai.Usage
 	XPReason    string
+	// GradingUnits is what this rating spends from the plan's AI gradings
+	// (billing.UnitsPerGrading for an AI-marked answer, billing.WordMatchUnits
+	// for a word-matched one, 0 when nothing was paid for). It is recorded in
+	// the transaction that saves the rating, so a failed call costs nothing.
+	GradingUnits  int
+	GradingSource string
 }
 
 // persistTimeout bounds the writes below on their own, now that they no longer
@@ -465,6 +515,10 @@ func (s *Service) persist(ctx context.Context, p persistParams) (Outcome, error)
 		},
 	})
 	if err != nil {
+		return Outcome{}, err
+	}
+
+	if err := s.billing.RecordAIGrading(ctx, tx, p.User.ID, p.GradingUnits, p.GradingSource, saved.ID); err != nil {
 		return Outcome{}, err
 	}
 

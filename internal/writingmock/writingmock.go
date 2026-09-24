@@ -138,6 +138,9 @@ func (s *Service) start(ctx context.Context, user models.User, fullMock bool) (S
 		if _, err := s.billing.CheckSubTestCredits(ctx, s.db, user, billing.SectionMockSubTests); err != nil {
 			return Session{}, err
 		}
+		if _, err := s.billing.CheckAIGradings(ctx, s.db, user, billing.IELTSWritingMockUnits); err != nil {
+			return Session{}, err
+		}
 	}
 
 	module := user.IELTSModule()
@@ -161,6 +164,9 @@ func (s *Service) start(ctx context.Context, user models.User, fullMock bool) (S
 			return Session{}, err
 		}
 		if _, err := s.billing.CheckSubTestCredits(ctx, tx, user, billing.SectionMockSubTests); err != nil {
+			return Session{}, err
+		}
+		if _, err := s.billing.CheckAIGradings(ctx, tx, user, billing.IELTSWritingMockUnits); err != nil {
 			return Session{}, err
 		}
 	}
@@ -187,6 +193,10 @@ func (s *Service) start(ctx context.Context, user models.User, fullMock bool) (S
 	if charge {
 		if _, err := s.billing.RecordSessionStartCredits(ctx, tx, user, string(models.ExamIELTS),
 			string(models.SkillWriting), "writing-mock:"+id, billing.SectionMockSubTests); err != nil {
+			return Session{}, err
+		}
+		// The AI marks this paper, so it takes its cost from the grading pool.
+		if err := s.billing.RecordAIGrading(ctx, tx, user.ID, billing.IELTSWritingMockUnits, "mock-ielts-writing", id); err != nil {
 			return Session{}, err
 		}
 	}

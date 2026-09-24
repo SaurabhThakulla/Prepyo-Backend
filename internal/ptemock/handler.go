@@ -186,6 +186,8 @@ func (h *Handler) writeError(w http.ResponseWriter, op string, err error) {
 	case errors.Is(err, billing.ErrMockLimitReached):
 		httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached,
 			"You have used all the full mock tests in your plan. Upgrade or refer friends to unlock more.")
+	case errors.Is(err, billing.ErrGradingLimitReached):
+		httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached, billing.GradingLimitMessage)
 	case errors.Is(err, billing.ErrLimitReached):
 		httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached,
 			fmt.Sprintf("A sectional test uses %d of your daily practice sub-tests, and you don't have enough left today. They reset tomorrow, or upgrade your plan for more.", billing.SectionMockSubTests))

@@ -224,6 +224,9 @@ type CostView struct {
 	// "sub_tests" (Credits of the day's sub-tests).
 	Kind    string `json:"kind"`
 	Credits int    `json:"credits"`
+	// Gradings is what a sectional test the AI marks takes from the plan's
+	// AI gradings when it starts.
+	Gradings int `json:"gradings"`
 }
 
 // LiveView is an unfinished paper of a kind, to resume.
@@ -320,7 +323,8 @@ func (s *Service) Catalog(ctx context.Context, user models.User) ([]CatalogEntry
 		if bp.FullAllowance {
 			entry.Cost = CostView{Kind: "full_mock", Credits: 1}
 		} else {
-			entry.Cost = CostView{Kind: "sub_tests", Credits: billing.SectionMockSubTests}
+			entry.Cost = CostView{Kind: "sub_tests", Credits: billing.SectionMockSubTests,
+				Gradings: bp.GradingUnits / billing.UnitsPerGrading}
 		}
 		if l, ok := live[bp.Kind]; ok {
 			entry.Live = &l

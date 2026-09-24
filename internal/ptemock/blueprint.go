@@ -1,6 +1,9 @@
 package ptemock
 
-import "github.com/prepyo/backend/internal/models"
+import (
+	"github.com/prepyo/backend/internal/billing"
+	"github.com/prepyo/backend/internal/models"
+)
 
 // Kind is a kind of PTE mock: the whole test, or one skill's sectional test.
 type Kind string
@@ -32,6 +35,9 @@ type Blueprint struct {
 	// FullAllowance marks the kind paid for from the plan's full-mock
 	// allowance; every other kind costs SectionMockSubTests sub-tests.
 	FullAllowance bool `json:"fullAllowance"`
+	// GradingUnits is what a sectional test takes from the plan's AI
+	// gradings when it starts (billing units): its AI marking's real cost.
+	GradingUnits int `json:"gradingUnits"`
 }
 
 // Item counts follow the published ranges for each task in the current test,
@@ -71,20 +77,22 @@ var Blueprints = []Blueprint{
 		FullAllowance: true,
 	},
 	{
-		Kind:        KindSpeaking,
-		MockID:      "mock-pte-speaking",
-		Title:       "Speaking Sectional Test",
-		Description: "All seven speaking tasks in the order of the test, each with its own preparation and recording time.",
-		Skills:      []models.SkillType{skSpeaking},
-		Slots:       speakingSlots,
+		Kind:         KindSpeaking,
+		MockID:       "mock-pte-speaking",
+		Title:        "Speaking Sectional Test",
+		Description:  "All seven speaking tasks in the order of the test, each with its own preparation and recording time.",
+		Skills:       []models.SkillType{skSpeaking},
+		Slots:        speakingSlots,
+		GradingUnits: billing.PTESpeakingMockUnits,
 	},
 	{
-		Kind:        KindWriting,
-		MockID:      "mock-pte-writing",
-		Title:       "Writing Sectional Test",
-		Description: "Summarize Written Text and Write Essay, each on its own clock.",
-		Skills:      []models.SkillType{skWriting},
-		Slots:       []Slot{{"SWT", 2}, {"WE", 1}},
+		Kind:         KindWriting,
+		MockID:       "mock-pte-writing",
+		Title:        "Writing Sectional Test",
+		Description:  "Summarize Written Text and Write Essay, each on its own clock.",
+		Skills:       []models.SkillType{skWriting},
+		Slots:        []Slot{{"SWT", 2}, {"WE", 1}},
+		GradingUnits: billing.PTEWritingMockUnits,
 	},
 	{
 		Kind:        KindReading,

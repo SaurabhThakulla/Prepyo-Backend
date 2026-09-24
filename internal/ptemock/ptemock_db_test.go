@@ -149,6 +149,18 @@ func (f fixture) seed(t *testing.T) {
 	}
 }
 
+// upgrade moves the learner onto Taiyari (pro), which affords sectional tests.
+func (f *fixture) upgrade(t *testing.T) {
+	t.Helper()
+	validUntil := time.Now().Add(30 * 24 * time.Hour)
+	if err := f.pool.QueryRow(context.Background(), `
+		UPDATE users SET plan_id = 'pro', plan_started_at = CURRENT_DATE, plan_valid_until = $2
+		 WHERE id = $1 RETURNING plan_started_at`, f.user.ID, validUntil).Scan(&f.user.PlanStartedAt); err != nil {
+		t.Fatal(err)
+	}
+	f.user.PlanID, f.user.PlanValidUntil = "pro", &validUntil
+}
+
 // answerAll answers every item in order with what answer gives it.
 func (f fixture) answerAll(t *testing.T, view View, answer func(ItemView) Answer) View {
 	t.Helper()
@@ -401,6 +413,7 @@ func TestOtherExamsCannotStart(t *testing.T) {
 func TestServerTranscribesSpokenAnswersLikeTheIELTSMock(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t)
+	f.upgrade(t)
 
 	view, err := f.svc.Start(ctx, f.user, KindSpeaking)
 	if err != nil {
@@ -451,13 +464,8 @@ func TestTranscriptionOnlyForTheSpokenItemOnScreen(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t)
 	recording := base64.StdEncoding.EncodeToString([]byte("fake"))
-	// Two sectional tests in a day take more sub-tests than the free plan has.
-	validUntil := time.Now().Add(30 * 24 * time.Hour)
-	if _, err := f.pool.Exec(ctx, `UPDATE users SET plan_id = 'pro', plan_valid_until = $2 WHERE id = $1`,
-		f.user.ID, validUntil); err != nil {
-		t.Fatal(err)
-	}
-	f.user.PlanID, f.user.PlanValidUntil = "pro", &validUntil
+	// Two sectional tests in a day take more than the free plan has.
+	f.upgrade(t)
 
 	speaking, err := f.svc.Start(ctx, f.user, KindSpeaking)
 	if err != nil {
@@ -484,5 +492,42 @@ func TestTranscriptionOnlyForTheSpokenItemOnScreen(t *testing.T) {
 	}
 	if f.ear.calls != 0 {
 		t.Fatalf("whisper calls %d, want none", f.ear.calls)
+	}
+}
+
+// A sectional test the AI marks takes its cost from the plan's AI gradings:
+// the free plan's 10 cannot pay for a Speaking test's 14; Taiyari's can.
+func TestSectionalTestsSpendAIGradings(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+
+	if _, err := f.svc.Start(ctx, f.user, KindSpeaking); !errors.Is(err, billing.ErrGradingLimitReached) {
+		t.Fatalf("a free learner starting a Speaking test: %v", err)
+	}
+
+	f.upgrade(t)
+	if _, err := f.svc.Start(ctx, f.user, KindSpeaking); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	state, err := f.billing.State(ctx, f.pool, f.user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AIGradingsUsed != float64(billing.PTESpeakingMockUnits)/billing.UnitsPerGrading {
+		t.Fatalf("a Speaking test spent %v gradings, want 14", state.AIGradingsUsed)
+	}
+	// Resuming the open test costs nothing more.
+	if _, err := f.svc.Start(ctx, f.user, KindSpeaking); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := f.billing.State(ctx, f.pool, f.user); again.AIGradingsUsed != state.AIGradingsUsed {
+		t.Fatalf("resuming spent %v more", again.AIGradingsUsed-state.AIGradingsUsed)
+	}
+	// Reading costs no gradings.
+	if _, err := f.svc.Start(ctx, f.user, KindReading); err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	if after, _ := f.billing.State(ctx, f.pool, f.user); after.AIGradingsUsed != state.AIGradingsUsed {
+		t.Fatalf("a reading test spent gradings")
 	}
 }

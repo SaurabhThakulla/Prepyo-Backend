@@ -100,6 +100,8 @@ func (h *Handler) writeError(w http.ResponseWriter, op string, err error) {
 		httpx.Error(w, http.StatusConflict, httpx.CodeConflict, "This writing mock has already been submitted.")
 	case errors.Is(err, ErrPaperClosed):
 		httpx.Error(w, http.StatusConflict, httpx.CodePaperExpired, "This writing mock is closed. Its time has run out or it has been submitted.")
+	case errors.Is(err, billing.ErrGradingLimitReached):
+		httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached, billing.GradingLimitMessage)
 	case errors.Is(err, billing.ErrLimitReached):
 		httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached,
 			fmt.Sprintf("A section mock test uses %d of your daily practice sub-tests, and you don't have enough left today. They reset tomorrow, or upgrade your plan for more.", billing.SectionMockSubTests))

@@ -309,6 +309,9 @@ func (h *Handler) writeError(w http.ResponseWriter, err error, op string, tooSho
 		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached,
 			"You have used all of today's practice sub-tests. They reset at midnight.")
 
+	case errors.Is(err, billing.ErrGradingLimitReached):
+		httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached, billing.GradingLimitMessage)
+
 	// A deadline that ran out while the provider was answering is the same
 	// thing as an unavailable provider from the learner's side: nothing was
 	// stored, and trying again is the right advice. Left to the default it

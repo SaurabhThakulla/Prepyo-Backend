@@ -191,6 +191,11 @@ func (s *Service) Start(ctx context.Context, user models.User, kind Kind) (View,
 			string(blueprint.Skills[0]), "pte-mock:"+id, billing.SectionMockSubTests); err != nil {
 			return View{}, err
 		}
+		// A sectional test the AI marks takes that cost from the grading pool.
+		if err := s.billing.RecordAIGrading(ctx, tx, user.ID, blueprint.GradingUnits,
+			"mock-pte-"+string(blueprint.Kind), id); err != nil {
+			return View{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return View{}, fmt.Errorf("commit pte mock: %w", err)
@@ -206,8 +211,15 @@ func (s *Service) checkAllowance(ctx context.Context, db database.DB, user model
 		_, err := s.billing.CheckMockAllowance(ctx, db, user)
 		return err
 	}
-	_, err := s.billing.CheckSubTestCredits(ctx, db, user, billing.SectionMockSubTests)
-	return err
+	if _, err := s.billing.CheckSubTestCredits(ctx, db, user, billing.SectionMockSubTests); err != nil {
+		return err
+	}
+	if blueprint.GradingUnits > 0 {
+		if _, err := s.billing.CheckAIGradings(ctx, db, user, blueprint.GradingUnits); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // deal chooses a paper's items: for each slot of the blueprint, questions of

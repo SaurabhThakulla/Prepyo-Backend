@@ -278,8 +278,20 @@ type SubscriptionState struct {
 	TotalMockTestsAllowed int    `json:"totalMockTestsAllowed"`
 	MockTestsUsed         int    `json:"mockTestsUsed"`
 	BonusDays             int    `json:"bonusDays"`
-	// Unlimited means none of the limits above apply; see models.Plan.
+	// Unlimited means the daily practice sub-tests are not limited; see
+	// models.Plan. Full mocks and AI gradings are always counted.
 	Unlimited bool `json:"unlimited"`
+
+	// AI gradings: speaking and writing answers the AI marks, from a pool per
+	// plan period (see billing.CheckAIGradings). Used is in gradings and may be
+	// fractional, since a word-matched Read Aloud or Repeat Sentence answer
+	// costs a fifth of one. RenewOn is the date the pool starts again.
+	AIGradingsUsed    float64 `json:"aiGradingsUsed"`
+	AIGradingsLimit   int     `json:"aiGradingsLimit"`
+	AIGradingsRenewOn string  `json:"aiGradingsRenewOn"`
+	// AIGradingsPeriod is how often the pool renews: "day", "plan" or "month".
+	AIGradingsPeriod   string `json:"aiGradingsPeriod"`
+	AIGradingUnitsUsed int    `json:"-"`
 }
 
 type Plan struct {
@@ -301,8 +313,16 @@ type Plan struct {
 	MockTestsIncluded int  `json:"mockTestsIncluded"`
 	IsPopular         bool `json:"isPopular"`
 
-	// Unlimited plans have no daily sub-test, mock or tutor allowance; the
-	// numeric limits above are then not enforced and not shown.
+	// AIGradingsPerPeriod is how many speaking and writing answers the AI may
+	// mark in one AIGradingsPeriod.
+	AIGradingsPerPeriod int `json:"aiGradingsPerPeriod"`
+	// AIGradingsPeriod is how often that pool renews: "day" (the learner's
+	// midnight), "plan" (each paid plan term) or "month" (the 1st).
+	AIGradingsPeriod string `json:"aiGradingsPeriod"`
+
+	// Unlimited plans have no daily sub-test or tutor allowance; those limits
+	// are then not enforced and not shown. Full mocks and AI gradings are
+	// counted on every plan.
 	Unlimited bool `json:"unlimited"`
 }
 
