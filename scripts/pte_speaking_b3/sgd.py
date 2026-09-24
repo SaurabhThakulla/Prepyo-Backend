@@ -1,0 +1,441 @@
+"""50 Original Summarise Group Discussion (SGD) items for PTE Speaking Batch 3.
+
+Constraints:
+  - 3 labelled speakers (Alex, Blair, Casey)
+  - Rule 8: turns start with Capitalized speaker label + colon at start of turn.
+    No other 'Word:' patterns anywhere else after a full stop.
+  - prep_time_seconds: 10, time_limit_seconds: 120
+  - model_answer: covers proposal, objection, compromise, and consensus
+  - explanation: key views and resolution
+"""
+
+SGD_DATA = [
+    (
+        "Campus Cycle Service Pod",
+        "I propose we install a self-service bicycle repair station near the central library with basic tools and an air pump.",
+        "Tools left outside might get stolen or damaged by rain, and students might not know how to use them properly.",
+        "We could mount weather-resistant tools on steel security cables under the existing covered bike shed and add a QR code linking to video tutorials.",
+        "That would protect the equipment from weather and prevent theft while keeping it accessible around the clock.",
+        "Let us submit a proposal to the campus facilities committee with a budget estimate for the covered shed installation.",
+    ),
+    (
+        "A second-hand furniture exchange",
+        "At the end of every year, students throw away desks, lamps and chairs that are still in good condition, so I think we should run a free furniture exchange in the sports hall.",
+        "The sports hall is booked for exams in June, and storing furniture over the summer would need space we simply don't have.",
+        "What if we held the exchange for just two days in the first week of September, when new students are arriving and looking for furniture?",
+        "That works, because we would only need a room for two days and the furniture could go straight to new students.",
+        "Let's ask the accommodation office to collect donations in the halls and book a room for the first week of term.",
+    ),
+    (
+        "Student Society Web Portal Upgrade",
+        "Our student union website looks outdated, so we should hire an external agency to rebuild the entire platform from scratch.",
+        "External web design agencies charge thousands of dollars that our annual student union budget simply cannot afford.",
+        "We have dozens of talented computer science students who could redesign the frontend as a paid semester capstone project.",
+        "That keeps the costs within our modest budget while providing valuable portfolio experience for our own students.",
+        "I will reach out to the computer science department chair to ask about sponsoring a student project team.",
+    ),
+    (
+        "Dining Hall Organic Waste Sorting",
+        "We ought to place organic compost collection bins next to every waste bin across all campus dining halls.",
+        "Without proper oversight, students will contaminate compost bins with non-biodegradable plastic packaging and cutlery.",
+        "We could start with a two-week pilot program in the main student cafeteria with student eco-reps standing by to guide disposal.",
+        "A supervised pilot would allow us to evaluate contamination rates and educate diners before expanding campus-wide.",
+        "I will coordinate with the dining hall manager to schedule the pilot launch for the start of next month.",
+    ),
+    (
+        "Field Trip Rail Transit Option",
+        "We should charter two luxury coach buses to transport our sixty environmental science students to the coastal wetland reserve.",
+        "Chartering private coach buses will deplete nearly half of our departmental field excursion fund for the semester.",
+        "We could take the regional commuter rail directly to the coastal junction and walk the remaining kilometer along the nature trail.",
+        "Group rail tickets offer a substantial student discount and walking the trail allows us to begin ecological observations earlier.",
+        "I will book the group rail passes this afternoon and email the updated itinerary to all enrolled students.",
+    ),
+    (
+        "Textbook Exchange Peer System",
+        "Let us create a physical textbook drop-off shelves in the student center where students can freely swap course books.",
+        "Unmonitored shelves will quickly become cluttered with obsolete editions and damaged paperbacks that nobody wants.",
+        "We could launch a moderated digital marketplace on our campus app where students list current editions and arrange direct handoffs.",
+        "A digital exchange prevents physical clutter and ensures that listed books match currently required course syllabi.",
+        "I will contact the campus app developer to see if they can enable a peer-to-peer textbook exchange tab.",
+    ),
+    (
+        "Peer Tutoring Schedule Model",
+        "I suggest that peer math tutors hold walk-in drop-in clinics five afternoons a week in the science lobby.",
+        "Walk-in sessions often result in long chaotic queues right before midterm exams while remaining completely empty during regular weeks.",
+        "We could offer thirty-minute advance bookings online through the tutoring portal while reserving the final hour of each day for walk-ins.",
+        "A hybrid booking system would balance tutor workloads evenly while still accommodating urgent last-minute questions.",
+        "I will update the tutoring scheduling software to test this hybrid model starting next Monday.",
+    ),
+    (
+        "Science Exhibition Stall Setup",
+        "We should invest our remaining grant funds into an expensive interactive digital touchscreen display for our science fair booth.",
+        "Touchscreens are vulnerable to software glitches and outdoor glare, and they consume electricity our assigned outdoor stall lacks.",
+        "We could build hands-on physical demonstration models using water pumps and sediment trays, accompanied by printed informational banners.",
+        "Physical interactive models are far more engaging for visiting high school students and require zero electrical hookups.",
+        "Let us draw up material lists for the sediment trays and purchase supplies from the university hardware store.",
+    ),
+    (
+        "Allowing pets in student housing",
+        "The university should allow students living in the halls to keep small pets such as fish or hamsters, because pets can help with loneliness.",
+        "Some students have allergies, and animals left alone during the holidays could suffer or damage the rooms.",
+        "We could run a trial in one building, allowing only small caged animals and fish, and require owners to arrange care for the holidays.",
+        "A trial in one building would show whether the rules actually work before anything changes for everyone.",
+        "Let's survey residents about allergies first and then present the trial plan to the accommodation office.",
+    ),
+    (
+        "First-aid training for club leaders",
+        "Every sports club and society on campus should have at least two committee members trained in first aid before the start of each term.",
+        "The full first-aid course costs money and takes two whole days, which many volunteers won't be able to give up.",
+        "The union could pay for the training, and small clubs with few physical activities could take the shorter half-day course instead.",
+        "That seems fair, since the risk is much higher for the climbing club than for the chess society.",
+        "Let's draft a proposal for the union budget meeting and ask the health centre which courses they can run on campus.",
+    ),
+    (
+        "Student Gallery Artwork Display",
+        "We should convert the unused basement storage room into a permanent contemporary gallery for student fine art submissions.",
+        "The basement has poor ventilation, low ceilings, and minimal foot traffic, meaning very few visitors would ever see the artwork.",
+        "Why not install professional hanging rails and spotlight fixtures along the sunlit corridors of the humanities building atrium?",
+        "The atrium corridor receives hundreds of passing students and faculty daily, giving student artists maximum visibility.",
+        "I will seek permission from the humanities department administrator to install hanging rails in the atrium.",
+    ),
+    (
+        "Research Presentation Rehearsal Timing",
+        "Our symposium research team should rehearse the full slide presentation three times consecutively this evening.",
+        "Running three full rehearsals in one evening will exhaust our presenters and leave no time to fix slide graphics.",
+        "We should conduct one uninterrupted run-through tonight to check timing, compile constructive feedback, and do a final polish tomorrow.",
+        "That allows us to pinpoint timing bottlenecks tonight without burning out before tomorrow's conference.",
+        "Let us start our single timed rehearsal right now and take detailed notes on each transition.",
+    ),
+    (
+        "Laptop Loan Fleet Configuration",
+        "The university library should purchase one hundred high-end gaming laptops so students can borrow them for heavy computing tasks.",
+        "Gaming laptops are heavy, expensive to insure, and have very short battery lives that make them impractical for class lectures.",
+        "We could purchase lightweight ultrabooks with strong battery life and provide remote access credentials to the high-performance campus computing cluster.",
+        "Cloud cluster access provides all the necessary computational power while keeping portable loan laptops affordable and lightweight.",
+        "I will submit a proposal to the library technology committee recommending cluster-connected ultrabooks.",
+    ),
+    (
+        "Campus Evening Minivan Service",
+        "We should petition the transit office to run the student campus shuttle continuously every ten minutes throughout the night.",
+        "Running empty full-sized diesel buses all night long would incur excessive fuel costs and cause unnecessary noise pollution.",
+        "The transit office could operate an on-demand minivan service between midnight and dawn requested through the campus safety app.",
+        "On-demand evening vans would guarantee safe transit for late-night lab workers while saving substantial operational expenses.",
+        "I will write to the campus transit director proposing an on-demand evening shuttle trial.",
+    ),
+    (
+        "Student Garden Plot Lottery",
+        "We should allocate community garden plots on a first-come first-served basis starting at midnight on registration day.",
+        "Midnight sign-ups disadvantage students without reliable internet access and favour those who can stay awake late.",
+        "We could run a weighted lottery giving priority to students living in dormitories without balconies or private green space.",
+        "A lottery ensures fair access for all applicants while prioritizing urban students who have no other gardening options.",
+        "I will configure the online registration portal to run the weighted plot lottery next week.",
+    ),
+    (
+        "Cinema Club Projector Rental",
+        "The film society should purchase a commercial theatrical projector to screen outdoor movies on the campus quadrangle lawn.",
+        "Commercial outdoor cinema projectors cost thousands of dollars and we only hold outdoor screenings three times during the autumn term.",
+        "We could rent high-lumen outdoor projection gear for those three specific event evenings and invest saved funds into film licensing.",
+        "Renting equipment avoids depreciation and maintenance overhead while freeing funds to acquire higher quality classic film rights.",
+        "I will request rental quotes from local audiovisual suppliers and present the numbers at our society meeting.",
+    ),
+    (
+        "Engineering Indoor Drone Session",
+        "We should organize an open quadcopter drone racing tournament across the main campus lawn this weekend.",
+        "High-speed drones flying over open pedestrian walkways pose significant safety hazards to passing students and violate campus airspace rules.",
+        "We could reserve the indoor basketball gymnasium on Sunday morning and set up soft foam obstacle rings for a controlled workshop.",
+        "The enclosed sports hall guarantees a wind-free environment, prevents stray flyaways, and keeps spectators completely safe.",
+        "I will speak to the athletic director today to book the indoor gymnasium for our drone session.",
+    ),
+    (
+        "Orientation Cohort Walking Groups",
+        "Let us conduct our two-hour orientation walking tours with large groups of fifty incoming first-year students.",
+        "Groups of fifty are too unwieldy; students at the back will struggle to hear the guide and will block crowded hallway corridors.",
+        "We could recruit twelve senior student volunteers to lead smaller cohorts of twelve freshmen on staggered thirty-minute loops.",
+        "Smaller cohorts allow for personalized questions, easier navigation through laboratory facilities, and better group bonding.",
+        "I will post a volunteer recruitment notice for tour guides on the student leadership forum.",
+    ),
+    (
+        "Study Abroad Booth Fair",
+        "We should invite thirty foreign university exchange representatives to speak in a single continuous five-hour auditorium lecture.",
+        "A five-hour continuous lecture will overwhelm attendees with information and cause severe audience fatigue.",
+        "We could host a two-hour interactive exhibition fair where representatives staff individual information tables and answer questions directly.",
+        "An exhibition table format allows prospective exchange students to target universities relevant to their specific majors.",
+        "I will reserve the multi-purpose student hall and send table registration forms to partner universities.",
+    ),
+    (
+        "Coursework Synthesis Section Division",
+        "I think one person should write the entire twenty-page literature review so the writing style remains completely uniform.",
+        "Assigning the entire literature review to one team member creates an unfair workload imbalance and risks missing the deadline.",
+        "We could divide the review into four thematic sub-sections and designate one editor to harmonize voice, tone, and transitions.",
+        "Splitting the research ensures equitable workload distribution while the designated editor ensures consistent stylistic flow.",
+        "Let us assign the thematic sub-sections right now and agree on shared citation guidelines.",
+    ),
+    (
+        "Acoustic Study Carrel Retrofit",
+        "We should install four soundproof acoustic pods in the student lounge for students taking private remote job interviews.",
+        "Acoustic phone pods are very expensive to purchase and will reduce open seating space needed for everyday socialization.",
+        "The university could repurpose three underutilized study carrels on the library mezzanine into reservable interview booths.",
+        "The library mezzanine is already quiet and retrofitting existing carrels with privacy acoustic screens is very economical.",
+        "I will draft a formal request to the head of library facilities to pilot acoustic privacy screens.",
+    ),
+    (
+        "Greenhouse Diurnal Thermostat Program",
+        "We should keep the botanical research greenhouse heated to twenty-five degrees Celsius continuously throughout the entire winter.",
+        "Continuous high heating will result in exorbitant energy bills and fails to replicate natural diurnal temperature fluctuations.",
+        "We could program automated thermostats to maintain twenty-two degrees during daytime hours and drop to sixteen degrees overnight.",
+        "A nighttime temperature drop mirrors natural ecological rhythms, improves plant stem rigidity, and reduces natural gas consumption.",
+        "I will calibrate the digital greenhouse heating controller to follow the diurnal schedule.",
+    ),
+    (
+        "Robotics Component Procurement Strategy",
+        "We should order all our competition robotic motors and sensors from an overseas supplier offering fifty percent discounts.",
+        "Overseas maritime shipping takes six to eight weeks and customs delays could cause us to miss our national competition registration.",
+        "We could order critical microcontrollers and core motors from a local domestic supplier and order secondary aesthetic brackets from overseas.",
+        "Splitting the order ensures we can begin core chassis assembly immediately without jeopardizing competition deadlines.",
+        "I will place the domestic order for motors today and arrange the bracket shipment right afterward.",
+    ),
+    (
+        "Starting a campus choir",
+        "I'd like the music society to start a campus choir that anyone can join, with no audition, meeting every Wednesday evening.",
+        "Without auditions, the standard might be too mixed, and people who can already sing well could become frustrated and leave.",
+        "We could have one open choir for everyone and a smaller group that performs at events, which people could try out for later in the year.",
+        "Good, that keeps the choir welcoming while still giving experienced singers a challenge.",
+        "Let's put up posters for a first open session next month and ask one of the music lecturers to lead it.",
+    ),
+    (
+        "Discipline Specific Resume Clinic",
+        "We should require all graduating seniors to attend a mandatory four-hour resume formatting lecture in the main hall.",
+        "Mandatory general lectures are poorly attended and generic resume advice often fails to address industry-specific technical requirements.",
+        "We could offer thirty-minute discipline-specific peer review clinics organized by engineering, humanities, and business student societies.",
+        "Tailored industry clinics provide actionable feedback relevant to specific employer expectations and portfolio standards.",
+        "I will coordinate with the departmental student societies to schedule their individual resume clinics.",
+    ),
+    (
+        "A student cookery class",
+        "Lots of first-year students live on instant noodles, so I think the union should run a weekly cookery class teaching simple, cheap meals.",
+        "The kitchens in the halls are tiny, and there would be safety problems with twenty people cooking at once.",
+        "The catering department's training kitchen is empty on Sunday afternoons, and students could pay a small fee to cover the ingredients.",
+        "That solves the space problem, and a small fee means people are more likely to actually turn up.",
+        "Let's ask the catering manager about using the kitchen and find a student volunteer who can teach the first session.",
+    ),
+    (
+        "Student Media Podcast Production",
+        "The student radio station should broadcast daily live three-hour political debate panels covering global international affairs.",
+        "Producing a daily three-hour live broadcast requires immense research time that full-time student volunteers cannot sustain.",
+        "We could produce a weekly forty-minute recorded podcast focusing on campus research discoveries and student community initiatives.",
+        "A weekly recorded podcast allows for polished audio editing, consistent quality, and manageable volunteer commitment.",
+        "I will draft a production schedule for a weekly podcast pilot and pitch it to the station manager.",
+    ),
+    (
+        "Solar Bench Pilot Installation",
+        "We should replace every standard wooden bench on the central campus quad with solar-powered device charging benches.",
+        "Solar charging benches are costly to install and cloudy winter weather will render their integrated USB ports useless for months.",
+        "We could install three solar benches outside the student cafeteria where sunlight is optimal, and evaluate usage before expanding.",
+        "A focused three-bench installation lets us measure student demand and battery performance without overcommitting capital.",
+        "I will contact the green campus fund to apply for a small grant covering the three pilot benches.",
+    ),
+    (
+        "Moot Court Tournament Hosting",
+        "We should book the downtown municipal convention center auditorium to host our regional inter-university debate tournament.",
+        "The convention center requires expensive commercial insurance, high deposit fees, and involves inconvenient transit for visiting teams.",
+        "We can host the preliminary debates across law school seminar rooms and book the law moot court for the grand final.",
+        "Utilizing campus law classrooms is free of charge, fully equipped with podiums, and easily accessible from student dorms.",
+        "I will confirm room reservations with the law faculty administrator by the end of the week.",
+    ),
+    (
+        "Laboratory Protocol Poster Competition",
+        "We should mandate that all second-year chemistry students design and submit a laboratory safety poster for graded course credit.",
+        "Making artistic poster creation mandatory and graded may provoke resentment from students who struggle with visual graphic design.",
+        "We could turn it into an optional voluntary competition offering bookstore vouchers and laboratory supply prizes for the top three posters.",
+        "A prize competition will motivate creative entries organically while keeping coursework assessments focused strictly on chemical science.",
+        "I will announce the voluntary safety poster contest on the chemistry department noticeboard tomorrow.",
+    ),
+    (
+        "Amphitheater Screening Arrangement",
+        "Let us host our annual student society outdoor movie night on the open athletic sports turf field.",
+        "Heavy projector equipment, chairs, and hundreds of students will damage the delicate synthetic turf, causing hefty athletic fines.",
+        "We could set up the inflatable projector screen on the concrete amphitheater behind the arts building where stepped seating already exists.",
+        "The concrete amphitheater provides natural tiered seating, eliminates equipment damage, and has direct outdoor power outlets.",
+        "I will inspect the amphitheater power outlets tomorrow and reserve the outdoor space with campus scheduling.",
+    ),
+    (
+        "Language Partner Intake Matching",
+        "We should pair domestic and international language exchange partners randomly using an automated spreadsheet algorithm.",
+        "Purely random pairings often result in mismatched schedules, conflicting fluency levels, and partners who share zero academic interests.",
+        "We could administer a brief intake questionnaire matching students by target language, preferred meeting times, and mutual hobbies.",
+        "Matching shared interests and compatible weekly availability dramatically improves long-term language partnership retention.",
+        "I will create a Google Form questionnaire and distribute it to all foreign language department classes.",
+    ),
+    (
+        "A free printing allowance",
+        "Every student should get a free allowance of two hundred printed pages each term, because printing costs add up quickly.",
+        "If printing is free, people may print far more than they need, which wastes paper and money.",
+        "We could make the allowance smaller, say one hundred pages, and encourage lecturers to share notes online so there is less need to print.",
+        "That balances the cost for students with the need to reduce waste.",
+        "Let's ask the IT office how much the allowance would cost and put the idea to the student council.",
+    ),
+    (
+        "Open Source Indoor Navigation Mapping",
+        "We should hire a commercial software development firm to build a bespoke mobile indoor navigation app for our campus.",
+        "Proprietary navigation software requires continuous licensing fees and frequent expensive maintenance contracts whenever room layouts change.",
+        "We could collaborate with the student open-source mapping club to digitize building floor plans directly into OpenStreetMap.",
+        "OpenStreetMap is free, open-source, and allows student volunteers to update room numbers and accessibility ramps instantly.",
+        "I will schedule a meeting with the campus mapping club president to discuss mapping indoor corridors.",
+    ),
+    (
+        "Campus Flora Inventory BioBlitz",
+        "The biology department should hire private environmental ecological consultants to conduct an exhaustive botanical audit of campus trees.",
+        "Hiring private environmental consultants will cost tens of thousands of dollars that could be better spent on student research scholarships.",
+        "We could organize a weekend BioBlitz where biology students and amateur naturalist volunteers catalog species using mobile identification apps.",
+        "A citizen science BioBlitz engages the student community, provides field taxonomy experience, and generates comprehensive biodiversity records for free.",
+        "I will coordinate with the ecology professors to schedule the BioBlitz for the upcoming Earth Day weekend.",
+    ),
+    (
+        "Student Gazette Digital Format",
+        "We should double our monthly print run of the student newspaper to four thousand physical paper copies.",
+        "Most printed student newspapers end up unread in recycling bins because students overwhelmingly read news articles on mobile phones.",
+        "We should maintain a modest print run of eight hundred commemorative copies and invest our budget into a modern digital mobile newsletter.",
+        "Prioritizing the digital newsletter expands readership dramatically while reducing paper waste and printing expenditures.",
+        "I will present the digital newsletter strategy at the editorial board meeting this Thursday.",
+    ),
+    (
+        "Maker Space Print Job Scheduling",
+        "Students should be allowed to run twenty-four-hour continuous 3D prints on maker space printers without prior staff approval.",
+        "Unsupervised overnight prints frequently fail, wasting kilograms of filament and creating acute thermal fire hazards in the workshop.",
+        "We should require all print jobs exceeding four hours to be vetted by a workshop technician and scheduled during supervised operational hours.",
+        "Technician review ensures slicing settings are correct, avoids nozzle clogs, and guarantees workshop safety.",
+        "I will update the maker space printing safety protocols and post the new guidelines next to the printers.",
+    ),
+    (
+        "Student Wellness Activity Roster",
+        "We should mandate that all academic faculty cancel their Friday afternoon classes so all students attend a mental wellness lecture.",
+        "Canceling mandatory laboratory and lecture classes disrupts course accreditation requirements and will face strong faculty resistance.",
+        "We could host a series of thirty-minute wellness drop-in sessions, meditation workshops, and therapy dog visits in the student union throughout the week.",
+        "Offering diverse, flexible wellness activities throughout the week enables students to participate without missing scheduled academic classes.",
+        "I will contact certified therapy dog organizations and book the student union multipurpose rooms for the wellness week.",
+    ),
+    (
+        "Engineering Atrium Poster Panels",
+        "We should rent the downtown exhibition center hall to display eighty graduate research posters during the annual symposium.",
+        "Paying commercial hall rental fees is an unnecessary expense when university campus spaces can easily accommodate our symposium.",
+        "We could set up modular poster display boards along the natural lighting atrium of the new engineering complex.",
+        "The engineering atrium provides a modern, spacious backdrop with high foot traffic from visiting researchers and faculty.",
+        "I will submit a facility reservation request for the engineering atrium display boards.",
+    ),
+    (
+        "Feline Welfare Managed Shelters",
+        "The student council should purchase feeding bowls and distribute food for stray campus cats across all academic lawns.",
+        "Scattering feeding stations haphazardly attracts raccoons, rodents, and insects, creating sanitary problems near classroom doors.",
+        "We should partner with a local veterinary charity to set up a managed trap-neuter-vaccinate-return program with designated shelter stations.",
+        "A formal veterinary partnership humanely stabilizes the stray animal population while keeping feeding areas hygienic and controlled.",
+        "I will reach out to the municipal animal shelter to draft a humane management agreement for the campus.",
+    ),
+    (
+        "Intramural Gear Keypad Access",
+        "We should leave the athletic equipment shed unlocked during the day so any student can borrow soccer balls and cones freely.",
+        "Leaving the shed unlocked has previously led to stolen gear, damaged equipment, and sports teams finding no balls for scheduled matches.",
+        "We can install an electronic keypad lock and issue student ID access cards tied to an online check-out log system.",
+        "Electronic access holds borrowers accountable for returning items while allowing convenient access for registered club members.",
+        "I will ask campus security to install a card reader on the athletic equipment shed door.",
+    ),
+    (
+        "Observatory Meadow Telescope Night",
+        "We should organize our public stargazing telescope night on the rooftop terrace of the administration tower.",
+        "The administration tower terrace lacks protective high safety railings and has bright decorative architectural spotlights that cause severe light pollution.",
+        "We could hold the event at the university observatory meadow on the western edge of campus where ambient lighting is shielded.",
+        "The observatory meadow offers unobstructed dark sky horizons, soft grass for spectators, and meets all campus safety guidelines.",
+        "I will confirm the observatory meadow booking with the astronomy department director.",
+    ),
+    (
+        "Artisan Market Table Registration",
+        "We should charge student artisans a fifty-dollar registration fee to set up craft stalls at the annual spring carnival.",
+        "A fifty-dollar fee is too prohibitive for student hobbyists selling handmade stickers, ceramics, or knitted scarves.",
+        "We could charge a nominal ten-dollar table fee or take a five percent voluntary contribution from stalls that generate over one hundred dollars.",
+        "A low entry fee encourages wide student participation while still covering the minor costs of renting market tables.",
+        "I will revise the artisan registration form to reflect the ten-dollar table reservation fee.",
+    ),
+    (
+        "Midday Commons Candidate Debate",
+        "We should hold the presidential election debate in the campus amphitheater at eight o'clock on a Friday evening.",
+        "Friday evening attendance will be extremely low as most commuting students leave campus by five in the afternoon.",
+        "We should host the debate during the universal free hour on Wednesday at noon in the central dining commons.",
+        "Holding the debate during lunchtime ensures a large, diverse audience of eating students who can engage directly with candidates.",
+        "I will book the dining commons stage and test the wireless microphones for Wednesday noon.",
+    ),
+    (
+        "Hydrological Sampling Transect Plan",
+        "Our environmental research team should collect water samples from fifty different points along the river in a single day.",
+        "Sampling fifty points across twenty miles in one day will result in rushed handling, contaminated samples, and team exhaustion.",
+        "We should select fifteen representative hydrological transects and conduct rigorous multi-depth sampling over a three-day weekend.",
+        "A focused three-day sampling strategy guarantees meticulous sample preservation, sterile controls, and higher data integrity.",
+        "I will map out the fifteen hydrological transects and prepare sterile glass sample containers.",
+    ),
+    (
+        "Indigenous Woodland Sapling Sourcing",
+        "We should plant five hundred fast-growing non-native eucalyptus saplings across the university nature conservation zone.",
+        "Non-native eucalyptus trees consume massive amounts of groundwater, acidify topsoil, and increase wild brushfire hazards.",
+        "We should source native oak, birch, and hazel saplings from a local conservation nursery to restore indigenous woodland biodiversity.",
+        "Planting native deciduous species supports indigenous pollinators, enhances soil fungal networks, and creates resilient natural habitats.",
+        "I will contact the provincial forestry service to order three hundred native saplings for our planting drive.",
+    ),
+    (
+        "Alumni Tech Venture Sponsorship",
+        "We should email generic sponsorship solicitations to five hundred technology companies found on public web directories.",
+        "Sending hundreds of generic mass emails will be flagged as spam and yields virtually zero response from corporate recruiters.",
+        "We should craft personalized sponsorship proposals targeting thirty regional tech firms and alumni-founded startups that actively recruit on campus.",
+        "Targeting alumni and active campus recruiters builds meaningful relationships and yields much higher financial and mentorship commitments.",
+        "I will compile a shortlist of thirty alumni-led tech companies and customize our sponsorship proposal deck.",
+    ),
+    (
+        "Security Centralized Lost Item Log",
+        "Every academic department should maintain its own independent cardboard box for lost items in their main office.",
+        "Decentralized cardboard boxes make it nearly impossible for students to locate lost keys or electronics across thirty campus buildings.",
+        "We should establish a centralized lost and found desk at the campus security headquarters with an online photo inventory database.",
+        "A centralized digital inventory allows students to search for lost belongings online and verify ownership before claiming them.",
+        "I will coordinate with campus security to launch the searchable lost-and-found web portal.",
+    ),
+    (
+        "Glass Pavilion Society Reception",
+        "We should rent a luxury downtown hotel banquet hall for our end-of-term student society gala dinner.",
+        "Hotel banquet halls require high ticket prices of over sixty dollars per student, excluding many members with limited budgets.",
+        "We can host the gala in the renovated student union glass pavilion with catered hot finger food and student musical performances.",
+        "Using the campus pavilion keeps ticket prices under fifteen dollars, ensuring that all society members can celebrate together.",
+        "I will place a reservation on the student union glass pavilion and contact student catering services.",
+    ),
+    (
+        "Undergraduate Manuscript Formatting",
+        "We should require all undergraduate journal authors to submit manuscripts exclusively in LaTeX formatting.",
+        "Most humanities and social science undergraduates have never used LaTeX and will be discouraged from submitting their papers.",
+        "We could accept initial submissions in standard word processor documents and have our layout editors convert accepted papers into LaTeX.",
+        "Accepting standard word documents removes technical barriers for authors while preserving high publishing standards.",
+        "I will update the author submission guidelines on the journal website to reflect the flexible format policy.",
+    ),
+]
+
+assert len(SGD_DATA) == 50
+
+SGD_ITEMS = []
+for title, *turns in SGD_DATA:
+    speakers = ["Alex", "Blair", "Casey", "Blair", "Alex"]
+    transcript = " ".join(f"{s}: {t}" for s, t in zip(speakers, turns))
+
+    model = (
+        f"Alex proposes: {turns[0]} "
+        f"Blair raises a concern: {turns[1]} "
+        f"Casey suggests a compromise: {turns[2]} "
+        f"The agreed next step is: {turns[4]}"
+    )
+
+    explanation = (
+        f"Include Alex's initial proposal, "
+        f"Blair's practical objection, Casey's compromise solution, and the agreed next step."
+    )
+
+    SGD_ITEMS.append({
+        "title": title,
+        "audio_transcript": transcript,
+        "model_answer": model,
+        "explanation": explanation,
+    })
+
+assert len(SGD_ITEMS) == 50
