@@ -3,6 +3,7 @@ package writingmock
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,12 +15,16 @@ import (
 )
 
 // fixedEvaluator rates each task with a set band and records what it was given.
+// Submit rates the two tasks at once, so the record is guarded.
 type fixedEvaluator struct {
+	mu    sync.Mutex
 	bands map[string]float64
 	texts map[string]string
 }
 
 func (f *fixedEvaluator) EvaluateMockTask(_ context.Context, _ models.User, q models.Question, text, _ string) (models.Evaluation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.texts[q.TypeID] = text
 	band := f.bands["task2"]
 	if q.TypeID != "" && (q.TypeID == "ielts-writing-task1-figure" || q.TypeID == "ielts-writing-task1-letter") {

@@ -124,3 +124,66 @@ func TestCatalogCountsScoringAsCompleted(t *testing.T) {
 		t.Fatalf("a paper being scored: %+v", cat)
 	}
 }
+
+// A Listening test or Speaking set added after launch becomes a numbered
+// test, once, however often the builder runs.
+func TestNewFixedTestsBecomeNumberedTests(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	repo := NewRepository(pool)
+	b := NewBuilder(pool, repo, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	testID, setID := "lt-regtest-"+suffix, "sm-regtest-"+suffix
+
+	if _, err := pool.Exec(ctx, `INSERT INTO listening_tests (id, exam_version_id, title) VALUES ($1, 'ielts-2026-01', 'Registration test')`, testID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO speaking_mock_sets (id, title, content) VALUES ($1, 'Registration set', '{}'::jsonb)`, setID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `UPDATE mock_papers SET status = 'retired', retired_at = now()
+			WHERE status = 'published' AND (content->>'testId' = $1 OR content->>'setId' = $2)`, testID, setID)
+		_, _ = pool.Exec(ctx, `DELETE FROM listening_tests WHERE id = $1`, testID)
+		_, _ = pool.Exec(ctx, `DELETE FROM speaking_mock_sets WHERE id = $1`, setID)
+	})
+
+	for _, tc := range []struct{ section, key, id, title string }{
+		{SectionListening, "testId", testID, "Registration test"},
+		{SectionSpeaking, "setId", setID, "Registration set"},
+	} {
+		scope := Scope{Exam: ExamIELTS, Section: tc.section, Module: ModuleAny}
+		before, err := repo.ListPublished(ctx, ExamIELTS, tc.section, ModuleAny)
+		if err != nil {
+			t.Fatal(err)
+		}
+		highestBefore := 0
+		for _, p := range before {
+			if p.Number > highestBefore {
+				highestBefore = p.Number
+			}
+		}
+		for run := 0; run < 2; run++ {
+			if err := b.BuildScope(ctx, scope, DefaultTargetPapers); err != nil {
+				t.Fatalf("%s build %d: %v", tc.section, run+1, err)
+			}
+		}
+		list, err := repo.ListPublished(ctx, ExamIELTS, tc.section, ModuleAny)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found []MockPaper
+		for _, p := range list {
+			var c map[string]string
+			_ = json.Unmarshal(p.Content, &c)
+			if c[tc.key] == tc.id {
+				found = append(found, p)
+			}
+		}
+		// Other unnumbered tests in the database are numbered in the same run,
+		// so the new one is not always last, but its number is always new.
+		if len(found) != 1 || found[0].Title != tc.title || found[0].Number <= highestBefore {
+			t.Fatalf("%s: registered %+v, want one paper titled %q numbered after %d", tc.section, found, tc.title, highestBefore)
+		}
+	}
+}

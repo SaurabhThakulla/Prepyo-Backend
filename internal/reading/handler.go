@@ -33,6 +33,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/passages/{passageID}", h.getPassage)
 
 	r.Post("/practice", h.practice)
+	r.Get("/practice/passages", h.practicePassages)
 
 	r.Route("/mocks", func(m chi.Router) {
 		m.Get("/", h.listSessions)
@@ -166,6 +167,8 @@ type practiceRequest struct {
 	TypeID  string   `json:"typeId"`
 	TypeIDs []string `json:"typeIds,omitempty"`
 	Limit   int      `json:"limit,omitempty"`
+	// PassageID is a passage chosen from the practice list.
+	PassageID string `json:"passageId,omitempty"`
 }
 
 // practice deals one task set of the chosen type.
@@ -191,10 +194,11 @@ func (h *Handler) practice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	set, err := h.svc.PracticeSet(r.Context(), user, PracticeParams{
-		Exam:    exam,
-		TypeID:  req.TypeID,
-		TypeIDs: req.TypeIDs,
-		Limit:   req.Limit,
+		Exam:      exam,
+		TypeID:    req.TypeID,
+		TypeIDs:   req.TypeIDs,
+		Limit:     req.Limit,
+		PassageID: strings.TrimSpace(req.PassageID),
 	})
 	if err != nil {
 		if errors.Is(err, ErrNoPassage) {
@@ -207,6 +211,35 @@ func (h *Handler) practice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, http.StatusOK, map[string]any{"set": set})
+}
+
+// practicePassages lists the passages the learner can practise a task type
+// on: ?typeId= once for each type of the family, as practice deals them.
+func (h *Handler) practicePassages(w http.ResponseWriter, r *http.Request) {
+	user := reqctx.MustUser(r.Context())
+	query := r.URL.Query()
+	exam, ok := examFor(query.Get("exam"), user)
+	if !ok {
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE or IELTS.")
+		return
+	}
+	typeIDs := []string{}
+	for _, id := range query["typeId"] {
+		if id = strings.TrimSpace(id); id != "" {
+			typeIDs = append(typeIDs, id)
+		}
+	}
+	if len(typeIDs) == 0 {
+		httpx.ValidationError(w, map[string]string{"typeId": "Choose a task type."})
+		return
+	}
+
+	list, err := h.svc.PracticePassages(r.Context(), user, exam, typeIDs)
+	if err != nil {
+		httpx.Internal(w, h.log, "reading.practicePassages", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"passages": list})
 }
 
 type startMockRequest struct {

@@ -76,6 +76,8 @@ func (b *Builder) QueueAll() {
 		{Exam: ExamIELTS, Section: SectionWriting, Module: ModuleGeneralTraining},
 		{Exam: ExamIELTS, Section: SectionReading, Module: ModuleAcademic},
 		{Exam: ExamIELTS, Section: SectionReading, Module: ModuleGeneralTraining},
+		{Exam: ExamIELTS, Section: SectionListening, Module: ModuleAny},
+		{Exam: ExamIELTS, Section: SectionSpeaking, Module: ModuleAny},
 		{Exam: ExamPTE, Section: SectionSpeaking, Module: ModuleAny},
 		{Exam: ExamPTE, Section: SectionWriting, Module: ModuleAny},
 		{Exam: ExamPTE, Section: SectionReading, Module: ModuleAny},
@@ -166,6 +168,12 @@ func (b *Builder) BuildScope(ctx context.Context, scope Scope, targetCount int) 
 		_, _ = conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", lKey)
 	}()
 
+	// IELTS Listening tests and Speaking sets are written whole, not composed:
+	// each published one is a numbered test, however many there are.
+	if scope.Exam == ExamIELTS && (scope.Section == SectionListening || scope.Section == SectionSpeaking) {
+		return b.registerFixed(ctx, scope)
+	}
+
 	existing, err := b.repo.ListPublished(ctx, scope.Exam, scope.Section, scope.Module)
 	if err != nil {
 		return fmt.Errorf("list existing: %w", err)
@@ -188,6 +196,65 @@ func (b *Builder) BuildScope(ctx context.Context, scope Scope, targetCount int) 
 		existing = append(existing, published)
 	}
 
+	return nil
+}
+
+// registerFixed publishes a numbered test for every published IELTS Listening
+// test or Speaking set that has none yet, oldest first, so a test added later
+// takes the next number.
+func (b *Builder) registerFixed(ctx context.Context, scope Scope) error {
+	var query, key string
+	switch scope.Section {
+	case SectionListening:
+		key = "testId"
+		query = `SELECT t.id, t.title FROM listening_tests t
+			WHERE t.is_published
+			  AND NOT EXISTS (SELECT 1 FROM mock_papers mp
+			                   WHERE mp.exam = 'ielts' AND mp.section = 'listening' AND mp.content->>'testId' = t.id)
+			ORDER BY t.created_at, t.id`
+	case SectionSpeaking:
+		key = "setId"
+		query = `SELECT s.id, s.title FROM speaking_mock_sets s
+			WHERE s.is_published
+			  AND NOT EXISTS (SELECT 1 FROM mock_papers mp
+			                   WHERE mp.exam = 'ielts' AND mp.section = 'speaking' AND mp.content->>'setId' = s.id)
+			ORDER BY s.created_at, s.id`
+	}
+
+	rows, err := b.pool.Query(ctx, query)
+	if err != nil {
+		return fmt.Errorf("find unregistered %s tests: %w", scope.Section, err)
+	}
+	type fixed struct{ id, title string }
+	var found []fixed
+	for rows.Next() {
+		var f fixed
+		if err := rows.Scan(&f.id, &f.title); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan %s test: %w", scope.Section, err)
+		}
+		found = append(found, f)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, f := range found {
+		content, err := json.Marshal(map[string]string{key: f.id})
+		if err != nil {
+			return err
+		}
+		if _, err := b.repo.Publish(ctx, DraftPaper{
+			Exam: ExamIELTS, Section: scope.Section, Module: ModuleAny,
+			Title: f.title, ContentSchema: 1, Content: content,
+		}); err != nil {
+			return fmt.Errorf("register %s %s: %w", scope.Section, f.id, err)
+		}
+	}
+	if len(found) > 0 {
+		b.log.Info("registered numbered tests", "scope", scope, "count", len(found))
+	}
 	return nil
 }
 

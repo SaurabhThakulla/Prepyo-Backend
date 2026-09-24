@@ -173,6 +173,15 @@ type PracticeParams struct {
 	// Limit trims the set to the first questions after shuffling. Zero deals
 	// the whole group, which is the normal case.
 	Limit int
+	// PassageID deals the passage the learner chose from the practice list,
+	// instead of the one they have practised least recently.
+	PassageID string
+}
+
+// PracticePassages lists the passages a learner can practise these task types
+// on, for the practice list. Re-order Paragraphs has no passages.
+func (s *Service) PracticePassages(ctx context.Context, user models.User, exam models.ExamType, typeIDs []string) ([]PracticePassage, error) {
+	return s.repo.PracticePassages(ctx, user.ID, exam, moduleFor(exam, user), typeIDs)
 }
 
 // PracticeSet deals every set of the requested types that one passage carries.
@@ -191,7 +200,13 @@ func (s *Service) PracticeSet(ctx context.Context, user models.User, p PracticeP
 		}
 	}
 
-	anchor, err := s.repo.PickPracticeGroup(ctx, user.ID, p.Exam, moduleFor(p.Exam, user), types)
+	var anchor Group
+	var err error
+	if p.PassageID != "" {
+		anchor, err = s.repo.PracticeGroupOn(ctx, p.PassageID, p.Exam, moduleFor(p.Exam, user), types)
+	} else {
+		anchor, err = s.repo.PickPracticeGroup(ctx, user.ID, p.Exam, moduleFor(p.Exam, user), types)
+	}
 	if err != nil {
 		return models.ReadingSet{}, err
 	}

@@ -281,6 +281,82 @@ func (r *Repository) PickPracticeGroup(ctx context.Context, userID string, exam 
 	return r.GroupByID(ctx, id)
 }
 
+// PracticePassage is one passage a learner can practise a task type on, as
+// the practice list shows it.
+type PracticePassage struct {
+	ID            string     `json:"id"`
+	Title         string     `json:"title"`
+	Topic         string     `json:"topic,omitempty"`
+	Difficulty    string     `json:"difficulty"`
+	WordCount     int        `json:"wordCount"`
+	QuestionCount int        `json:"questionCount"`
+	PractisedAt   *time.Time `json:"practisedAt,omitempty"`
+}
+
+// PracticePassages lists every passage with a task set of these types this
+// learner may be dealt in practice: the same passages PickPracticeGroup
+// chooses among, in a stable order.
+func (r *Repository) PracticePassages(ctx context.Context, userID string, exam models.ExamType, module string, typeIDs []string) ([]PracticePassage, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT p.id, p.title, coalesce(p.topic, ''), coalesce(p.difficulty, ''), coalesce(p.word_count, 0),
+		       (SELECT count(*) FROM questions q
+		         JOIN reading_question_groups qg ON qg.id = q.group_id
+		        WHERE qg.passage_id = p.id AND qg.type_id = ANY($2) AND q.is_published
+		          AND ($3 = '' OR $3 = ANY(q.supported_exams)))::int,
+		       e.last_seen_at
+		FROM reading_passages p
+		LEFT JOIN user_passage_exposures e
+		       ON e.user_id = $1 AND e.passage_id = p.id AND e.context = 'practice'
+		      AND ($3 = '' OR e.exam = $3)
+		WHERE p.is_published
+		  AND ($3 <> 'IELTS' OR $4 = ANY(p.modules))
+		  AND EXISTS (SELECT 1 FROM reading_question_groups g
+		               WHERE g.passage_id = p.id AND g.type_id = ANY($2)
+		                 AND EXISTS (SELECT 1 FROM questions q
+		                              WHERE q.group_id = g.id AND q.is_published
+		                                AND ($3 = '' OR $3 = ANY(q.supported_exams))))
+		ORDER BY p.title, p.id`, userID, typeIDs, exam, moduleOrDefault(module))
+	if err != nil {
+		return nil, fmt.Errorf("list practice passages: %w", err)
+	}
+	defer rows.Close()
+
+	list := []PracticePassage{}
+	for rows.Next() {
+		var p PracticePassage
+		if err := rows.Scan(&p.ID, &p.Title, &p.Topic, &p.Difficulty, &p.WordCount, &p.QuestionCount, &p.PractisedAt); err != nil {
+			return nil, fmt.Errorf("scan practice passage: %w", err)
+		}
+		list = append(list, p)
+	}
+	return list, rows.Err()
+}
+
+// PracticeGroupOn is PickPracticeGroup for a passage the learner chose: the
+// first task set of these types on it that they may be dealt, or ErrNoPassage.
+func (r *Repository) PracticeGroupOn(ctx context.Context, passageID string, exam models.ExamType, module string, typeIDs []string) (Group, error) {
+	var id string
+	err := r.db.QueryRow(ctx, `
+		SELECT g.id
+		FROM reading_question_groups g
+		JOIN reading_passages p ON p.id = g.passage_id AND p.is_published
+		                       AND ($2 <> 'IELTS' OR $3 = ANY(p.modules))
+		WHERE g.passage_id = $4
+		  AND g.type_id = ANY($1)
+		  AND EXISTS (SELECT 1 FROM questions q
+		               WHERE q.group_id = g.id AND q.is_published
+		                 AND ($2 = '' OR $2 = ANY(q.supported_exams)))
+		ORDER BY g.position
+		LIMIT 1`, typeIDs, exam, moduleOrDefault(module), passageID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Group{}, ErrNoPassage
+	}
+	if err != nil {
+		return Group{}, fmt.Errorf("pick practice group on passage: %w", err)
+	}
+	return r.GroupByID(ctx, id)
+}
+
 // MockCandidate is a passage a mock could use, and whether this learner has
 // already sat it.
 type MockCandidate struct {
