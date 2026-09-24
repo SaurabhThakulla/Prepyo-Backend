@@ -28,6 +28,7 @@ import (
 	"github.com/prepyo/backend/internal/notifications"
 	"github.com/prepyo/backend/internal/practice"
 	"github.com/prepyo/backend/internal/progress"
+	"github.com/prepyo/backend/internal/ptemock"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/reading"
 	"github.com/prepyo/backend/internal/referrals"
@@ -78,6 +79,7 @@ type app struct {
 	listeningMockHandler *listeningmock.Handler
 	speakingMockHandler  *speakingmock.Handler
 	fullMockHandler      *fullmock.Handler
+	pteMockHandler       *ptemock.Handler
 	aiHandler            *ai.Handler
 	progressHandler      *progress.Handler
 	gamificationHandler  *gamification.Handler
@@ -120,6 +122,8 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	speakingMockService := speakingmock.NewService(pool, mockRepo, billingService, xpService, gateway, evaluationService)
 	fullMockService := fullmock.NewService(pool, mockRepo, billingService,
 		fullmock.Starters(listeningMockService, readingService, writingMockService, speakingMockService))
+	pteMockService := ptemock.NewService(pool, questionRepo, readingRepo, mockRepo, billingService, xpService,
+		evaluationService, gateway, log)
 
 	return &app{
 		cfg:         cfg,
@@ -142,6 +146,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		listeningMockHandler: listeningmock.NewHandler(listeningMockService, speechService, log),
 		speakingMockHandler:  speakingmock.NewHandler(speakingMockService, speechService, log),
 		fullMockHandler:      fullmock.NewHandler(fullMockService, log),
+		pteMockHandler:       ptemock.NewHandler(pteMockService, log),
 		aiHandler:            ai.NewHandler(gateway, pool, log),
 		progressHandler:      progress.NewHandler(pool, progressService, log),
 		gamificationHandler:  gamification.NewHandler(pool, xpService, log),
@@ -252,6 +257,9 @@ func (a *app) router() http.Handler {
 			// Answers upload a recording and wait on transcription; submit waits on rating.
 			private.Mount("/speaking/mocks", a.speakingMockHandler.Routes())
 			private.Mount("/full-mocks", a.fullMockHandler.Routes())
+			// The PTE test player saves drafts every few seconds and each item as
+			// it is answered; scoring runs in the background after the last.
+			private.Mount("/pte/mocks", a.pteMockHandler.Routes())
 			private.With(rateLimitByDevice(20, time.Minute)).
 				Mount("/ai", a.aiHandler.Routes())
 		})

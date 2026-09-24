@@ -103,7 +103,8 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 	// Generated mocks are single-section papers; they are paid for in
 	// sub-tests at start (SectionMockSubTests) and never touch this allowance.
 	// An IELTS full mock spends it when it starts (full_mock_sessions), so its
-	// attempt row is not counted a second time.
+	// attempt row is not counted a second time. A PTE full mock does the same
+	// through pte_mock_sessions; its attempt rows are marked generated.
 	var subTestsUsed, mocksUsed int
 	if plan.ID == "free" {
 		err = db.QueryRow(ctx, `
@@ -111,7 +112,8 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 				(SELECT count(*) FROM mock_attempts ma
 				  JOIN mocks m ON ma.mock_id = m.id
 				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND NOT m.is_generated AND m.id <> '`+FullMockID+`')
-				+ (SELECT count(*) FROM full_mock_sessions f WHERE f.user_id = $1)`,
+				+ (SELECT count(*) FROM full_mock_sessions f WHERE f.user_id = $1)
+				+ (SELECT count(*) FROM pte_mock_sessions p WHERE p.user_id = $1 AND p.kind = 'full')`,
 			user.ID, dayStart, dayEnd).Scan(&subTestsUsed, &mocksUsed)
 	} else {
 		err = db.QueryRow(ctx, `
@@ -121,7 +123,9 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 				  WHERE ma.user_id = $1 AND NOT m.is_diagnostic AND NOT m.is_generated AND m.id <> '`+FullMockID+`'
 				    AND ma.completed_at >= date_trunc('month', now()))
 				+ (SELECT count(*) FROM full_mock_sessions f
-				    WHERE f.user_id = $1 AND f.created_at >= date_trunc('month', now()))`,
+				    WHERE f.user_id = $1 AND f.created_at >= date_trunc('month', now()))
+				+ (SELECT count(*) FROM pte_mock_sessions p
+				    WHERE p.user_id = $1 AND p.kind = 'full' AND p.created_at >= date_trunc('month', now()))`,
 			user.ID, dayStart, dayEnd).Scan(&subTestsUsed, &mocksUsed)
 	}
 
