@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/billing"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
@@ -71,12 +72,13 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Kind Kind `json:"kind"`
+		Kind    Kind   `json:"kind"`
+		PaperID string `json:"paperId"`
 	}
 	if !httpx.Decode(w, r, &req, h.log, "ptemock.start") {
 		return
 	}
-	view, err := h.svc.Start(r.Context(), reqctx.MustUser(r.Context()), req.Kind)
+	view, err := h.svc.Start(r.Context(), reqctx.MustUser(r.Context()), req.Kind, req.PaperID)
 	if err != nil {
 		h.writeError(w, "ptemock.start", err)
 		return
@@ -166,6 +168,9 @@ func (h *Handler) position(w http.ResponseWriter, r *http.Request) (int, bool) {
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, op string, err error) {
+	if mockpapers.WriteError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, ErrNotPTE):
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "PTE mock tests are PTE papers. Switch your exam to PTE to take one.")

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,6 +24,7 @@ import (
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/mocks"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/scoring"
@@ -80,10 +82,10 @@ type Session struct {
 	SecondsRemaining int       `json:"secondsRemaining"`
 	ReusedTest       bool      `json:"reusedTest"`
 	// PartsPlayed is how many recordings have started; resuming continues
-	// with the next one.
 	PartsPlayed  int                       `json:"partsPlayed"`
 	Parts        []Part                    `json:"parts,omitempty"`
 	DraftAnswers []models.AnswerSubmission `json:"draftAnswers"`
+	PaperID      *string                   `json:"paperId,omitempty"`
 
 	testID      string
 	questionIDs []string
@@ -119,6 +121,8 @@ type StartOptions struct {
 	// not charged (the full mock was), and it is kept apart from any section
 	// mock the learner has open.
 	FullMock bool
+	// PaperID starts or retakes a specific published mock paper.
+	PaperID string
 }
 
 // Start deals a paper, or returns the learner's open one.
@@ -128,6 +132,9 @@ func (s *Service) Start(ctx context.Context, user models.User, opts StartOptions
 	}
 	if !opts.FullMock {
 		if live, err := s.live(ctx, s.db, user.ID); err == nil {
+			if err := mockpapers.CheckOpenPaper(opts.PaperID, live.PaperID); err != nil {
+				return Session{}, err
+			}
 			return s.hydrate(ctx, live)
 		} else if !errors.Is(err, ErrSessionNotFound) {
 			return Session{}, err
@@ -141,24 +148,63 @@ func (s *Service) Start(ctx context.Context, user models.User, opts StartOptions
 		}
 	}
 
-	// A test the learner has not sat comes first.
 	var testID string
 	var reused bool
-	err := s.db.QueryRow(ctx, `
-		SELECT t.id, EXISTS (SELECT 1 FROM listening_mock_sessions m WHERE m.user_id = $1 AND m.test_id = t.id)
-		  FROM listening_tests t
-		 WHERE t.is_published
-		   AND (SELECT count(*) FROM questions q
-		          JOIN listening_question_groups g ON g.id = q.listening_group_id
-		          JOIN listening_parts p ON p.id = g.part_id
-		         WHERE p.test_id = t.id AND q.is_published) = 40
-		 ORDER BY 2, random()
-		 LIMIT 1`, user.ID).Scan(&testID, &reused)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Session{}, ErrNoTest
-	}
-	if err != nil {
-		return Session{}, fmt.Errorf("pick listening test: %w", err)
+	var resolvedPaperID *string
+
+	if strings.TrimSpace(opts.PaperID) != "" {
+		reqPaperID := strings.TrimSpace(opts.PaperID)
+		var paperStatus, tID string
+		err := s.db.QueryRow(ctx, `
+			SELECT status, content->>'testId'
+			  FROM mock_papers
+			 WHERE id = $1 AND exam = 'ielts' AND section = 'listening'`, reqPaperID).Scan(&paperStatus, &tID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, mockpapers.ErrPaperNotFound
+		}
+		if err != nil {
+			return Session{}, fmt.Errorf("load listening mock paper: %w", err)
+		}
+		if paperStatus == mockpapers.StatusRetired {
+			return Session{}, mockpapers.ErrPaperRetired
+		}
+		if paperStatus != mockpapers.StatusPublished {
+			return Session{}, mockpapers.ErrPaperNotPublished
+		}
+		testID = tID
+		resolvedPaperID = &reqPaperID
+	} else {
+		// A paper the learner has not completed comes first, ordered by test number
+		var numPaperID, tID string
+		err := s.db.QueryRow(ctx, `
+			SELECT p.id, p.content->>'testId',
+			       EXISTS (SELECT 1 FROM listening_mock_sessions m WHERE m.user_id = $1 AND m.paper_id = p.id AND m.status = 'submitted')
+			  FROM mock_papers p
+			 WHERE p.exam = 'ielts' AND p.section = 'listening' AND p.module = 'any' AND p.status = 'published'
+			 ORDER BY 3, p.number ASC
+			 LIMIT 1`, user.ID).Scan(&numPaperID, &tID, &reused)
+		if err == nil && tID != "" {
+			testID = tID
+			resolvedPaperID = &numPaperID
+		} else {
+			// A test the learner has not sat comes first.
+			err := s.db.QueryRow(ctx, `
+				SELECT t.id, EXISTS (SELECT 1 FROM listening_mock_sessions m WHERE m.user_id = $1 AND m.test_id = t.id)
+				  FROM listening_tests t
+				 WHERE t.is_published
+				   AND (SELECT count(*) FROM questions q
+				          JOIN listening_question_groups g ON g.id = q.listening_group_id
+				          JOIN listening_parts p ON p.id = g.part_id
+				         WHERE p.test_id = t.id AND q.is_published) = 40
+				 ORDER BY 2, random()
+				 LIMIT 1`, user.ID).Scan(&testID, &reused)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Session{}, ErrNoTest
+			}
+			if err != nil {
+				return Session{}, fmt.Errorf("pick listening test: %w", err)
+			}
+		}
 	}
 	ids, err := s.questionIDs(ctx, testID)
 	if err != nil {
@@ -180,9 +226,9 @@ func (s *Service) Start(ctx context.Context, user models.User, opts StartOptions
 	}
 	var id string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO listening_mock_sessions (user_id, test_id, question_ids, duration_minutes, expires_at, reused_test, in_full_mock)
-		VALUES ($1, $2, $3, $4, now() + make_interval(mins => $4), $5, $6)
-		RETURNING id::text`, user.ID, testID, ids, DurationMinutes, reused, opts.FullMock).Scan(&id)
+		INSERT INTO listening_mock_sessions (user_id, test_id, question_ids, duration_minutes, expires_at, reused_test, in_full_mock, paper_id)
+		VALUES ($1, $2, $3, $4, now() + make_interval(mins => $4), $5, $6, $7)
+		RETURNING id::text`, user.ID, testID, ids, DurationMinutes, reused, opts.FullMock, resolvedPaperID).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -439,13 +485,13 @@ func (s *Service) scripts(ctx context.Context, testID string) ([]string, error) 
 const sessionFields = `
 	s.id::text, s.status, t.title, s.duration_minutes, s.created_at, s.expires_at,
 	GREATEST(0, CEIL(EXTRACT(EPOCH FROM (s.expires_at - now()))))::int,
-	s.reused_test, s.draft_answers, s.test_id, s.question_ids, s.parts_played`
+	s.reused_test, s.draft_answers, s.test_id, s.question_ids, s.parts_played, s.paper_id::text`
 
 func scan(row pgx.Row) (Session, error) {
 	var s Session
 	var drafts []byte
 	err := row.Scan(&s.ID, &s.Status, &s.TestTitle, &s.DurationMinutes, &s.CreatedAt, &s.ExpiresAt,
-		&s.SecondsRemaining, &s.ReusedTest, &drafts, &s.testID, &s.questionIDs, &s.PartsPlayed)
+		&s.SecondsRemaining, &s.ReusedTest, &drafts, &s.testID, &s.questionIDs, &s.PartsPlayed, &s.PaperID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrSessionNotFound
 	}

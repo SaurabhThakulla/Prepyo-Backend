@@ -69,8 +69,9 @@ type View struct {
 	CreatedAt   time.Time  `json:"createdAt"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 	// Scored counts items marked so far, while the paper is being scored.
-	Scored int     `json:"scored"`
-	Result *Result `json:"result,omitempty"`
+	Scored  int     `json:"scored"`
+	Result  *Result `json:"result,omitempty"`
+	PaperID *string `json:"paperId,omitempty"`
 }
 
 func (s *Service) view(ctx context.Context, session sessionRow, items []itemRow) (View, error) {
@@ -79,6 +80,7 @@ func (s *Service) view(ctx context.Context, session sessionRow, items []itemRow)
 		ID: session.ID, Kind: session.Kind, Title: blueprint.Title, Status: session.Status,
 		Current: session.Current, TotalItems: session.Total, Missing: session.Missing,
 		CreatedAt: session.CreatedAt, CompletedAt: session.CompletedAt, Result: session.Result,
+		PaperID: session.PaperID,
 	}
 	if v.Missing == nil {
 		v.Missing = []string{}

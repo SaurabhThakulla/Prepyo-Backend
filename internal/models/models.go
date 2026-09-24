@@ -681,6 +681,7 @@ type ReadingMockSession struct {
 	ExpiresAt        time.Time          `json:"expiresAt"`
 	SecondsRemaining int                `json:"secondsRemaining"`
 	DraftAnswers     []AnswerSubmission `json:"draftAnswers,omitempty"`
+	PaperID          *string            `json:"paperId,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

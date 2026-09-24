@@ -56,6 +56,7 @@ func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/", h.list)
 	r.Get("/attempts", h.attempts)
+	r.Get("/attempts/{attemptID}", h.attempt)
 	r.Get("/{mockID}", h.get)
 	r.Post("/{mockID}/submit", h.submit)
 	return r
@@ -120,6 +121,22 @@ func (h *Handler) attempts(w http.ResponseWriter, r *http.Request) {
 		"attempts":   list,
 		"pagination": page.Meta(total),
 	})
+}
+
+// attempt is one of the learner's own score reports, which Review opens from
+// a numbered test's list.
+func (h *Handler) attempt(w http.ResponseWriter, r *http.Request) {
+	user := reqctx.MustUser(r.Context())
+	a, err := h.repo.AttemptByID(r.Context(), user.ID, chi.URLParam(r, "attemptID"))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That score report does not exist.")
+			return
+		}
+		httpx.Internal(w, h.log, "mocks.attempt", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"attempt": a})
 }
 
 type submitRequest struct {

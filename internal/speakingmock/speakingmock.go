@@ -26,6 +26,7 @@ import (
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/mocks"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/models"
 )
 
@@ -98,6 +99,7 @@ type Session struct {
 	Steps            []Step    `json:"steps"`
 	Answers          []Answer  `json:"answers"`
 	CreatedAt        time.Time `json:"createdAt"`
+	PaperID          *string   `json:"paperId,omitempty"`
 
 	setID     string
 	expiresAt time.Time
@@ -193,8 +195,8 @@ func StepsFor(content setContent) []Step {
 }
 
 // Start deals a test, or returns the learner's open one.
-func (s *Service) Start(ctx context.Context, user models.User, charge bool) (Session, error) {
-	return s.start(ctx, user, charge, false)
+func (s *Service) Start(ctx context.Context, user models.User, charge bool, paperID ...string) (Session, error) {
+	return s.start(ctx, user, charge, false, paperID...)
 }
 
 // StartForFullMock deals a fresh test for a full mock's Speaking section. It
@@ -204,12 +206,19 @@ func (s *Service) StartForFullMock(ctx context.Context, user models.User) (Sessi
 	return s.start(ctx, user, false, true)
 }
 
-func (s *Service) start(ctx context.Context, user models.User, charge, fullMock bool) (Session, error) {
+func (s *Service) start(ctx context.Context, user models.User, charge, fullMock bool, paperID ...string) (Session, error) {
 	if user.TargetExam != models.ExamIELTS {
 		return Session{}, ErrNotIELTS
 	}
 	if !fullMock {
 		if live, err := s.live(ctx, s.db, user.ID); err == nil {
+			requested := ""
+			if len(paperID) > 0 {
+				requested = paperID[0]
+			}
+			if err := mockpapers.CheckOpenPaper(requested, live.PaperID); err != nil {
+				return Session{}, err
+			}
 			return s.hydrate(ctx, live)
 		} else if !errors.Is(err, ErrSessionNotFound) {
 			return Session{}, err
@@ -226,16 +235,56 @@ func (s *Service) start(ctx context.Context, user models.User, charge, fullMock 
 	}
 
 	var setID string
-	err := s.db.QueryRow(ctx, `
-		SELECT id FROM speaking_mock_sets st
-		 WHERE is_published
-		 ORDER BY EXISTS (SELECT 1 FROM speaking_mock_sessions m WHERE m.user_id = $1 AND m.set_id = st.id), random()
-		 LIMIT 1`, user.ID).Scan(&setID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Session{}, ErrNoSet
-	}
-	if err != nil {
-		return Session{}, fmt.Errorf("pick speaking set: %w", err)
+	var resolvedPaperID *string
+
+	if len(paperID) > 0 && strings.TrimSpace(paperID[0]) != "" {
+		reqPaperID := strings.TrimSpace(paperID[0])
+		var paperStatus, sID string
+		err := s.db.QueryRow(ctx, `
+			SELECT status, content->>'setId'
+			  FROM mock_papers
+			 WHERE id = $1 AND exam = 'ielts' AND section = 'speaking'`, reqPaperID).Scan(&paperStatus, &sID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, mockpapers.ErrPaperNotFound
+		}
+		if err != nil {
+			return Session{}, fmt.Errorf("load speaking mock paper: %w", err)
+		}
+		if paperStatus == mockpapers.StatusRetired {
+			return Session{}, mockpapers.ErrPaperRetired
+		}
+		if paperStatus != mockpapers.StatusPublished {
+			return Session{}, mockpapers.ErrPaperNotPublished
+		}
+		setID = sID
+		resolvedPaperID = &reqPaperID
+	} else {
+		// Lowest-numbered published test the learner has not completed
+		var numPaperID, sID string
+		err := s.db.QueryRow(ctx, `
+			SELECT p.id, p.content->>'setId'
+			  FROM mock_papers p
+			 WHERE p.exam = 'ielts' AND p.section = 'speaking' AND p.module = 'any' AND p.status = 'published'
+			 ORDER BY (SELECT count(*) FROM speaking_mock_sessions m
+			            WHERE m.user_id = $1 AND m.paper_id = p.id AND m.status = 'submitted') ASC,
+			          p.number ASC
+			 LIMIT 1`, user.ID).Scan(&numPaperID, &sID)
+		if err == nil && sID != "" {
+			setID = sID
+			resolvedPaperID = &numPaperID
+		} else {
+			err := s.db.QueryRow(ctx, `
+				SELECT id FROM speaking_mock_sets st
+				 WHERE is_published
+				 ORDER BY EXISTS (SELECT 1 FROM speaking_mock_sessions m WHERE m.user_id = $1 AND m.set_id = st.id), random()
+				 LIMIT 1`, user.ID).Scan(&setID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Session{}, ErrNoSet
+			}
+			if err != nil {
+				return Session{}, fmt.Errorf("pick speaking set: %w", err)
+			}
+		}
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -256,8 +305,8 @@ func (s *Service) start(ctx context.Context, user models.User, charge, fullMock 
 	}
 	var id string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO speaking_mock_sessions (user_id, set_id, expires_at, in_full_mock)
-		VALUES ($1, $2, now() + make_interval(mins => $3), $4) RETURNING id::text`, user.ID, setID, DurationMinutes, fullMock).Scan(&id)
+		INSERT INTO speaking_mock_sessions (user_id, set_id, expires_at, in_full_mock, paper_id)
+		VALUES ($1, $2, now() + make_interval(mins => $3), $4, $5) RETURNING id::text`, user.ID, setID, DurationMinutes, fullMock, resolvedPaperID).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -479,12 +528,12 @@ func (s *Service) Submit(ctx context.Context, user models.User, id string) (Resu
 
 const sessionFields = `
 	s.id::text, s.status, st.title, s.set_id, s.answers, s.created_at, s.expires_at,
-	GREATEST(0, CEIL(EXTRACT(EPOCH FROM (s.expires_at - now()))))::int`
+	GREATEST(0, CEIL(EXTRACT(EPOCH FROM (s.expires_at - now()))))::int, s.paper_id::text`
 
 func scan(row pgx.Row) (Session, error) {
 	var s Session
 	var answers []byte
-	err := row.Scan(&s.ID, &s.Status, &s.Title, &s.setID, &answers, &s.CreatedAt, &s.expiresAt, &s.SecondsRemaining)
+	err := row.Scan(&s.ID, &s.Status, &s.Title, &s.setID, &answers, &s.CreatedAt, &s.expiresAt, &s.SecondsRemaining, &s.PaperID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrSessionNotFound
 	}

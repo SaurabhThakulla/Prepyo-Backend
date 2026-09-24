@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/ai"
 	"github.com/prepyo/backend/internal/billing"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/internal/speech"
 	"github.com/prepyo/backend/pkg/httpx"
@@ -39,8 +40,18 @@ func (h *Handler) Routes() chi.Router {
 	return r
 }
 
+type startSpeakingRequest struct {
+	PaperID string `json:"paperId"`
+}
+
 func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
-	session, err := h.svc.Start(r.Context(), reqctx.MustUser(r.Context()), true)
+	var req startSpeakingRequest
+	// The body is optional (older clients send none); a malformed one is refused.
+	if r.ContentLength != 0 && !httpx.Decode(w, r, &req, h.log, "speakingmock.start") {
+		return
+	}
+
+	session, err := h.svc.Start(r.Context(), reqctx.MustUser(r.Context()), true, req.PaperID)
 	if err != nil {
 		h.writeError(w, "speakingmock.start", err)
 		return
@@ -115,6 +126,9 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, op string, err error) {
+	if mockpapers.WriteError(w, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, ErrNotIELTS):
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "The speaking mock is an IELTS test. Switch your exam to IELTS to take it.")

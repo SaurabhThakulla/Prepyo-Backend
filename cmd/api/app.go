@@ -24,6 +24,7 @@ import (
 	"github.com/prepyo/backend/internal/leaderboards"
 	"github.com/prepyo/backend/internal/listeningmock"
 	"github.com/prepyo/backend/internal/mistakes"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/mocks"
 	"github.com/prepyo/backend/internal/notifications"
 	"github.com/prepyo/backend/internal/practice"
@@ -89,6 +90,8 @@ type app struct {
 	referralHandler      *referrals.Handler
 	reportHandler        *report.Handler
 	adminHandler         *admin.Handler
+	mockPapersHandler    *mockpapers.Handler
+	mockPapersBuilder    *mockpapers.Builder
 }
 
 func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
@@ -125,6 +128,11 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	pteMockService := ptemock.NewService(pool, questionRepo, readingRepo, mockRepo, billingService, xpService,
 		evaluationService, gateway, log)
 
+	mockPapersRepo := mockpapers.NewRepository(pool)
+	mockPapersBuilder := mockpapers.NewBuilder(pool, mockPapersRepo, writingMockService, readingService, pteMockService, log)
+	mockPapersCatalog := mockpapers.NewCatalogService(pool, mockPapersRepo, mockPapersBuilder)
+	mockPapersHandler := mockpapers.NewHandler(mockPapersCatalog, mockPapersBuilder, mockPapersRepo, log)
+
 	return &app{
 		cfg:         cfg,
 		pool:        pool,
@@ -156,6 +164,8 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		referralHandler:      referrals.NewHandler(referralService, log),
 		reportHandler:        report.NewHandler(pool, log),
 		adminHandler:         admin.NewHandler(pool, log),
+		mockPapersHandler:    mockPapersHandler,
+		mockPapersBuilder:    mockPapersBuilder,
 	}
 }
 
@@ -260,6 +270,7 @@ func (a *app) router() http.Handler {
 			// The PTE test player saves drafts every few seconds and each item as
 			// it is answered; scoring runs in the background after the last.
 			private.Mount("/pte/mocks", a.pteMockHandler.Routes())
+			private.Mount("/mock-papers", a.mockPapersHandler.Routes())
 			private.With(rateLimitByDevice(20, time.Minute)).
 				Mount("/ai", a.aiHandler.Routes())
 		})
@@ -269,6 +280,7 @@ func (a *app) router() http.Handler {
 			adminOnly.Use(middleware.Timeout(requestTimeout))
 			adminOnly.Use(a.authService.RequireUser, a.authService.RequireAdmin)
 			adminOnly.Mount("/admin", a.adminHandler.Routes())
+			adminOnly.Mount("/admin/mock-papers", a.mockPapersHandler.AdminRoutes())
 		})
 	})
 
@@ -404,4 +416,13 @@ func (a *app) cleanExpiredSessions(ctx context.Context) {
 			a.authService.PurgeExpiredSessions(ctx)
 		}
 	}
+}
+
+// startMockPapersBuilder starts the builder worker and queues standard scopes.
+func (a *app) startMockPapersBuilder(ctx context.Context) {
+	if a.mockPapersBuilder == nil {
+		return
+	}
+	a.mockPapersBuilder.Start(ctx)
+	a.mockPapersBuilder.QueueAll()
 }

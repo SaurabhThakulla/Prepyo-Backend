@@ -18,6 +18,7 @@ package ptemock
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,12 +27,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/ai"
 	"github.com/prepyo/backend/internal/billing"
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/gamification"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/mocks"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/questions"
@@ -119,7 +122,7 @@ func (s *Service) ServerTranscription() bool {
 // Start deals a paper of a kind, or returns the learner's open one of that
 // kind at no cost. A full test spends one from the plan's full-mock allowance;
 // a sectional test spends SectionMockSubTests sub-tests.
-func (s *Service) Start(ctx context.Context, user models.User, kind Kind) (View, error) {
+func (s *Service) Start(ctx context.Context, user models.User, kind Kind, paperID ...string) (View, error) {
 	if user.TargetExam != models.ExamPTE {
 		return View{}, ErrNotPTE
 	}
@@ -135,6 +138,13 @@ func (s *Service) Start(ctx context.Context, user models.User, kind Kind) (View,
 		return View{}, fmt.Errorf("close stale pte mock: %w", err)
 	}
 	if live, err := liveSession(ctx, s.db, user.ID, kind); err == nil {
+		requested := ""
+		if len(paperID) > 0 {
+			requested = paperID[0]
+		}
+		if err := mockpapers.CheckOpenPaper(requested, live.PaperID); err != nil {
+			return View{}, err
+		}
 		return s.Get(ctx, user, live.ID)
 	} else if !errors.Is(err, ErrSessionNotFound) {
 		return View{}, err
@@ -161,15 +171,83 @@ func (s *Service) Start(ctx context.Context, user models.User, kind Kind) (View,
 		}
 	}
 
-	// Dealt in the transaction that writes the paper, with the chosen
-	// questions locked, so none can be deleted between choosing it and
-	// writing it down.
-	items, missing, err := s.deal(ctx, tx, user.ID, blueprint)
-	if err != nil {
-		return View{}, err
+	var resolvedPaperID *string
+	var items []dealt
+	var missing []string
+
+	pID := ""
+	if len(paperID) > 0 {
+		pID = strings.TrimSpace(paperID[0])
 	}
 
-	id, err := insertPaper(ctx, tx, user.ID, blueprint, ExamVersionID, items, missing)
+	if pID != "" {
+		var status string
+		var contentBytes []byte
+		err := tx.QueryRow(ctx, `SELECT status, content FROM mock_papers WHERE id = $1 AND exam = 'pte' AND section = $2`, pID, string(kind)).Scan(&status, &contentBytes)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return View{}, mockpapers.ErrPaperNotFound
+		}
+		if err != nil {
+			return View{}, fmt.Errorf("read mock paper %s: %w", pID, err)
+		}
+		if status == mockpapers.StatusRetired {
+			return View{}, mockpapers.ErrPaperRetired
+		}
+		if status != mockpapers.StatusPublished {
+			return View{}, mockpapers.ErrPaperNotPublished
+		}
+
+		resolvedPaperID = &pID
+		items, missing, err = s.loadPaperItems(ctx, tx, contentBytes)
+		if err != nil {
+			return View{}, err
+		}
+	} else {
+		// Rule 8: With no paperId (sidebar Start, older clients), the engine uses the lowest-numbered published test the learner hasn't completed.
+		var pubID string
+		var contentBytes []byte
+		err := tx.QueryRow(ctx, `
+			SELECT mp.id, mp.content
+			  FROM mock_papers mp
+			 WHERE mp.exam = 'pte'
+			   AND mp.section = $1
+			   AND mp.status = 'published'
+			   AND NOT EXISTS (
+			       SELECT 1 FROM pte_mock_sessions s
+			        WHERE s.user_id = $2
+			          AND s.paper_id = mp.id
+			          AND s.status IN ('completed', 'scoring')
+			   )
+			 ORDER BY mp.number ASC
+			 LIMIT 1`, string(kind), user.ID).Scan(&pubID, &contentBytes)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = tx.QueryRow(ctx, `
+				SELECT mp.id, mp.content
+				  FROM mock_papers mp
+				 WHERE mp.exam = 'pte'
+				   AND mp.section = $1
+				   AND mp.status = 'published'
+				 ORDER BY mp.number ASC
+				 LIMIT 1`, string(kind)).Scan(&pubID, &contentBytes)
+		}
+		if err == nil {
+			resolvedPaperID = &pubID
+			items, missing, err = s.loadPaperItems(ctx, tx, contentBytes)
+			if err != nil {
+				return View{}, err
+			}
+		} else if errors.Is(err, pgx.ErrNoRows) {
+			// No published papers exist yet; deal fresh paper
+			items, missing, err = s.deal(ctx, tx, user.ID, blueprint)
+			if err != nil {
+				return View{}, err
+			}
+		} else {
+			return View{}, fmt.Errorf("find published pte mock paper: %w", err)
+		}
+	}
+
+	id, err := insertPaper(ctx, tx, user.ID, blueprint, ExamVersionID, items, missing, resolvedPaperID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -698,4 +776,131 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func (s *Service) loadPaperItems(ctx context.Context, db database.DB, contentBytes []byte) ([]dealt, []string, error) {
+	var content struct {
+		Items []struct {
+			QuestionID string `json:"questionId"`
+			Task       string `json:"task"`
+			Part       string `json:"part"`
+		} `json:"items"`
+		Missing []string `json:"missing"`
+	}
+	if err := json.Unmarshal(contentBytes, &content); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal pte paper content: %w", err)
+	}
+
+	ids := make([]string, 0, len(content.Items))
+	for _, it := range content.Items {
+		ids = append(ids, it.QuestionID)
+	}
+	// A published paper never changes, but a question on it can still be
+	// deleted from the bank. Its item is left out of this attempt rather than
+	// failing the start; a paper left with a part empty cannot be sat.
+	bank, err := questions.NewRepository(db).ByIDs(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	items := make([]dealt, 0, len(content.Items))
+	perPart := map[Part]int{}
+	for _, it := range content.Items {
+		q, ok := bank[it.QuestionID]
+		if !ok {
+			continue
+		}
+		item := dealt{QuestionID: it.QuestionID, Task: it.Task, Part: Part(it.Part)}
+		// The Re-order boxes are stored in the right order; each attempt gets
+		// its own shuffle, as a freshly dealt paper does.
+		if it.Task == "RO" {
+			for _, o := range q.Options {
+				item.OptionOrder = append(item.OptionOrder, o.ID)
+			}
+			rand.Shuffle(len(item.OptionOrder), func(a, b int) {
+				item.OptionOrder[a], item.OptionOrder[b] = item.OptionOrder[b], item.OptionOrder[a]
+			})
+		}
+		items = append(items, item)
+		perPart[item.Part]++
+	}
+	for _, it := range content.Items {
+		if perPart[Part(it.Part)] == 0 {
+			return nil, nil, fmt.Errorf("%w: a part of this test has no questions left", ErrBankTooSmall)
+		}
+	}
+
+	return items, content.Missing, nil
+}
+
+// DealForBuilder selects items for a new mock paper without learner history,
+// prioritizing questions unused by any published paper in the scope.
+func (s *Service) DealForBuilder(ctx context.Context, kindStr string) ([]mockpapers.PTEItemResult, []string, error) {
+	kind := Kind(kindStr)
+	blueprint, ok := BlueprintFor(kind)
+	if !ok {
+		return nil, nil, fmt.Errorf("unknown pte kind: %s", kindStr)
+	}
+
+	var items []mockpapers.PTEItemResult
+	var missing []string
+	taken := []string{}
+	perPart := map[Part]int{}
+
+	for _, slot := range blueprint.Slots {
+		task := Tasks[slot.Task]
+		rows, err := s.db.Query(ctx, `
+			SELECT q.id
+			  FROM questions q
+			 WHERE q.is_published AND q.skill = $1 AND q.type_id = ANY($2)
+			   AND 'PTE' = ANY(q.supported_exams) AND NOT (q.id = ANY($4))
+			 ORDER BY (
+			    SELECT count(*)
+			      FROM mock_papers mp
+			     WHERE mp.exam = 'pte'
+			       AND mp.section = $5
+			       AND mp.status = 'published'
+			       AND mp.content @> jsonb_build_object('items', jsonb_build_array(jsonb_build_object('questionId', q.id::text)))
+			 ),
+			 random()
+			 LIMIT $3`, task.Skill, task.TypeIDs, slot.Count, taken, string(kind))
+		if err != nil {
+			return nil, nil, fmt.Errorf("deal for builder %s: %w", slot.Task, err)
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, nil, fmt.Errorf("scan %s: %w", slot.Task, err)
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
+		if len(ids) == 0 {
+			missing = append(missing, task.Name)
+			continue
+		}
+
+		for _, id := range ids {
+			items = append(items, mockpapers.PTEItemResult{
+				QuestionID: id,
+				Task:       slot.Task,
+				Part:       string(task.Part),
+			})
+			taken = append(taken, id)
+			perPart[task.Part]++
+		}
+	}
+
+	for _, part := range blueprint.Parts() {
+		if perPart[part] == 0 {
+			return nil, nil, fmt.Errorf("%w: no %s items", mockpapers.ErrBankTooSmall, part)
+		}
+	}
+
+	return items, missing, nil
 }

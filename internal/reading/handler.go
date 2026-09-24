@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/billing"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/pkg/httpx"
@@ -209,13 +210,14 @@ func (h *Handler) practice(w http.ResponseWriter, r *http.Request) {
 }
 
 type startMockRequest struct {
-	Exam string `json:"exam,omitempty"`
+	Exam    string `json:"exam,omitempty"`
+	PaperID string `json:"paperId,omitempty"`
 }
 
 // startMock deals a reading paper, or returns the one the learner already holds.
 func (h *Handler) startMock(w http.ResponseWriter, r *http.Request) {
 	var req startMockRequest
-	if r.ContentLength > 0 && !httpx.Decode(w, r, &req, h.log, "reading.startMock") {
+	if r.ContentLength != 0 && !httpx.Decode(w, r, &req, h.log, "reading.startMock") {
 		return
 	}
 
@@ -226,8 +228,11 @@ func (h *Handler) startMock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.svc.StartMock(r.Context(), user, exam)
+	session, err := h.svc.StartMock(r.Context(), user, exam, req.PaperID)
 	if err != nil {
+		if mockpapers.WriteError(w, err) {
+			return
+		}
 		switch {
 		case errors.Is(err, billing.ErrLimitReached):
 			httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached,

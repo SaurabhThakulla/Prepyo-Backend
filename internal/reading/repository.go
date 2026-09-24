@@ -536,10 +536,10 @@ func (r *Repository) SlotPassageCandidates(
 		SELECT p.id, (seen.passage_id IS NOT NULL)
 		FROM reading_passages p
 		LEFT JOIN user_passage_exposures seen
-		       ON seen.user_id = $1 AND seen.passage_id = p.id
+		       ON seen.user_id = NULLIF($1, '')::uuid AND seen.passage_id = p.id
 		      AND seen.exam = $2 AND seen.context = 'mock'
 		LEFT JOIN user_passage_exposures practised
-		       ON practised.user_id = $1 AND practised.passage_id = p.id
+		       ON practised.user_id = NULLIF($1, '')::uuid AND practised.passage_id = p.id
 		      AND practised.exam = $2 AND practised.context = 'practice'
 		WHERE p.is_published
 		  AND ($2 <> 'IELTS' OR $5 = ANY(p.modules))
@@ -560,6 +560,12 @@ func (r *Repository) SlotPassageCandidates(
 		ORDER BY (seen.passage_id IS NOT NULL),
 		         (practised.passage_id IS NOT NULL),
 		         seen.last_seen_at ASC NULLS FIRST,
+		         -- Passages on fewer published numbered tests first. This is what
+		         -- spreads the mock paper builder (which has no learner) across the
+		         -- bank before it reuses anything.
+		         (SELECT count(*) FROM mock_papers mp
+		           WHERE mp.exam = lower($2) AND mp.section = 'reading' AND mp.status = 'published'
+		             AND mp.content->'passageIds' ? p.id),
 		         random()`, userID, exam, typeIDs, counts, moduleOrDefault(module), passageTag)
 	if err != nil {
 		return nil, fmt.Errorf("list slot passages: %w", err)
@@ -590,13 +596,13 @@ func (r *Repository) PickReorderItems(
 		JOIN questions q ON q.reorder_item_id = i.id AND q.is_published
 		                AND $2 = ANY(q.supported_exams)
 		LEFT JOIN user_reorder_exposures e
-		       ON e.user_id = $1 AND e.item_id = i.id AND e.context = 'mock'
+		       ON e.user_id = NULLIF($1, '')::uuid AND e.item_id = i.id AND e.context = 'mock'
 		WHERE i.is_published
 		  AND (
 			  i.source_passage_id IS NULL
 			  OR NOT EXISTS (
 				  SELECT 1 FROM user_passage_exposures seen
-				  WHERE seen.user_id = $1 AND seen.passage_id = i.source_passage_id
+				  WHERE seen.user_id = NULLIF($1, '')::uuid AND seen.passage_id = i.source_passage_id
 			  )
 		  )
 		ORDER BY e.last_seen_at ASC NULLS FIRST, random()
@@ -654,7 +660,7 @@ const sessionFields = `
 	s.id, s.mock_id, m.title, s.exam, s.exam_version_id, s.status,
 	s.duration_minutes, s.passage_ids, s.question_ids, s.reused_passages,
 	s.created_at, s.submitted_at, s.expires_at, s.draft_answers,
-	GREATEST(0, CEIL(EXTRACT(EPOCH FROM (s.expires_at - now()))))::int`
+	GREATEST(0, CEIL(EXTRACT(EPOCH FROM (s.expires_at - now()))))::int, s.paper_id::text`
 
 const sessionFrom = ` FROM reading_mock_sessions s JOIN mocks m ON m.id = s.mock_id`
 
@@ -670,6 +676,7 @@ type CreateSessionParams struct {
 	// InFullMock marks a full mock's Reading paper, kept apart from any
 	// reading mock the learner has open on its own.
 	InFullMock bool
+	PaperID    *string
 }
 
 // ErrSessionOpen means this learner already has a live paper for this exam.
@@ -681,13 +688,13 @@ func (r *Repository) CreateSession(ctx context.Context, db database.DB, p Create
 		WITH inserted AS (
 			INSERT INTO reading_mock_sessions (
 				user_id, mock_id, exam, exam_version_id, passage_ids, question_ids,
-				reused_passages, duration_minutes, expires_at, in_full_mock)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $8), $9)
+				reused_passages, duration_minutes, expires_at, in_full_mock, paper_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(mins => $8), $9, $10)
 			RETURNING *
 		)
 		SELECT `+sessionFields+` FROM inserted s JOIN mocks m ON m.id = s.mock_id`,
 		p.UserID, p.MockID, p.Exam, p.ExamVersionID, p.PassageIDs, p.QuestionIDs,
-		p.ReusedPassages, p.DurationMinutes, p.InFullMock)
+		p.ReusedPassages, p.DurationMinutes, p.InFullMock, p.PaperID)
 
 	s, err := scanSession(row)
 	if err != nil {
@@ -797,7 +804,7 @@ func scanSession(row pgx.Row) (Session, error) {
 	var drafts []byte
 	err := row.Scan(&s.ID, &s.MockID, &s.MockTitle, &s.Exam, &s.ExamVersionID, &s.Status,
 		&s.DurationMinutes, &s.PassageIDs, &s.QuestionIDs, &s.ReusedPassages,
-		&s.CreatedAt, &s.SubmittedAt, &s.ExpiresAt, &drafts, &s.SecondsRemaining)
+		&s.CreatedAt, &s.SubmittedAt, &s.ExpiresAt, &drafts, &s.SecondsRemaining, &s.PaperID)
 	if err != nil {
 		return Session{}, err
 	}

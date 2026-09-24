@@ -23,6 +23,7 @@ import (
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/mocks"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/scoring"
@@ -60,6 +61,7 @@ type Session struct {
 	Task2            models.Question `json:"task2"`
 	Task1Draft       string          `json:"task1Draft"`
 	Task2Draft       string          `json:"task2Draft"`
+	PaperID          *string         `json:"paperId,omitempty"`
 
 	task1ID, task2ID string
 }
@@ -110,8 +112,8 @@ func Band(task1, task2 float64) float64 {
 }
 
 // Start deals a paper, or returns the one this learner already has open.
-func (s *Service) Start(ctx context.Context, user models.User) (Session, error) {
-	return s.start(ctx, user, false)
+func (s *Service) Start(ctx context.Context, user models.User, paperID ...string) (Session, error) {
+	return s.start(ctx, user, false, paperID...)
 }
 
 // StartForFullMock deals a fresh paper for a full mock's Writing section. It
@@ -121,13 +123,20 @@ func (s *Service) StartForFullMock(ctx context.Context, user models.User) (Sessi
 	return s.start(ctx, user, true)
 }
 
-func (s *Service) start(ctx context.Context, user models.User, fullMock bool) (Session, error) {
+func (s *Service) start(ctx context.Context, user models.User, fullMock bool, paperID ...string) (Session, error) {
 	charge := !fullMock && s.billing != nil
 	if user.TargetExam != models.ExamIELTS {
 		return Session{}, ErrNotIELTS
 	}
 	if !fullMock {
 		if live, err := s.live(ctx, s.db, user.ID); err == nil {
+			requested := ""
+			if len(paperID) > 0 {
+				requested = paperID[0]
+			}
+			if err := mockpapers.CheckOpenPaper(requested, live.PaperID); err != nil {
+				return Session{}, err
+			}
 			return s.hydrate(ctx, live)
 		} else if !errors.Is(err, ErrSessionNotFound) {
 			return Session{}, err
@@ -144,13 +153,58 @@ func (s *Service) start(ctx context.Context, user models.User, fullMock bool) (S
 	}
 
 	module := user.IELTSModule()
-	task1, err := s.pickTask(ctx, user.ID, "type_id = $2", task1Type(module))
-	if err != nil {
-		return Session{}, err
-	}
-	task2, err := s.pickTask(ctx, user.ID, "type_id LIKE $2", "ielts-writing-task2%")
-	if err != nil {
-		return Session{}, err
+	var task1, task2 string
+	var resolvedPaperID *string
+
+	if len(paperID) > 0 && strings.TrimSpace(paperID[0]) != "" {
+		reqPaperID := strings.TrimSpace(paperID[0])
+		var paperStatus, paperModule, t1, t2 string
+		err := s.db.QueryRow(ctx, `
+			SELECT status, module, content->>'task1Id', content->>'task2Id'
+			  FROM mock_papers
+			 WHERE id = $1 AND exam = 'ielts' AND section = 'writing'`, reqPaperID).Scan(&paperStatus, &paperModule, &t1, &t2)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, mockpapers.ErrPaperNotFound
+		}
+		if err != nil {
+			return Session{}, fmt.Errorf("load writing mock paper: %w", err)
+		}
+		if paperStatus == mockpapers.StatusRetired {
+			return Session{}, mockpapers.ErrPaperRetired
+		}
+		if paperStatus != mockpapers.StatusPublished {
+			return Session{}, mockpapers.ErrPaperNotPublished
+		}
+		if err := mockpapers.CheckModule(paperModule, module); err != nil {
+			return Session{}, err
+		}
+		task1, task2 = t1, t2
+		resolvedPaperID = &reqPaperID
+	} else {
+		// Use the lowest-numbered published test the learner has not completed
+		var numPaperID, t1, t2 string
+		err := s.db.QueryRow(ctx, `
+			SELECT p.id, p.content->>'task1Id', p.content->>'task2Id'
+			  FROM mock_papers p
+			 WHERE p.exam = 'ielts' AND p.section = 'writing' AND p.module = $1 AND p.status = 'published'
+			 ORDER BY (SELECT count(*) FROM writing_mock_sessions w
+			            WHERE w.user_id = $2 AND w.paper_id = p.id AND w.status = 'submitted') ASC,
+			          p.number ASC
+			 LIMIT 1`, module, user.ID).Scan(&numPaperID, &t1, &t2)
+		if err == nil && t1 != "" && t2 != "" {
+			task1, task2 = t1, t2
+			resolvedPaperID = &numPaperID
+		} else {
+			var err1, err2 error
+			task1, err1 = s.pickTask(ctx, user.ID, "type_id = $2", task1Type(module))
+			if err1 != nil {
+				return Session{}, err1
+			}
+			task2, err2 = s.pickTask(ctx, user.ID, "type_id LIKE $2", "ielts-writing-task2%")
+			if err2 != nil {
+				return Session{}, err2
+			}
+		}
 	}
 
 	tx, err := s.db.Begin(ctx)
@@ -173,9 +227,9 @@ func (s *Service) start(ctx context.Context, user models.User, fullMock bool) (S
 
 	var id string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO writing_mock_sessions (user_id, exam, module, task1_id, task2_id, duration_minutes, expires_at, in_full_mock)
-		VALUES ($1, 'IELTS', $2, $3, $4, $5, now() + make_interval(mins => $5), $6)
-		RETURNING id::text`, user.ID, module, task1, task2, DurationMinutes, fullMock).Scan(&id)
+		INSERT INTO writing_mock_sessions (user_id, exam, module, task1_id, task2_id, duration_minutes, expires_at, in_full_mock, paper_id)
+		VALUES ($1, 'IELTS', $2, $3, $4, $5, now() + make_interval(mins => $5), $6, $7)
+		RETURNING id::text`, user.ID, module, task1, task2, DurationMinutes, fullMock, resolvedPaperID).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -220,9 +274,9 @@ func (s *Service) pickTask(ctx context.Context, userID, filter, value string) (s
 		  FROM questions q
 		 WHERE q.is_published AND q.skill = 'writing' AND 'IELTS' = ANY(q.supported_exams)
 		   AND q.`+filter+`
-		 ORDER BY EXISTS (SELECT 1 FROM ai_evaluations e WHERE e.user_id = $1 AND e.question_id = q.id),
+		 ORDER BY EXISTS (SELECT 1 FROM ai_evaluations e WHERE e.user_id = NULLIF($1::text, '')::uuid AND e.question_id = q.id),
 		          EXISTS (SELECT 1 FROM writing_mock_sessions w
-		                   WHERE w.user_id = $1 AND (w.task1_id = q.id OR w.task2_id = q.id)),
+		                   WHERE w.user_id = NULLIF($1::text, '')::uuid AND (w.task1_id = q.id OR w.task2_id = q.id)),
 		          random()
 		 LIMIT 1`, userID, value).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -383,12 +437,12 @@ func (s *Service) Submit(ctx context.Context, user models.User, id, task1Text, t
 const sessionFields = `
 	id::text, status, module, duration_minutes, created_at, expires_at,
 	GREATEST(0, CEIL(EXTRACT(EPOCH FROM (expires_at - now()))))::int,
-	task1_id, task2_id, task1_draft, task2_draft`
+	task1_id, task2_id, task1_draft, task2_draft, paper_id::text`
 
 func scan(row pgx.Row) (Session, error) {
 	var s Session
 	err := row.Scan(&s.ID, &s.Status, &s.Module, &s.DurationMinutes, &s.CreatedAt, &s.ExpiresAt,
-		&s.SecondsRemaining, &s.task1ID, &s.task2ID, &s.Task1Draft, &s.Task2Draft)
+		&s.SecondsRemaining, &s.task1ID, &s.task2ID, &s.Task1Draft, &s.Task2Draft, &s.PaperID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrSessionNotFound
 	}
@@ -399,6 +453,46 @@ func scan(row pgx.Row) (Session, error) {
 		s.SecondsRemaining = 0
 	}
 	return s, nil
+}
+
+// PickTasksForBuilder picks Task 1 and Task 2, preferring tasks least used in published papers.
+func (s *Service) PickTasksForBuilder(ctx context.Context, module string) (string, string, error) {
+	module = strings.ToLower(module)
+	t1Type := task1Type(module)
+
+	var task1 string
+	err := s.db.QueryRow(ctx, `
+		SELECT q.id
+		  FROM questions q
+		 WHERE q.is_published AND q.skill = 'writing' AND 'IELTS' = ANY(q.supported_exams)
+		   AND q.type_id = $1
+		 ORDER BY (SELECT count(*)
+		             FROM mock_papers p
+		            WHERE p.exam = 'ielts' AND p.section = 'writing' AND p.module = $2
+		              AND p.status = 'published' AND (p.content->>'task1Id' = q.id)),
+		          random()
+		 LIMIT 1`, t1Type, module).Scan(&task1)
+	if err != nil {
+		return "", "", fmt.Errorf("pick task 1: %w", err)
+	}
+
+	var task2 string
+	err = s.db.QueryRow(ctx, `
+		SELECT q.id
+		  FROM questions q
+		 WHERE q.is_published AND q.skill = 'writing' AND 'IELTS' = ANY(q.supported_exams)
+		   AND q.type_id LIKE 'ielts-writing-task2%'
+		 ORDER BY (SELECT count(*)
+		             FROM mock_papers p
+		            WHERE p.exam = 'ielts' AND p.section = 'writing' AND p.module = $1
+		              AND p.status = 'published' AND (p.content->>'task2Id' = q.id)),
+		          random()
+		 LIMIT 1`, module).Scan(&task2)
+	if err != nil {
+		return "", "", fmt.Errorf("pick task 2: %w", err)
+	}
+
+	return task1, task2, nil
 }
 
 func (s *Service) live(ctx context.Context, db database.DB, userID string) (Session, error) {

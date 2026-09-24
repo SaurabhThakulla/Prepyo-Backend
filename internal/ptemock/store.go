@@ -43,6 +43,7 @@ type sessionRow struct {
 	Missing          []string
 	Result           *Result
 	AttemptID        *string
+	PaperID          *string
 	CreatedAt        time.Time
 	ScoringStartedAt *time.Time
 	CompletedAt      *time.Time
@@ -87,14 +88,14 @@ type Delivery struct {
 }
 
 const sessionColumns = `id::text, user_id::text, kind, mock_id, exam_version_id, status, current_position,
-	total_items, deadlines, missing_tasks, result, mock_attempt_id::text, created_at, scoring_started_at, completed_at`
+	total_items, deadlines, missing_tasks, result, mock_attempt_id::text, created_at, scoring_started_at, completed_at, paper_id::text`
 
 func scanSession(row pgx.Row) (sessionRow, error) {
 	var s sessionRow
 	var deadlines map[string]string
 	var result []byte
 	err := row.Scan(&s.ID, &s.UserID, &s.Kind, &s.MockID, &s.ExamVersionID, &s.Status, &s.Current,
-		&s.Total, &deadlines, &s.Missing, &result, &s.AttemptID, &s.CreatedAt, &s.ScoringStartedAt, &s.CompletedAt)
+		&s.Total, &deadlines, &s.Missing, &result, &s.AttemptID, &s.CreatedAt, &s.ScoringStartedAt, &s.CompletedAt, &s.PaperID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sessionRow{}, ErrSessionNotFound
 	}
@@ -268,15 +269,15 @@ type dealt struct {
 }
 
 func insertPaper(ctx context.Context, tx pgx.Tx, userID string, blueprint Blueprint, examVersionID string,
-	items []dealt, missing []string) (string, error) {
+	items []dealt, missing []string, paperID *string) (string, error) {
 	if missing == nil {
 		missing = []string{} // a nil slice is sent as NULL
 	}
 	var id string
 	err := tx.QueryRow(ctx, `
-		INSERT INTO pte_mock_sessions (user_id, kind, mock_id, exam_version_id, total_items, missing_tasks)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id::text`, userID, blueprint.Kind, blueprint.MockID, examVersionID, len(items), missing).Scan(&id)
+		INSERT INTO pte_mock_sessions (user_id, kind, mock_id, exam_version_id, total_items, missing_tasks, paper_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id::text`, userID, blueprint.Kind, blueprint.MockID, examVersionID, len(items), missing, paperID).Scan(&id)
 	if err != nil {
 		return "", err
 	}

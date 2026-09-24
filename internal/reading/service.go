@@ -2,17 +2,21 @@ package reading
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/billing"
 	"github.com/prepyo/backend/internal/exams"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/mistakes"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/mocks"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/questions"
@@ -273,8 +277,8 @@ func (s *Service) practiceReorder(ctx context.Context, user models.User, exam mo
 // ---------------------------------------------------------------------------
 
 // StartMock deals or resumes a reading paper for the learner.
-func (s *Service) StartMock(ctx context.Context, user models.User, exam models.ExamType) (models.ReadingMockSession, error) {
-	return s.startMock(ctx, user, exam, false)
+func (s *Service) StartMock(ctx context.Context, user models.User, exam models.ExamType, paperID ...string) (models.ReadingMockSession, error) {
+	return s.startMock(ctx, user, exam, false, paperID...)
 }
 
 // StartMockForFullMock deals a fresh IELTS paper for a full mock's Reading
@@ -284,15 +288,23 @@ func (s *Service) StartMockForFullMock(ctx context.Context, user models.User) (m
 	return s.startMock(ctx, user, models.ExamIELTS, true)
 }
 
-func (s *Service) startMock(ctx context.Context, user models.User, exam models.ExamType, fullMock bool) (models.ReadingMockSession, error) {
+func (s *Service) startMock(ctx context.Context, user models.User, exam models.ExamType, fullMock bool, paperID ...string) (models.ReadingMockSession, error) {
 	charge := !fullMock && s.billing != nil
-	blueprint, err := s.repo.GeneratedBlueprint(ctx, exam, moduleFor(exam, user))
+	module := moduleFor(exam, user)
+	blueprint, err := s.repo.GeneratedBlueprint(ctx, exam, module)
 	if err != nil {
 		return models.ReadingMockSession{}, err
 	}
 
 	if !fullMock {
 		if live, err := s.repo.LiveSession(ctx, user.ID, exam); err == nil {
+			requested := ""
+			if len(paperID) > 0 {
+				requested = paperID[0]
+			}
+			if err := mockpapers.CheckOpenPaper(requested, live.PaperID); err != nil {
+				return models.ReadingMockSession{}, err
+			}
 			return s.hydrate(ctx, live)
 		} else if !errors.Is(err, ErrSessionNotFound) {
 			return models.ReadingMockSession{}, err
@@ -308,11 +320,81 @@ func (s *Service) startMock(ctx context.Context, user models.User, exam models.E
 		}
 	}
 
-	composed, err := s.compose(ctx, user.ID, exam, blueprint)
-	if err != nil {
-		return models.ReadingMockSession{}, err
+	var passageIDs, questionIDs, reorderIDs []string
+	var reused bool
+	var resolvedPaperID *string
+
+	// Numbered papers here are IELTS Reading's; PTE Reading tests are the PTE
+	// mock engine's (ptemock) and never dealt through this service.
+	if len(paperID) > 0 && strings.TrimSpace(paperID[0]) != "" {
+		reqPaperID := strings.TrimSpace(paperID[0])
+		if exam != models.ExamIELTS {
+			return models.ReadingMockSession{}, mockpapers.ErrPaperNotFound
+		}
+		var paperStatus, paperModule string
+		var rawContent []byte
+		err := s.db.QueryRow(ctx, `
+			SELECT status, module, content
+			  FROM mock_papers
+			 WHERE id = $1 AND exam = 'ielts' AND section = 'reading'`, reqPaperID).Scan(&paperStatus, &paperModule, &rawContent)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.ReadingMockSession{}, mockpapers.ErrPaperNotFound
+		}
+		if err != nil {
+			return models.ReadingMockSession{}, fmt.Errorf("load reading mock paper: %w", err)
+		}
+		if paperStatus == mockpapers.StatusRetired {
+			return models.ReadingMockSession{}, mockpapers.ErrPaperRetired
+		}
+		if paperStatus != mockpapers.StatusPublished {
+			return models.ReadingMockSession{}, mockpapers.ErrPaperNotPublished
+		}
+		if err := mockpapers.CheckModule(paperModule, module); err != nil {
+			return models.ReadingMockSession{}, err
+		}
+
+		var c struct {
+			PassageIDs  []string `json:"passageIds"`
+			QuestionIDs []string `json:"questionIds"`
+			ReorderIDs  []string `json:"reorderIds"`
+		}
+		if err := json.Unmarshal(rawContent, &c); err != nil {
+			return models.ReadingMockSession{}, fmt.Errorf("decode paper content: %w", err)
+		}
+		passageIDs, questionIDs, reorderIDs = c.PassageIDs, c.QuestionIDs, c.ReorderIDs
+		resolvedPaperID = &reqPaperID
+	} else if exam == models.ExamIELTS {
+		// Use lowest-numbered published test the learner has not completed
+		var numPaperID string
+		var rawContent []byte
+		err := s.db.QueryRow(ctx, `
+			SELECT p.id, p.content
+			  FROM mock_papers p
+			 WHERE p.exam = $1 AND p.section = 'reading' AND p.module = $2 AND p.status = 'published'
+			 ORDER BY (SELECT count(*) FROM reading_mock_sessions r
+			            WHERE r.user_id = $3 AND r.paper_id = p.id AND r.status = 'submitted') ASC,
+			          p.number ASC
+			 LIMIT 1`, strings.ToLower(string(exam)), strings.ToLower(module), user.ID).Scan(&numPaperID, &rawContent)
+		if err == nil && len(rawContent) > 0 {
+			var c struct {
+				PassageIDs  []string `json:"passageIds"`
+				QuestionIDs []string `json:"questionIds"`
+				ReorderIDs  []string `json:"reorderIds"`
+			}
+			if err := json.Unmarshal(rawContent, &c); err == nil && len(c.QuestionIDs) > 0 {
+				passageIDs, questionIDs, reorderIDs = c.PassageIDs, c.QuestionIDs, c.ReorderIDs
+				resolvedPaperID = &numPaperID
+			}
+		}
+
+		if len(questionIDs) == 0 {
+			composed, err := s.compose(ctx, user.ID, exam, blueprint)
+			if err != nil {
+				return models.ReadingMockSession{}, err
+			}
+			passageIDs, questionIDs, reorderIDs, reused = composed.PassageIDs, composed.QuestionIDs, composed.ReorderIDs, composed.Reused
+		}
 	}
-	passageIDs, questionIDs, reorderIDs, reused := composed.PassageIDs, composed.QuestionIDs, composed.ReorderIDs, composed.Reused
 
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -349,6 +431,7 @@ func (s *Service) startMock(ctx context.Context, user models.User, exam models.E
 		ReusedPassages:  reused,
 		DurationMinutes: blueprint.DurationMinutes,
 		InFullMock:      fullMock,
+		PaperID:         resolvedPaperID,
 	})
 	if err != nil {
 		if errors.Is(err, ErrSessionOpen) {
@@ -979,4 +1062,18 @@ func reviewOf(questionIDs []string, bank map[string]models.Question) []models.Re
 		}
 	}
 	return review
+}
+
+// ComposeForBuilder composes an IELTS reading paper without user history,
+// preferring passages and items least used in published mock papers.
+func (s *Service) ComposeForBuilder(ctx context.Context, module string) ([]string, []string, []string, error) {
+	blueprint, err := s.repo.GeneratedBlueprint(ctx, models.ExamIELTS, module)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	comp, err := s.compose(ctx, "", models.ExamIELTS, blueprint)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return comp.PassageIDs, comp.QuestionIDs, comp.ReorderIDs, nil
 }

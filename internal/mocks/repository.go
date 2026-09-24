@@ -171,6 +171,24 @@ func (r *Repository) SaveAttempt(ctx context.Context, db database.DB, p SaveAtte
 	return a, nil
 }
 
+// AttemptByID is one of a learner's attempts; another learner's is not found.
+func (r *Repository) AttemptByID(ctx context.Context, userID, id string) (models.MockAttempt, error) {
+	var a models.MockAttempt
+	err := r.db.QueryRow(ctx, `
+		SELECT id, mock_id, exam_version_id, exam, user_score, skill_scores,
+		       total_correct, total_questions, duration_seconds, completed_at
+		FROM mock_attempts
+		WHERE id::text = $1 AND user_id = $2`, id, userID).Scan(&a.ID, &a.MockID, &a.ExamVersionID, &a.Exam,
+		&a.UserScore, &a.SkillScores, &a.TotalCorrect, &a.TotalQuestions, &a.DurationSeconds, &a.CompletedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.MockAttempt{}, ErrNotFound
+	}
+	if err != nil {
+		return models.MockAttempt{}, fmt.Errorf("get mock attempt: %w", err)
+	}
+	return a, nil
+}
+
 func (r *Repository) Attempts(ctx context.Context, userID string, limit, offset int) ([]models.MockAttempt, int, error) {
 	var total int
 	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM mock_attempts WHERE user_id = $1`, userID).Scan(&total); err != nil {
