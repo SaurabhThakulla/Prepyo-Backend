@@ -1,0 +1,31 @@
+"""Drafting passages 1-5 for PTE Reading Batch 3."""
+
+P1_PARAGRAPHS = [
+    {
+        "label": "A",
+        "text": "Submerged in sunlit coastal shallows across every continent except Antarctica, seagrasses represent one of the most remarkable evolutionary journeys in the plant kingdom. Unlike macroscopic algae and seaweeds, which lack specialized conducting tissues and absorb dissolved minerals directly across their cellular membranes, seagrasses are true marine angiosperms—flowering plants that possess complex vascular systems, internal air spaces, and true root architectures. Fossil evidence indicates that their terrestrial ancestors migrated back into the oceans approximately one hundred million years ago during the late Cretaceous period. To colonize saline marine substrates, these ancestral plants evolved specialized physiological adaptations: flexible leaves that withstand perpetual wave shear, internal lacunae that transport oxygen generated during photosynthesis down into waterlogged subterranean tissues, and hydrophilous pollination systems wherein pollen grains drift across underwater currents to fertilize submarine flowers."
+    },
+    {
+        "label": "B",
+        "text": "Despite their underwater success, seagrasses operate under stringent physiological boundaries dictated primarily by solar irradiance and water clarity. Unlike terrestrial flora or surface-floating kelp, submerged meadows must support extensive subterranean networks of roots and rhizomes that reside in completely anoxic sediments. These underground tissues consume considerable metabolic oxygen through respiration, demanding a continuous internal oxygen flux fueled by vigorous foliar photosynthesis. Consequently, seagrasses typically require between ten and twenty-five percent of surface incident light to maintain a positive metabolic carbon balance—a threshold substantially higher than that required by most terrestrial plants or marine phytoplankton. Because of this steep light requirement, seagrass beds are restricted to shallow lagoons, sheltered bays, and clear coastal margins, rarely descending beyond depths where water turbidity extinguishes essential photosynthetic wavelengths."
+    },
+    {
+        "label": "C",
+        "text": "Where they manage to establish dense expanses, seagrasses function as quintessential ecosystem engineers, physically reshaping their physical environment. The dense underwater canopy formed by flexible leaf blades exerts drag against moving water, attenuating incoming wave energy and dampening tidal currents across the shallow seabed. By decelerating water velocities, the leaves encourage suspended sediment particles, organic detritus, and nutrient-rich silts to precipitate out of the water column and settle among the shoots. Simultaneously, an interlacing subterranean mesh of tough rhizomes and anchoring fibrous roots binds these newly deposited sediments into a cohesive, erosion-resistant benthic mattress. In this manner, seagrass meadows actively clarify adjacent coastal waters while providing a natural living barrier that buffers shorelines against storm surges and coastal erosion."
+    },
+    {
+        "label": "D",
+        "text": "Beyond sediment stabilization, seagrass meadows have emerged as central players in international climate mitigation frameworks through their exceptional capacity for blue carbon sequestration. Although occupying less than 0.2 percent of the planet's total oceanic surface area, seagrass ecosystems are responsible for roughly ten percent of all organic carbon buried in marine sediments annually. The mechanisms underlying this disproportionate storage are multifaceted. Organic matter trapped beneath the canopy becomes buried within subterranean sediment layers that are permanently submerged, saline, and completely depleted of dissolved oxygen. In this strictly anoxic setting, microbial decomposition proceeds at a negligible rate, preventing trapped carbon compounds from oxidizing back into dissolved carbon dioxide. Sedimentary carbon deposits beneath undisturbed seagrass meadows can remain locked away for centuries or millennia, accumulating far faster per unit area than soils in mature terrestrial rainforests."
+    },
+    {
+        "label": "E",
+        "text": "Concurrently, seagrass ecosystems sustain intricate marine food webs and serve as vital nursery grounds for open-ocean wildlife. The physical shelter created by interlocking leaf blades provides sanctuary for juvenile fish, crabs, and shrimp, shielding vulnerable young from pelagic predators before they mature and migrate to deeper offshore waters or adjacent coral reefs. Many commercially harvested fish species, including cod, snapper, and groupers, spend their earliest developmental stages within these protected underwater meadows. Furthermore, seagrasses provide essential forage for endangered marine megafauna; green sea turtles and dugongs graze directly upon the carbohydrate-rich shoots, while countless smaller invertebrates consume the diverse microscopic epiphyte communities that encrust mature leaf blades."
+    },
+    {
+        "label": "F",
+        "text": "Notwithstanding their irreplaceable ecological and hydrological value, seagrass meadows are declining rapidly across the globe as a consequence of coastal human activity. Runoff from agricultural fertilizers and municipal wastewater discharges introduces excessive concentrations of nitrogen and phosphorus into coastal lagoons, triggering massive blooms of phytoplankton and macroalgae that cloud the water and smother seagrass canopies. Physical dredging, coastal reclamation, and the mechanical dragging of boat anchors and commercial trawling nets inflict severe direct damage, ripping up rhizome mattresses that require decades to regrow. Ecological restoration initiatives, such as mechanical seed injection and seedling transplantation, are currently expanding worldwide; however, long-term establishment rates remain modest, underscoring the urgent imperative to preserve existing pristine meadows rather than relying upon post-destruction restoration."
+    }
+]
+
+# Calculate word count
+print("Passage 1 word count:", sum(len(p['text'].split()) for p in P1_PARAGRAPHS))
