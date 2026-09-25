@@ -78,11 +78,11 @@ var authorableTypes = []questionTypeSpec{
 		TimeLimitSeconds: 1200, Points: 15},
 
 	{Exam: "IELTS", Skill: "speaking", TypeID: "ielts-speaking-part1", TypeName: "Introduction",
-		Answer: answerRubric, TimeLimitSeconds: 60, Points: 10},
+		Answer: answerRubric, PrepSeconds: 10, TimeLimitSeconds: 60, Points: 10},
 	{Exam: "IELTS", Skill: "speaking", TypeID: "ielts-speaking-part2", TypeName: "Speaking Part 2 (Cue Card)",
 		Answer: answerRubric, PrepSeconds: 60, TimeLimitSeconds: 120, Points: 15},
 	{Exam: "IELTS", Skill: "speaking", TypeID: "ielts-speaking-part3", TypeName: "Speaking Part 3 (Discussion)",
-		Answer: answerRubric, TimeLimitSeconds: 120, Points: 15},
+		Answer: answerRubric, PrepSeconds: 10, TimeLimitSeconds: 120, Points: 15},
 	{Exam: "PTE", Skill: "speaking", TypeID: "read-aloud", TypeName: "Read Aloud",
 		Answer: answerRubric, Passage: fieldRequired,
 		Prompt:      "Look at the text below. In 35 seconds, read this text aloud as naturally and clearly as possible.",
