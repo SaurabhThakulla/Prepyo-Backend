@@ -74,3 +74,32 @@ func TestIELTSCriteriaValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Each Task 2 essay type tells the assessor which parts of the prompt the
+// essay must address; Task 1 and unknown types get no such line.
+func TestIELTSTask2GuidanceNamesEachTypesParts(t *testing.T) {
+	for typeID, want := range map[string]string{
+		"ielts-writing-task2-opinion":          "agrees or disagrees",
+		"ielts-writing-task2-discussion":       "both views must be discussed and an opinion given",
+		"ielts-writing-task2-advantages":       "must give a clear judgement",
+		"ielts-writing-task2-problem-solution": "problems and solutions",
+		"ielts-writing-task2-cause-effect":     "causes (or reasons) and effects",
+		"ielts-writing-task2-two-part":         "each must be answered",
+	} {
+		guidance := ieltsWritingGuidance(WritingRequest{Exam: models.ExamIELTS, TypeID: typeID})
+		if !strings.Contains(guidance, want) {
+			t.Errorf("%s guidance lacks %q", typeID, want)
+		}
+		if !strings.Contains(guidance, "Task Response:") {
+			t.Errorf("%s is not assessed as Task 2", typeID)
+		}
+	}
+	for _, typeID := range []string{"ielts-writing-task1-figure", "ielts-writing-task1-letter", "ielts-writing-task2"} {
+		if parts := ieltsTask2Parts(typeID); parts != "" && typeID != "ielts-writing-task2" {
+			t.Errorf("%s got Task 2 parts guidance", typeID)
+		}
+		if strings.Contains(ieltsWritingGuidance(WritingRequest{Exam: models.ExamIELTS, TypeID: typeID}), "This prompt asks") {
+			t.Errorf("%s guidance names Task 2 parts", typeID)
+		}
+	}
+}

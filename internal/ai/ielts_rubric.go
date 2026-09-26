@@ -45,6 +45,29 @@ func ieltsWritingTask(typeID, taskName string) string {
 	return ieltsTask2
 }
 
+// ieltsTask2Parts names the parts of the prompt a Task 2 essay type must
+// address, which is what "all parts of the prompt" means for that question.
+// Each rule follows from the descriptor: a part left out means the main parts
+// are addressed incompletely. Unknown types get no extra line.
+func ieltsTask2Parts(typeID string) string {
+	id := strings.ToLower(typeID)
+	switch {
+	case strings.HasSuffix(id, "-opinion"):
+		return "- This prompt asks how far the writer agrees or disagrees: the position may be full or partial agreement, but it must be clear and sustained to the conclusion.\n"
+	case strings.HasSuffix(id, "-discussion"):
+		return "- This prompt asks the writer to discuss both views and give their own opinion: both views must be discussed and an opinion given. Discussing only one view, or giving no opinion, addresses the main parts incompletely.\n"
+	case strings.HasSuffix(id, "-advantages"):
+		return "- This prompt concerns advantages and disadvantages: both must be discussed. If it asks whether one outweighs the other, the response must give a clear judgement; listing both sides without weighing them addresses the main parts incompletely.\n"
+	case strings.HasSuffix(id, "-problem-solution"):
+		return "- This prompt asks for problems and solutions: both must be addressed, and the solutions should respond to the problems identified. Covering only one part addresses the main parts incompletely.\n"
+	case strings.HasSuffix(id, "-cause-effect"):
+		return "- This prompt asks for causes (or reasons) and effects: both must be addressed. Covering only one part addresses the main parts incompletely.\n"
+	case strings.HasSuffix(id, "-two-part"):
+		return "- This prompt asks two direct questions: each must be answered. Where a question asks whether something is positive or negative, or asks for a view, the response must give a clear answer. Leaving a question unanswered addresses the main parts incompletely.\n"
+	}
+	return ""
+}
+
 // IELTSMinimumWords is the length each writing task asks for.
 func IELTSMinimumWords(typeID, taskName string) int {
 	if ieltsWritingTask(typeID, taskName) == ieltsTask2 {
@@ -82,6 +105,9 @@ func ieltsWritingGuidance(req WritingRequest) string {
 		b.WriteString("- Task 2: all parts of the prompt are addressed; a clear position is presented and developed through the response; main ideas are relevant, extended and supported.\n")
 		b.WriteString("- Band 7 allows some over-generalisation or lack of focus in supporting ideas; addressing the main parts incompletely limits the rating to band 5.\n")
 		b.WriteString("- A response that is barely related to the prompt or off-topic is limited to band 2 on this criterion.\n")
+		if parts := ieltsTask2Parts(req.TypeID); parts != "" {
+			b.WriteString(parts)
+		}
 	}
 
 	b.WriteString("\nCoherence and Cohesion:\n")
