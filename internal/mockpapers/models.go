@@ -24,8 +24,11 @@ const (
 	StatusPublished = "published"
 	StatusRetired   = "retired"
 
-	// DefaultTargetPapers is how many numbered papers each scope targets.
-	DefaultTargetPapers = 10
+	// DefaultTargetPapers is how many numbered papers each scope targets. A
+	// scope stops short of it when the bank cannot supply another paper
+	// within MaxAllowedOverlap, so this is a ceiling the bank grows into.
+	// Raised from 10 when bank 4 doubled every sub-task.
+	DefaultTargetPapers = 20
 
 	// MaxAllowedOverlap is the maximum question overlap (50%) permitted between papers in a scope.
 	MaxAllowedOverlap = 0.50

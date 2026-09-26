@@ -2,12 +2,16 @@ package writingmock
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/gamification"
+	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/mocks"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/questions"
@@ -85,7 +89,8 @@ func TestWritingMockDealsTheModulesTaskOne(t *testing.T) {
 		if session.Task1.TypeID != want {
 			t.Errorf("%s task 1 = %s, want %s", module, session.Task1.TypeID, want)
 		}
-		if session.Task2.TypeID != "ielts-writing-task2-opinion" {
+		// Both modules share Task 2, which may be any of the essay types.
+		if !strings.HasPrefix(session.Task2.TypeID, "ielts-writing-task2-") {
 			t.Errorf("%s task 2 = %s", module, session.Task2.TypeID)
 		}
 		if session.SecondsRemaining < 3590 || session.DurationMinutes != 60 {
@@ -149,7 +154,41 @@ func TestLateWritingMockIsGradedFromDrafts(t *testing.T) {
 	if _, err := svc.Submit(ctx, user, session.ID, "written after time", "written after time"); err != nil {
 		t.Fatalf("late submit: %v", err)
 	}
-	if eval.texts["ielts-writing-task1-figure"] != "saved task one" || eval.texts["ielts-writing-task2-opinion"] != "saved task two" {
+	// Task 2 may be any of the essay types, so look up the one dealt.
+	if eval.texts["ielts-writing-task1-figure"] != "saved task one" || eval.texts[session.Task2.TypeID] != "saved task two" {
 		t.Fatalf("graded %v, want the drafts saved in time", eval.texts)
+	}
+}
+
+// The paper builder deals each Task 2 essay type before it repeats one, so a
+// module's first six numbered tests cover all six kinds of Task 2 question.
+func TestBuilderRotatesTaskTwoTypes(t *testing.T) {
+	pool, svc, _, _ := setup(t, models.ModuleAcademic)
+	ctx := context.Background()
+	repo := mockpapers.NewRepository(pool)
+
+	// A scope of its own, so papers other tests publish do not count.
+	module := "task2_rotation_" + strings.ReplaceAll(t.Name(), "/", "_") + "_" + time.Now().Format("150405.000000")
+	seen := map[string]bool{}
+	for i := 0; i < 6; i++ {
+		task1, task2, err := svc.PickTasksForBuilder(ctx, module)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var typeID string
+		if err := pool.QueryRow(ctx, `SELECT type_id FROM questions WHERE id = $1`, task2).Scan(&typeID); err != nil {
+			t.Fatal(err)
+		}
+		if seen[typeID] {
+			t.Fatalf("paper %d repeats %s before every type was dealt: %v", i+1, typeID, seen)
+		}
+		seen[typeID] = true
+		content, _ := json.Marshal(mockpapers.WritingContent{Task1ID: task1, Task2ID: task2})
+		if _, err := repo.Publish(ctx, mockpapers.DraftPaper{
+			Exam: mockpapers.ExamIELTS, Section: mockpapers.SectionWriting, Module: module,
+			ContentSchema: 1, Content: content,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

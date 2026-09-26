@@ -455,7 +455,10 @@ func scan(row pgx.Row) (Session, error) {
 	return s, nil
 }
 
-// PickTasksForBuilder picks Task 1 and Task 2, preferring tasks least used in published papers.
+// PickTasksForBuilder picks Task 1 and Task 2, preferring tasks least used in
+// published papers. Task 2 first takes the essay type (Opinion, Discuss Both
+// Views, Advantages / Disadvantages, ...) that the module's papers use least,
+// so the numbered tests cover every kind of question the real test sets.
 func (s *Service) PickTasksForBuilder(ctx context.Context, module string) (string, string, error) {
 	module = strings.ToLower(module)
 	t1Type := task1Type(module)
@@ -483,6 +486,11 @@ func (s *Service) PickTasksForBuilder(ctx context.Context, module string) (strin
 		 WHERE q.is_published AND q.skill = 'writing' AND 'IELTS' = ANY(q.supported_exams)
 		   AND q.type_id LIKE 'ielts-writing-task2%'
 		 ORDER BY (SELECT count(*)
+		             FROM mock_papers p
+		             JOIN questions used ON used.id = p.content->>'task2Id'
+		            WHERE p.exam = 'ielts' AND p.section = 'writing' AND p.module = $1
+		              AND p.status = 'published' AND used.type_id = q.type_id),
+		          (SELECT count(*)
 		             FROM mock_papers p
 		            WHERE p.exam = 'ielts' AND p.section = 'writing' AND p.module = $1
 		              AND p.status = 'published' AND (p.content->>'task2Id' = q.id)),
