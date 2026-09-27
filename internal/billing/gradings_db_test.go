@@ -42,8 +42,8 @@ func TestPlansCarryTheirGradingPools(t *testing.T) {
 		gradings, mocks int
 		period          string
 	}{
-		"free": {10, 1, GradingsPerMonth}, "weekly": {110, 2, GradingsPerPlan},
-		"pro": {22, 5, GradingsPerDay}, "elite": {1100, 20, GradingsPerPlan},
+		"free": {5, 1, GradingsPerMonth}, "weekly": {70, 2, GradingsPerPlan},
+		"pro": {8, 4, GradingsPerDay}, "elite": {600, 12, GradingsPerPlan},
 	}
 	plans, err := NewRepository(pool).Plans(context.Background())
 	if err != nil {
@@ -69,7 +69,7 @@ func TestFreeGradingsRunOut(t *testing.T) {
 	ctx := context.Background()
 	user := newLearner(t, pool)
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		if _, err := svc.CheckAIGradings(ctx, pool, user, UnitsPerGrading); err != nil {
 			t.Fatalf("grading %d refused: %v", i+1, err)
 		}
@@ -78,7 +78,7 @@ func TestFreeGradingsRunOut(t *testing.T) {
 		}
 	}
 	if _, err := svc.CheckAIGradings(ctx, pool, user, UnitsPerGrading); !errors.Is(err, ErrGradingLimitReached) {
-		t.Fatalf("the 11th grading on the free plan: %v", err)
+		t.Fatalf("the 6th grading on the free plan: %v", err)
 	}
 	if _, err := svc.CheckAIGradings(ctx, pool, user, WordMatchUnits); !errors.Is(err, ErrGradingLimitReached) {
 		t.Fatalf("a word-matched answer with nothing left: %v", err)
@@ -87,7 +87,7 @@ func TestFreeGradingsRunOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AIGradingsUsed != 10 || state.AIGradingsLimit != 10 {
+	if state.AIGradingsUsed != 5 || state.AIGradingsLimit != 5 {
 		t.Fatalf("state %v of %d", state.AIGradingsUsed, state.AIGradingsLimit)
 	}
 	if renews, _ := time.Parse(time.DateOnly, state.AIGradingsRenewOn); renews.Day() != 1 {
@@ -136,8 +136,8 @@ func TestPaidPoolStartsWithThePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AIGradingsLimit != 110 || state.AIGradingsUsed != 1 {
-		t.Fatalf("weekly pool %v of %d, want 1 of 110", state.AIGradingsUsed, state.AIGradingsLimit)
+	if state.AIGradingsLimit != 70 || state.AIGradingsUsed != 1 {
+		t.Fatalf("weekly pool %v of %d, want 1 of 70", state.AIGradingsUsed, state.AIGradingsLimit)
 	}
 	if state.AIGradingsRenewOn != user.PlanValidUntil.Format(time.DateOnly) {
 		t.Fatalf("renews %s, want the plan's end", state.AIGradingsRenewOn)
@@ -154,18 +154,18 @@ func TestUnlimitedPlanStillCountsFullMocks(t *testing.T) {
 	if _, err := svc.CheckSubTestCredits(ctx, pool, user, 1000); err != nil {
 		t.Fatalf("Udaan practice is unlimited: %v", err)
 	}
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 12; i++ {
 		if _, err := pool.Exec(ctx, `INSERT INTO full_mock_sessions (user_id, module, status) VALUES ($1, 'academic', 'completed')`,
 			user.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := svc.CheckMockAllowance(ctx, pool, user); !errors.Is(err, ErrMockLimitReached) {
-		t.Fatalf("the 21st full mock on Udaan: %v", err)
+		t.Fatalf("the 13th full mock on Udaan: %v", err)
 	}
 }
 
-// Taiyari's gradings are 22 a day and reset at the learner's midnight: what
+// Taiyari's gradings are 8 a day and reset at the learner's midnight: what
 // was used yesterday does not count against today.
 func TestTaiyariGradingsResetDaily(t *testing.T) {
 	pool := gradingPool(t)
@@ -177,22 +177,22 @@ func TestTaiyariGradingsResetDaily(t *testing.T) {
 		VALUES ($1, 110, 'yesterday', now() - interval '2 days')`, user.ID); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 22; i++ {
+	for i := 0; i < 8; i++ {
 		if _, err := svc.CheckAIGradings(ctx, pool, user, UnitsPerGrading); err != nil {
-			t.Fatalf("grading %d of 22 today refused: %v", i+1, err)
+			t.Fatalf("grading %d of 8 today refused: %v", i+1, err)
 		}
 		if err := svc.RecordAIGrading(ctx, pool, user.ID, UnitsPerGrading, "practice-speaking", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := svc.CheckAIGradings(ctx, pool, user, UnitsPerGrading); !errors.Is(err, ErrGradingLimitReached) {
-		t.Fatalf("the 23rd grading today: %v", err)
+		t.Fatalf("the 9th grading today: %v", err)
 	}
 	state, err := svc.State(ctx, pool, user)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.AIGradingsPeriod != GradingsPerDay || state.AIGradingsUsed != 22 || state.AIGradingsLimit != 22 {
+	if state.AIGradingsPeriod != GradingsPerDay || state.AIGradingsUsed != 8 || state.AIGradingsLimit != 8 {
 		t.Fatalf("state %v of %d per %s", state.AIGradingsUsed, state.AIGradingsLimit, state.AIGradingsPeriod)
 	}
 }

@@ -29,11 +29,13 @@ func NewHandler(gateway *Gateway, db *pgxpool.Pool, log *slog.Logger) *Handler {
 	return &Handler{gateway: gateway, db: db, log: log}
 }
 
-// Daily tutor allowance. Every reply is a paid provider call, so a free
-// account gets enough to try it and a paid plan enough for real study.
+// Daily tutor allowance. Every reply is a paid provider call (about NPR 1 on
+// the tutoring model), so each plan gets a cap that keeps it inside the margin.
 const (
-	freeTutorMessagesPerDay = 10
-	paidTutorMessagesPerDay = 100
+	freeTutorMessagesPerDay    = 3
+	abhyasTutorMessagesPerDay  = 5
+	taiyariTutorMessagesPerDay = 5
+	udaanTutorMessagesPerDay   = 8
 )
 
 // maxTutorMessageChars bounds one message sent to the tutor, and
@@ -46,14 +48,19 @@ const (
 
 // tutorAllowance is the learner's daily limit, or -1 for no limit.
 func tutorAllowance(user models.User) int {
-	switch {
-	case user.IsAdmin():
+	if user.IsAdmin() {
 		return -1
-	// Udaan is the unlimited plan. The per-minute rate limit still applies.
-	case user.HasActivePaidPlan() && user.Role == models.RoleUdaan:
-		return -1
-	case user.HasActivePaidPlan() && user.Role != models.RoleSuru:
-		return paidTutorMessagesPerDay
+	}
+	if !user.HasActivePaidPlan() {
+		return freeTutorMessagesPerDay
+	}
+	switch user.Role {
+	case models.RoleUdaan:
+		return udaanTutorMessagesPerDay
+	case models.RoleTaiyari:
+		return taiyariTutorMessagesPerDay
+	case models.RoleAbhyas:
+		return abhyasTutorMessagesPerDay
 	default:
 		return freeTutorMessagesPerDay
 	}
@@ -158,8 +165,8 @@ func (h *Handler) tutor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reservation == 0 {
-		msg := fmt.Sprintf("You have used today's %d tutor messages. They reset at midnight.", tutorAllowance(user))
-		if tutorAllowance(user) == freeTutorMessagesPerDay {
+		msg := "You have used all of today's tutor messages. They reset at midnight."
+		if user.Role != models.RoleUdaan || !user.HasActivePaidPlan() {
 			msg += " Upgrade your plan for more."
 		}
 		if err := notifications.NewRepository(h.db).Notify(context.WithoutCancel(r.Context()), notifications.CreateParams{

@@ -98,8 +98,8 @@ func (s *Service) CheckAIGradings(ctx context.Context, db database.DB, user mode
 	case GradingsPerMonth:
 		period = "this month"
 	}
-	message := fmt.Sprintf("You have used all %d AI gradings for speaking and writing %s. "+
-		"Reading and listening practice is still available.", state.AIGradingsLimit, period)
+	message := fmt.Sprintf("You have used 100%% of your AI gradings for speaking and writing %s. "+
+		"Reading and listening practice is still available.", period)
 	if !user.HasActivePaidPlan() {
 		message += " Upgrade for more AI gradings."
 	}

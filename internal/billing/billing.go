@@ -214,7 +214,7 @@ func (s *Service) CheckSubTestCredits(ctx context.Context, db database.DB, user 
 	// Only once the day's allowance is really gone: a five-credit section mock
 	// refused with four left is not "you have used everything".
 	if state.DailySubTestsUsed >= state.DailySubTestsLimit {
-		message := fmt.Sprintf("You have used all %d practice tasks for today. They reset at midnight.", state.DailySubTestsLimit)
+		message := "You have used 100% of today's practice tasks. They reset at midnight."
 		if !user.HasActivePaidPlan() {
 			message += " Upgrade for a bigger daily allowance."
 		}
