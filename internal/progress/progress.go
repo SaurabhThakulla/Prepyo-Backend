@@ -188,9 +188,10 @@ func (s *Service) Skills(ctx context.Context, db database.DB, user models.User) 
 		return breakdown, nil
 	}
 
-	// Return all skills in stable order.
-	breakdown := make([]SkillBreakdown, 0, len(models.AllSkills))
-	for _, skill := range models.AllSkills {
+	// Return the exam's skills in stable order: EPS-TOPIK has only two.
+	skills := models.SkillsFor(user.TargetExam)
+	breakdown := make([]SkillBreakdown, 0, len(skills))
+	for _, skill := range skills {
 		t := bySkill[skill]
 		row := SkillBreakdown{
 			Skill:     skill,

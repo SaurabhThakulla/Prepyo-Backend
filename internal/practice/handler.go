@@ -116,7 +116,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 
 	exam, ok := examFor(sub.Exam, user)
 	if !ok {
-		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE or IELTS.")
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE, IELTS or EPS_TOPIK.")
 		return
 	}
 
@@ -288,7 +288,7 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	exam, ok := examFor(models.ExamType(strings.TrimSpace(req.Exam)), user)
 	if !ok {
-		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE or IELTS.")
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE, IELTS or EPS_TOPIK.")
 		return
 	}
 	if !question.SupportsExam(exam) {
