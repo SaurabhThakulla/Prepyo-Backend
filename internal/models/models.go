@@ -8,9 +8,12 @@ type ExamType string
 const (
 	ExamPTE   ExamType = "PTE"
 	ExamIELTS ExamType = "IELTS"
+	// ExamEPSTOPIK is the Employment Permit System Test of Proficiency in
+	// Korean: reading and listening only, 40 four-option questions, 0-100.
+	ExamEPSTOPIK ExamType = "EPS_TOPIK"
 )
 
-func (e ExamType) Valid() bool { return e == ExamPTE || e == ExamIELTS }
+func (e ExamType) Valid() bool { return e == ExamPTE || e == ExamIELTS || e == ExamEPSTOPIK }
 
 type SkillType string
 
@@ -31,6 +34,15 @@ func (s SkillType) Valid() bool {
 
 // AllSkills is the canonical order used by dashboards and progress views.
 var AllSkills = []SkillType{SkillSpeaking, SkillWriting, SkillReading, SkillListening}
+
+// SkillsFor is the skills an exam tests, in AllSkills order. EPS-TOPIK has no
+// speaking or writing section, so a dashboard must not show empty rows for them.
+func SkillsFor(exam ExamType) []SkillType {
+	if exam == ExamEPSTOPIK {
+		return []SkillType{SkillReading, SkillListening}
+	}
+	return AllSkills
+}
 
 // ---------------------------------------------------------------------------
 // Users
@@ -428,6 +440,9 @@ type ExamVersion struct {
 type QuestionOption struct {
 	ID   string `json:"id"`
 	Text string `json:"text"`
+	// ImageURL makes the option a picture. EPS-TOPIK listening asks the learner
+	// to choose one of four pictures; the text is then only a label.
+	ImageURL string `json:"imageUrl,omitempty"`
 }
 
 type Blank struct {
