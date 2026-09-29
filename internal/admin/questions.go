@@ -39,6 +39,9 @@ const (
 	answerWords     answerKind = "words"
 )
 
+// questionTypeSpec describes one authorable task. OptionImages is whether each
+// choice is a picture, as in EPS-TOPIK's "choose the picture" tasks; the option
+// text stays as its label.
 type questionTypeSpec struct {
 	Exam             string     `json:"exam"`
 	Skill            string     `json:"skill"`
@@ -49,6 +52,7 @@ type questionTypeSpec struct {
 	Audio            fieldUse   `json:"audio"`
 	Image            fieldUse   `json:"image"`
 	Figure           fieldUse   `json:"figure"`
+	OptionImages     fieldUse   `json:"optionImages"`
 	Prompt           string     `json:"prompt"`
 	PrepSeconds      int        `json:"prepSeconds"`
 	TimeLimitSeconds int        `json:"timeLimitSeconds"`
@@ -176,6 +180,78 @@ var authorableTypes = []questionTypeSpec{
 		Answer: answerDictation, Audio: fieldRequired,
 		Prompt:           "You will hear a sentence. Type the sentence exactly as you hear it.",
 		TimeLimitSeconds: 60, Points: 10},
+
+	// EPS-TOPIK. The tasks and their instructions are HRD Korea's, from the
+	// published standard (출제기준) and the 2025 sample book; the default prompt
+	// is the official instruction line. Every item is four options with one
+	// answer, worth one point: the exam's 0-100 scale turns the count into a
+	// score. 75 seconds is the exam's pace, 20 items in 25 minutes.
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-picture", TypeName: "Picture to Word or Sentence",
+		Answer: answerSingle, Image: fieldRequired,
+		Prompt:           "다음 그림을 보고 맞는 단어나 문장을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-grammar", TypeName: "Correct Underlined Grammar",
+		Answer:           answerSingle,
+		Prompt:           "다음 중 밑줄 친 부분이 맞는 것은 무엇입니까?",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-practical", TypeName: "Signs, Notices and Charts",
+		Answer: answerSingle, Image: fieldRequired,
+		Prompt:           "다음 글을 읽고 물음에 답하십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-word-relation", TypeName: "Related Word",
+		Answer: answerSingle, Passage: fieldRequired,
+		Prompt:           "다음 단어와 관계있는 것은 무엇입니까?",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-blank", TypeName: "Fill in the Blank",
+		Answer: answerSingle, Passage: fieldRequired, Image: fieldOptional,
+		Prompt:           "빈칸에 들어갈 가장 알맞은 것을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-definition", TypeName: "Word from Description",
+		Answer: answerSingle, Passage: fieldRequired,
+		Prompt:           "다음 설명에 알맞은 어휘를 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-topic", TypeName: "Passage Topic",
+		Answer: answerSingle, Passage: fieldRequired,
+		Prompt:           "다음 글을 읽고 무엇에 대한 글인지 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	// A notice to read may be text or a picture of one; normalise asks for at
+	// least one of the two.
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-detail", TypeName: "Matching Statement",
+		Answer: answerSingle, Passage: fieldOptional, Image: fieldOptional,
+		Prompt:           "다음 글을 읽고 내용과 같은 것을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "reading", TypeID: "eps-r-text-to-picture", TypeName: "Description to Picture",
+		Answer: answerSingle, Passage: fieldRequired, OptionImages: fieldRequired,
+		Prompt:           "다음 설명을 읽고 알맞은 그림을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "listening", TypeID: "eps-l-sound", TypeName: "Choose What You Heard",
+		Answer: answerSingle, Audio: fieldRequired,
+		Prompt:           "들은 것을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "listening", TypeID: "eps-l-picture", TypeName: "Listen and Choose Picture",
+		Answer: answerSingle, Audio: fieldRequired, OptionImages: fieldRequired,
+		Prompt:           "다음을 듣고 들은 내용과 관계있는 그림을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "listening", TypeID: "eps-l-response", TypeName: "Choose the Right Reply",
+		Answer: answerSingle, Audio: fieldRequired,
+		Prompt:           "다음을 듣고 질문에 알맞은 대답을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "listening", TypeID: "eps-l-next", TypeName: "What Comes Next",
+		Answer: answerSingle, Audio: fieldRequired,
+		Prompt:           "다음을 듣고 이어지는 말을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "listening", TypeID: "eps-l-number", TypeName: "Numbers, Dates and Prices",
+		Answer: answerSingle, Audio: fieldRequired, OptionImages: fieldRequired,
+		Prompt:           "다음을 듣고 들은 내용과 관계있는 그림을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "listening", TypeID: "eps-l-picture-question", TypeName: "Picture Question",
+		Answer: answerSingle, Audio: fieldRequired, Image: fieldRequired,
+		Prompt:           "다음을 듣고 질문에 알맞은 대답을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
+	{Exam: "EPS_TOPIK", Skill: "listening", TypeID: "eps-l-dialogue", TypeName: "Dialogue Comprehension",
+		Answer: answerSingle, Audio: fieldRequired,
+		Prompt:           "다음을 듣고 질문에 알맞은 대답을 고르십시오.",
+		TimeLimitSeconds: 75, Points: 1},
 }
 
 var authorableByID = func() map[string]questionTypeSpec {
@@ -186,7 +262,9 @@ var authorableByID = func() map[string]questionTypeSpec {
 	return byID
 }()
 
-var questionIDPrefix = map[string]string{"speaking": "spk", "writing": "wrt", "listening": "lis"}
+// Reading is authored here only for EPS-TOPIK, whose reading items stand
+// alone. IELTS and PTE reading sits on passages and has its own authoring.
+var questionIDPrefix = map[string]string{"speaking": "spk", "writing": "wrt", "listening": "lis", "reading": "rdg"}
 
 const maxChoiceOptions = 10
 
@@ -195,7 +273,7 @@ func authorableSkill(skill string) bool {
 	return ok
 }
 
-const authoredScope = `skill IN ('speaking', 'writing', 'listening') AND passage_id IS NULL AND reorder_item_id IS NULL`
+const authoredScope = `(skill IN ('speaking', 'writing', 'listening') OR (skill = 'reading' AND exam = 'EPS_TOPIK')) AND passage_id IS NULL AND reorder_item_id IS NULL`
 
 type newAuthoredQuestion struct {
 	Exam             string     `json:"exam"`
@@ -208,6 +286,7 @@ type newAuthoredQuestion struct {
 	ImageURL         string     `json:"imageUrl"`
 	FigureData       string     `json:"figureData"`
 	Options          []string   `json:"options"`
+	OptionImages     []string   `json:"optionImages"` // lines up with Options: each choice's picture, or ""
 	CorrectAnswers   []string   `json:"correctAnswers"`
 	Blanks           []newBlank `json:"blanks"`
 	ModelAnswer      string     `json:"modelAnswer"`
@@ -307,6 +386,10 @@ func (req newAuthoredQuestion) normalise() (authoredQuestion, map[string]string)
 	if spec.Image == fieldRequired && q.imageURL == "" {
 		problems["imageUrl"] = "Give the image URL."
 	}
+	if spec.Passage == fieldOptional && spec.Image == fieldOptional && spec.Exam == "EPS_TOPIK" &&
+		q.contextPassage == "" && q.imageURL == "" {
+		problems["contextPassage"] = "Write the text to read, or give a picture of it."
+	}
 	if spec.Figure == fieldRequired && q.figureData == "" {
 		problems["figureData"] = "Write out what the figure shows, so the evaluator can check the answer against it."
 	}
@@ -336,7 +419,19 @@ func (req newAuthoredQuestion) normalise() (authoredQuestion, map[string]string)
 			problems[field] = problem
 		}
 	case answerSingle, answerMultiple:
-		options, correct, choiceProblems := choiceKey(req.Options, req.CorrectAnswers, spec.Answer == answerMultiple)
+		images := req.OptionImages
+		if spec.OptionImages == fieldUnused {
+			images = nil
+		}
+		options, correct, choiceProblems := choiceKey(req.Options, images, req.CorrectAnswers, spec.Answer == answerMultiple)
+		if spec.OptionImages == fieldRequired {
+			for _, option := range options {
+				if option.ImageURL == "" {
+					choiceProblems["optionImages"] = "Give every option a picture."
+					break
+				}
+			}
+		}
 		q.options, q.correctAnswers = options, correct
 		for field, problem := range choiceProblems {
 			problems[field] = problem
@@ -376,12 +471,15 @@ func (req newAuthoredQuestion) normalise() (authoredQuestion, map[string]string)
 	return q, problems
 }
 
-func choiceKey(texts, answers []string, multi bool) ([]questionOption, []string, map[string]string) {
+// choiceKey turns the options as written into lettered options and the answers
+// into those letters. images, when given, lines up with texts; a picture option
+// keeps its text as the label the answer key is written against.
+func choiceKey(texts, images, answers []string, multi bool) ([]questionOption, []string, map[string]string) {
 	problems := map[string]string{}
 
 	options := []questionOption{}
 	idByText := map[string]string{}
-	for _, text := range texts {
+	for i, text := range texts {
 		text = strings.TrimSpace(text)
 		if text == "" {
 			continue
@@ -391,9 +489,17 @@ func choiceKey(texts, answers []string, multi bool) ([]questionOption, []string,
 			problems["options"] = "Two options have the same wording."
 			continue
 		}
+		image := ""
+		if i < len(images) {
+			image = strings.TrimSpace(images[i])
+		}
+		if image != "" && !isWebURL(image) {
+			problems["optionImages"] = "Use a full http:// or https:// link, or upload the picture."
+			image = ""
+		}
 		id := string(rune('A' + len(options)))
 		idByText[key] = id
-		options = append(options, questionOption{ID: id, Text: text})
+		options = append(options, questionOption{ID: id, Text: text, ImageURL: image})
 	}
 	switch {
 	case len(options) < 2:
@@ -539,7 +645,7 @@ type authoredQuestionSummary struct {
 func (h *Handler) authoredQuestions(w http.ResponseWriter, r *http.Request) {
 	skill := r.URL.Query().Get("skill")
 	if !authorableSkill(skill) {
-		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Skill must be speaking, writing or listening.")
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Skill must be speaking, writing, listening or reading.")
 		return
 	}
 
@@ -550,7 +656,7 @@ func (h *Handler) authoredQuestions(w http.ResponseWriter, r *http.Request) {
 		         + (SELECT count(*) FROM ai_evaluations e WHERE e.question_id = q.id),
 		       EXISTS (SELECT 1 FROM mock_sections ms WHERE q.id = ANY(ms.question_ids))
 		FROM questions q
-		WHERE q.skill = $1 AND q.passage_id IS NULL AND q.reorder_item_id IS NULL
+		WHERE q.skill = $1 AND `+authoredScope+`
 		ORDER BY q.created_at DESC, q.id`, skill)
 	if err != nil {
 		httpx.Internal(w, h.log, "admin.authoredQuestions", err)
@@ -586,56 +692,68 @@ var allowedQuestionImageTypes = map[string]bool{
 	"image/svg+xml": true,
 }
 
-func (h *Handler) uploadQuestionImage(w http.ResponseWriter, r *http.Request) {
-	_ = reqctx.MustUser(r.Context())
+// readQuestionUpload reads one uploaded file, sent either as multipart form
+// data (field "file", or the older fieldName) or as the raw body. It writes the
+// error response itself and reports false when there is nothing to store.
+func readQuestionUpload(w http.ResponseWriter, r *http.Request, limit int64, noun, fieldName string) ([]byte, string, bool) {
+	tooBig := fmt.Sprintf("%s exceeds the %d MB limit.", strings.ToUpper(noun[:1])+noun[1:], limit>>20)
 
 	var data []byte
 	var contentType string
 
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-		if err := r.ParseMultipartForm(maxQuestionImageBytes); err != nil {
-			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "That file is larger than 5 MB. Please choose a smaller image.")
-			return
+		if err := r.ParseMultipartForm(limit); err != nil {
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest,
+				fmt.Sprintf("That file is larger than %d MB. Please choose a smaller %s.", limit>>20, noun))
+			return nil, "", false
 		}
 		file, header, err := r.FormFile("file")
 		if err != nil {
-			file, header, err = r.FormFile("image")
+			file, header, err = r.FormFile(fieldName)
 		}
 		if err != nil {
-			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "No image file was attached.")
-			return
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, fmt.Sprintf("No %s file was attached.", noun))
+			return nil, "", false
 		}
 		defer file.Close()
 
-		limited := io.LimitReader(file, maxQuestionImageBytes+1)
-		readBytes, err := io.ReadAll(limited)
+		readBytes, err := io.ReadAll(io.LimitReader(file, limit+1))
 		if err != nil {
-			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Could not read uploaded image file.")
-			return
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, fmt.Sprintf("Could not read uploaded %s file.", noun))
+			return nil, "", false
 		}
-		if len(readBytes) > maxQuestionImageBytes {
-			httpx.Error(w, http.StatusRequestEntityTooLarge, httpx.CodeBadRequest, "Image exceeds the 5 MB limit.")
-			return
+		if int64(len(readBytes)) > limit {
+			httpx.Error(w, http.StatusRequestEntityTooLarge, httpx.CodeBadRequest, tooBig)
+			return nil, "", false
 		}
 		data = readBytes
 		contentType = header.Header.Get("Content-Type")
 	} else {
-		body := http.MaxBytesReader(w, r.Body, maxQuestionImageBytes)
-		readBytes, err := io.ReadAll(body)
+		readBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 		if err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
-				httpx.Error(w, http.StatusRequestEntityTooLarge, httpx.CodeBadRequest, "Image exceeds the 5 MB limit.")
-				return
+				httpx.Error(w, http.StatusRequestEntityTooLarge, httpx.CodeBadRequest, tooBig)
+				return nil, "", false
 			}
-			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Could not read uploaded image file.")
-			return
+			httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, fmt.Sprintf("Could not read uploaded %s file.", noun))
+			return nil, "", false
 		}
 		data = readBytes
 	}
 
 	if len(data) == 0 {
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Uploaded file is empty.")
+		return nil, "", false
+	}
+	return data, contentType, true
+}
+
+func (h *Handler) uploadQuestionImage(w http.ResponseWriter, r *http.Request) {
+	_ = reqctx.MustUser(r.Context())
+
+	data, contentType, ok := readQuestionUpload(w, r, maxQuestionImageBytes, "image", "image")
+	if !ok {
 		return
 	}
 
@@ -664,6 +782,67 @@ func (h *Handler) uploadQuestionImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.log.Info("admin uploaded question image", "assetId", assetID, "size", len(data), "type", contentType)
+
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"url":         "/api/v1/questions/assets/" + assetID,
+		"assetId":     assetID,
+		"contentType": contentType,
+		"size":        len(data),
+	})
+}
+
+const maxQuestionAudioBytes = 10 << 20 // 10 MiB
+
+// questionAudioType maps what a recording sniffs as, or failing that what the
+// upload said it was, to the type it is served with. An .m4a sniffs as
+// video/mp4, and a WAV as audio/wave, which browsers play under either name.
+var questionAudioType = map[string]string{
+	"audio/mpeg":      "audio/mpeg",
+	"audio/mp3":       "audio/mpeg",
+	"audio/wave":      "audio/wav",
+	"audio/wav":       "audio/wav",
+	"audio/x-wav":     "audio/wav",
+	"audio/ogg":       "audio/ogg",
+	"application/ogg": "audio/ogg",
+	"audio/mp4":       "audio/mp4",
+	"audio/x-m4a":     "audio/mp4",
+	"video/mp4":       "audio/mp4",
+	"audio/webm":      "audio/webm",
+	"video/webm":      "audio/webm",
+}
+
+// uploadQuestionAudio stores a listening recording as a question asset. Until
+// now listening items were read aloud by the browser from their script; a
+// Korean item needs a real recording, since many devices have no Korean voice.
+func (h *Handler) uploadQuestionAudio(w http.ResponseWriter, r *http.Request) {
+	_ = reqctx.MustUser(r.Context())
+
+	data, declared, ok := readQuestionUpload(w, r, maxQuestionAudioBytes, "recording", "audio")
+	if !ok {
+		return
+	}
+
+	contentType, known := questionAudioType[http.DetectContentType(data)]
+	if !known {
+		mediaType, _, _ := strings.Cut(strings.ToLower(declared), ";")
+		contentType, known = questionAudioType[strings.TrimSpace(mediaType)]
+	}
+	if !known {
+		httpx.Error(w, http.StatusUnsupportedMediaType, httpx.CodeBadRequest, "Please upload an MP3, M4A, WAV, OGG or WebM recording.")
+		return
+	}
+
+	assetID := fmt.Sprintf("aud_%d_%x", time.Now().UnixNano(), rand.Uint32())
+	if _, err := h.db.Exec(r.Context(), `
+		INSERT INTO question_assets (id, content_type, byte_size, data)
+		VALUES ($1, $2, $3, $4)`,
+		assetID, contentType, len(data), data,
+	); err != nil {
+		httpx.Internal(w, h.log, "admin.uploadQuestionAudio", err)
+		return
+	}
+
+	h.log.Info("admin uploaded question audio", "assetId", assetID, "size", len(data), "type", contentType)
 
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"url":         "/api/v1/questions/assets/" + assetID,
@@ -844,6 +1023,7 @@ type authoredQuestionDetail struct {
 	ImageURL         string     `json:"imageUrl"`
 	FigureData       string     `json:"figureData"`
 	Options          []string   `json:"options"`
+	OptionImages     []string   `json:"optionImages"`
 	CorrectAnswers   []string   `json:"correctAnswers"`
 	Blanks           []newBlank `json:"blanks"`
 	ModelAnswer      string     `json:"modelAnswer"`
@@ -898,9 +1078,11 @@ func (h *Handler) authoredQuestion(w http.ResponseWriter, r *http.Request) {
 	}
 	textByID := make(map[string]string, len(stored))
 	q.Options = []string{}
+	q.OptionImages = []string{}
 	for _, option := range stored {
 		textByID[option.ID] = option.Text
 		q.Options = append(q.Options, option.Text)
+		q.OptionImages = append(q.OptionImages, option.ImageURL)
 	}
 
 	answerIDs := []string{}
