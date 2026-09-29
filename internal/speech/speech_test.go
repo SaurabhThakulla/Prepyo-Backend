@@ -57,3 +57,19 @@ func TestEachSpeakerGetsTheirOwnVoice(t *testing.T) {
 		t.Fatalf("voices = %v", voices)
 	}
 }
+
+func TestSplitTurnsReadsKoreanSpeakerLabels(t *testing.T) {
+	turns := SplitTurns("여: 지금 뭐 해요? 남: 상자를 옮기고 있어요.")
+	want := []Turn{
+		{"여", "지금 뭐 해요?"},
+		{"남", "상자를 옮기고 있어요."},
+	}
+	if len(turns) != len(want) {
+		t.Fatalf("got %d turns, want %d: %+v", len(turns), len(want), turns)
+	}
+	for i := range want {
+		if turns[i] != want[i] {
+			t.Errorf("turn %d = %+v, want %+v", i, turns[i], want[i])
+		}
+	}
+}
