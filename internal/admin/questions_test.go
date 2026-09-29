@@ -190,8 +190,14 @@ func TestEveryAuthorableTypeIsWellFormed(t *testing.T) {
 		if !authorableSkill(spec.Skill) {
 			t.Errorf("type %s has skill %q", spec.TypeID, spec.Skill)
 		}
-		if spec.Exam != "PTE" && spec.Exam != "IELTS" {
+		if spec.Exam != "PTE" && spec.Exam != "IELTS" && spec.Exam != "EPS_TOPIK" {
 			t.Errorf("type %s has exam %q", spec.TypeID, spec.Exam)
+		}
+		if spec.Skill == "reading" && spec.Exam != "EPS_TOPIK" {
+			t.Errorf("reading type %s is authored on passages, not here", spec.TypeID)
+		}
+		if spec.OptionImages != fieldUnused && spec.Answer != answerSingle && spec.Answer != answerMultiple {
+			t.Errorf("type %s has picture options but no choices", spec.TypeID)
 		}
 		if spec.TimeLimitSeconds <= 0 || spec.Points <= 0 {
 			t.Errorf("type %s has no default time or points", spec.TypeID)
@@ -199,5 +205,85 @@ func TestEveryAuthorableTypeIsWellFormed(t *testing.T) {
 		if spec.Skill == "listening" && spec.Answer == answerRubric {
 			t.Errorf("listening type %s is graded without a model, so it needs an answer key", spec.TypeID)
 		}
+	}
+}
+
+func TestEPSTopikHasTheOfficialSubtasks(t *testing.T) {
+	want := map[string][]string{
+		"reading": {"eps-r-picture", "eps-r-grammar", "eps-r-practical", "eps-r-word-relation", "eps-r-blank",
+			"eps-r-definition", "eps-r-topic", "eps-r-detail", "eps-r-text-to-picture"},
+		"listening": {"eps-l-sound", "eps-l-picture", "eps-l-response", "eps-l-next", "eps-l-number",
+			"eps-l-picture-question", "eps-l-dialogue"},
+	}
+	for skill, ids := range want {
+		for _, id := range ids {
+			spec, ok := authorableByID[id]
+			if !ok {
+				t.Errorf("missing EPS-TOPIK subtask %s", id)
+				continue
+			}
+			if spec.Exam != "EPS_TOPIK" || spec.Skill != skill || spec.Answer != answerSingle || spec.Points != 1 {
+				t.Errorf("subtask %s is not a one-point %s choice: %+v", id, skill, spec)
+			}
+		}
+	}
+}
+
+func TestPictureOptionsKeepTheirPictures(t *testing.T) {
+	q, problems := newAuthoredQuestion{
+		Exam: "EPS_TOPIK", TypeID: "eps-l-picture", Title: "망치", AudioTranscript: "망치입니다.",
+		Options:        []string{"망치", "", "가위", "드라이버"},
+		OptionImages:   []string{"/api/v1/questions/assets/img_1", "", "/api/v1/questions/assets/img_2", "https://cdn.example.com/c.png"},
+		CorrectAnswers: []string{"망치"},
+	}.normalise()
+	if len(problems) > 0 {
+		t.Fatalf("unexpected problems: %v", problems)
+	}
+	want := []questionOption{
+		{ID: "A", Text: "망치", ImageURL: "/api/v1/questions/assets/img_1"},
+		{ID: "B", Text: "가위", ImageURL: "/api/v1/questions/assets/img_2"},
+		{ID: "C", Text: "드라이버", ImageURL: "https://cdn.example.com/c.png"},
+	}
+	if !reflect.DeepEqual(q.options, want) || !reflect.DeepEqual(q.correctAnswers, []string{"A"}) {
+		t.Fatalf("options = %+v, correct = %v", q.options, q.correctAnswers)
+	}
+}
+
+func TestPictureTaskNeedsAPictureForEveryOption(t *testing.T) {
+	_, problems := newAuthoredQuestion{
+		Exam: "EPS_TOPIK", TypeID: "eps-l-picture", Title: "x", AudioTranscript: "망치입니다.",
+		Options: []string{"망치", "가위"}, OptionImages: []string{"/api/v1/questions/assets/img_1"},
+		CorrectAnswers: []string{"망치"},
+	}.normalise()
+	if problems["optionImages"] == "" {
+		t.Fatalf("expected an optionImages problem, got %v", problems)
+	}
+}
+
+func TestTextTaskDropsOptionPictures(t *testing.T) {
+	q, problems := newAuthoredQuestion{
+		Exam: "EPS_TOPIK", TypeID: "eps-l-sound", Title: "x", AudioTranscript: "가구",
+		Options: []string{"가구", "기구"}, OptionImages: []string{"/api/v1/questions/assets/img_1", ""},
+		CorrectAnswers: []string{"가구"},
+	}.normalise()
+	if len(problems) > 0 || q.options[0].ImageURL != "" {
+		t.Fatalf("problems = %v, options = %+v", problems, q.options)
+	}
+}
+
+func TestNoticeNeedsTextOrAPicture(t *testing.T) {
+	_, problems := newAuthoredQuestion{
+		Exam: "EPS_TOPIK", TypeID: "eps-r-detail", Title: "x",
+		Options: []string{"a", "b"}, CorrectAnswers: []string{"a"},
+	}.normalise()
+	if problems["contextPassage"] == "" {
+		t.Fatalf("expected a contextPassage problem, got %v", problems)
+	}
+	_, problems = newAuthoredQuestion{
+		Exam: "EPS_TOPIK", TypeID: "eps-r-detail", Title: "x", ImageURL: "/api/v1/questions/assets/img_1",
+		Options: []string{"a", "b"}, CorrectAnswers: []string{"a"},
+	}.normalise()
+	if len(problems) > 0 {
+		t.Fatalf("a picture of the notice should be enough, got %v", problems)
 	}
 }
