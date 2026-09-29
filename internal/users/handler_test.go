@@ -79,3 +79,25 @@ func TestOnboardingAnswersAreChecked(t *testing.T) {
 		}
 	})
 }
+
+func TestTargetScoreFollowsTheExamScale(t *testing.T) {
+	cases := []struct {
+		exam  models.ExamType
+		score float64
+		ok    bool
+	}{
+		{models.ExamIELTS, 7.5, true},
+		{models.ExamIELTS, 10, false},
+		{models.ExamPTE, 79, true},
+		{models.ExamPTE, 5, false},
+		{models.ExamEPSTOPIK, 60, true},
+		{models.ExamEPSTOPIK, 0, true},
+		{models.ExamEPSTOPIK, 100, true},
+		{models.ExamEPSTOPIK, 120, false},
+	}
+	for _, c := range cases {
+		if got := validTargetScore(c.exam, c.score); got != c.ok {
+			t.Errorf("validTargetScore(%s, %v) = %v, want %v", c.exam, c.score, got, c.ok)
+		}
+	}
+}
