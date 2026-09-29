@@ -66,9 +66,13 @@ func NewService(db database.DB, voice Synthesizer, maxChars int) *Service {
 // Available reports whether the server can speak at all.
 func (s *Service) Available() bool { return s.voice != nil && s.voice.SpeechAvailable() }
 
+// speakerLabel is a speaker's name: one or two capitalised words, or a short
+// Hangul word as EPS-TOPIK scripts label speakers ("남: … 여: …").
+const speakerLabel = `[A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+)?|[가-힣]{1,4}`
+
 var (
-	leadingLabel = regexp.MustCompile(`^([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+)?):\s+`)
-	anyLabel     = regexp.MustCompile(`(?:^|([.!?]["”’)]?)\s+|\n+)([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+)?):\s+`)
+	leadingLabel = regexp.MustCompile(`^(` + speakerLabel + `):\s+`)
+	anyLabel     = regexp.MustCompile(`(?:^|([.!?]["”’)]?)\s+|\n+)(` + speakerLabel + `):\s+`)
 	sentenceEnd  = regexp.MustCompile(`[^.!?]+[.!?]+["”’)]*\s*|[^.!?]+$`)
 )
 
