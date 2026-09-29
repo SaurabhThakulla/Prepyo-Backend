@@ -69,7 +69,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	skill := models.SkillType(query.Get("skill"))
 
 	if exam != "" && !exam.Valid() {
-		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE or IELTS.")
+		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "Unknown exam. Use PTE, IELTS or EPS_TOPIK.")
 		return
 	}
 	if skill != "" && !skill.Valid() {

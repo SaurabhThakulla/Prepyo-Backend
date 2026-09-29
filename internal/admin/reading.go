@@ -80,8 +80,9 @@ func (s readingTypeSpec) setsExam(exam string) bool {
 }
 
 type questionOption struct {
-	ID   string `json:"id"`
-	Text string `json:"text"`
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	ImageURL string `json:"imageUrl,omitempty"`
 }
 
 // supportedTypes is every reading task this endpoint can author.
