@@ -234,7 +234,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if req.TargetExam != nil {
 		exam := models.ExamType(*req.TargetExam)
 		if !exam.Valid() {
-			problems["targetExam"] = "Choose PTE or IELTS."
+			problems["targetExam"] = "Choose PTE, IELTS or EPS-TOPIK."
 		} else if !examChangeAllowed(user, exam) {
 			problems["targetExam"] = "Your exam is fixed once you have chosen it."
 		} else {
@@ -302,7 +302,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 var (
 	studyGoals   = map[string]bool{"university": true, "migration": true, "work": true, "other": true}
 	destinations = map[string]bool{
-		"australia": true, "uk": true, "canada": true, "usa": true, "new-zealand": true, "other": true,
+		"australia": true, "uk": true, "canada": true, "usa": true, "new-zealand": true, "south-korea": true, "other": true,
 	}
 )
 
@@ -362,8 +362,11 @@ func examChangeAllowed(user models.User, next models.ExamType) bool {
 }
 
 func validTargetScore(exam models.ExamType, score float64) bool {
-	if exam == models.ExamIELTS {
+	switch exam {
+	case models.ExamIELTS:
 		return score >= 0 && score <= 9
+	case models.ExamEPSTOPIK:
+		return score >= 0 && score <= 100
 	}
 	return score >= 10 && score <= 90
 }
