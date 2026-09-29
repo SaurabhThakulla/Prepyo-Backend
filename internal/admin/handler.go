@@ -43,6 +43,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/questions/types", h.questionTypes)
 	r.Get("/questions", h.authoredQuestions)
 	r.Post("/questions/upload-image", h.uploadQuestionImage)
+	r.Post("/questions/upload-audio", h.uploadQuestionAudio)
 	r.Post("/questions", h.createQuestion)
 	r.Get("/questions/{id}", h.authoredQuestion)
 	r.Put("/questions/{id}", h.updateQuestion)

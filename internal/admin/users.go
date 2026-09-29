@@ -252,7 +252,7 @@ func (h *Handler) setUserExam(w http.ResponseWriter, r *http.Request) {
 
 	exam, ok := parseTargetExam(req.TargetExam)
 	if !ok {
-		httpx.ValidationError(w, map[string]string{"targetExam": "Choose PTE or IELTS."})
+		httpx.ValidationError(w, map[string]string{"targetExam": "Choose PTE, IELTS or EPS-TOPIK."})
 		return
 	}
 
@@ -347,8 +347,8 @@ func (h *Handler) questionsByExam(ctx context.Context) ([]examQuestionCount, err
 
 	// Listed even at zero, so an exam with no published questions reads as
 	// empty rather than vanishing from the dropdown.
-	counts := make([]examQuestionCount, 0, 2)
-	for _, exam := range []string{string(models.ExamPTE), string(models.ExamIELTS)} {
+	counts := make([]examQuestionCount, 0, 3)
+	for _, exam := range []string{string(models.ExamPTE), string(models.ExamIELTS), string(models.ExamEPSTOPIK)} {
 		counts = append(counts, examQuestionCount{Exam: exam, Count: found[exam]})
 	}
 	return counts, nil
