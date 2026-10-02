@@ -21,6 +21,29 @@ func TestPublicQuestionTranscript(t *testing.T) {
 	}
 }
 
+// The English version of a script gives the answer away as the script does:
+// review carries it, the question does not.
+func TestTranslationOnlyInReview(t *testing.T) {
+	q := Question{
+		Exam: ExamEPSTOPIK, Skill: SkillListening, AudioTranscript: "남: 고향이 어디예요?",
+		AudioTranslation: "Man: Where are you from?", TranslationAudioURL: "/api/v1/questions/assets/tts_en_1",
+	}
+	public := q.PublicQuestion()
+	if public.AudioTranslation != "" || public.TranslationAudioURL != "" {
+		t.Fatalf("translation sent before answering: %q %q", public.AudioTranslation, public.TranslationAudioURL)
+	}
+	if !public.HasTranslation {
+		t.Fatal("public question does not say an English version exists")
+	}
+	if (Question{}).PublicQuestion().HasTranslation {
+		t.Fatal("question without a translation claims one")
+	}
+	review := q.ForReview()
+	if review.AudioTranslation != q.AudioTranslation || review.TranslationAudioURL != q.TranslationAudioURL {
+		t.Fatalf("review lost the translation: %+v", review.Question)
+	}
+}
+
 // An IELTS listening script is every answer on the item. It is served at play
 // time, not in the question payload; review restores it.
 func TestIELTSListeningScriptIsServedOnRequest(t *testing.T) {

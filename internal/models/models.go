@@ -122,6 +122,12 @@ func RoleForUser(u User) string {
 
 func (u User) IsAdmin() bool { return u.Role == RoleAdmin }
 
+// IsPremium reports whether the user may use premium features: an admin, or
+// a learner inside a live paid plan above the free tier.
+func (u User) IsPremium() bool {
+	return u.IsAdmin() || (u.HasActivePaidPlan() && u.Role != RoleSuru && u.PlanID != "free")
+}
+
 // IELTS modules. Listening, Speaking and Writing Task 2 are the same paper in
 // both; Reading texts, Writing Task 1 and the Reading band table differ.
 const (
@@ -488,6 +494,14 @@ type Question struct {
 	ModelAnswer     string   `json:"-"`
 	Explanation     string   `json:"-"`
 	FigureData      string   `json:"-"`
+	// AudioTranslation is the script in English, and TranslationAudioURL a
+	// recording of it, for a learner who did not follow the Korean. Like the
+	// script they give the answer away, so only review carries them.
+	AudioTranslation    string `json:"audioTranslation,omitempty"`
+	TranslationAudioURL string `json:"translationAudioUrl,omitempty"`
+	// HasTranslation tells the page an English version exists, so it can
+	// offer it, without sending the English itself.
+	HasTranslation bool `json:"hasTranslation,omitempty"`
 }
 
 // SupportsExam reports whether this question may be answered under an exam.
@@ -510,6 +524,9 @@ func (q Question) PublicQuestion() Question {
 	safe.ModelAnswer = ""
 	safe.Explanation = ""
 	safe.FigureData = ""
+	safe.HasTranslation = q.AudioTranslation != ""
+	safe.AudioTranslation = ""
+	safe.TranslationAudioURL = ""
 	// With a recording to play, the transcript is only an answer key: for
 	// Write from Dictation it is the answer word for word. It is kept only when
 	// there is no file, because the browser then reads it aloud instead.

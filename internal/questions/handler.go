@@ -36,6 +36,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/{questionID}", h.get)
 	r.Get("/{questionID}/playback", h.playback)
 	r.Get("/{questionID}/playback/audio", h.playbackAudio)
+	r.Get("/{questionID}/translation", h.translation)
 	return r
 }
 
@@ -148,6 +149,32 @@ func (h *Handler) playback(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	httpx.JSON(w, http.StatusOK, map[string]any{"script": script})
+}
+
+// translation serves the English version of a Korean listening item, for the
+// Help button. It gives the answer away as the script does, so it is for
+// premium learners only, and is fetched only when they ask for it.
+func (h *Handler) translation(w http.ResponseWriter, r *http.Request) {
+	user := reqctx.MustUser(r.Context())
+	if !user.IsPremium() {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "The English version is a Premium feature. Please upgrade your plan.")
+		return
+	}
+	q, err := h.repo.ByID(r.Context(), chi.URLParam(r, "questionID"))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That question does not exist.")
+			return
+		}
+		httpx.Internal(w, h.log, "questions.translation", err)
+		return
+	}
+	if q.AudioTranslation == "" {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That question has no English version.")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	httpx.JSON(w, http.StatusOK, map[string]any{"text": q.AudioTranslation, "audioUrl": q.TranslationAudioURL})
 }
 
 // playbackAudio is the same script spoken on the server, as a list of short

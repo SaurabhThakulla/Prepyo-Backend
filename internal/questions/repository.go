@@ -20,7 +20,7 @@ const selectFields = `
 	COALESCE(options, '[]'::jsonb), COALESCE(correct_answers, '[]'::jsonb),
 	COALESCE(blanks, '[]'::jsonb), COALESCE(model_answer, ''), COALESCE(explanation, ''),
 	difficulty, tags, points, COALESCE(group_id, ''), COALESCE(figure_data, ''),
-	supported_exams`
+	supported_exams, COALESCE(audio_translation, ''), COALESCE(translation_audio_url, '')`
 
 type Repository struct {
 	db database.DB
@@ -198,7 +198,7 @@ func fieldsOf(q *models.Question) []any {
 		&q.ImageURL, &q.PrepTimeSeconds, &q.TimeLimitSeconds,
 		&q.Options, &q.CorrectAnswers, &q.Blanks, &q.ModelAnswer, &q.Explanation,
 		&q.Difficulty, &q.Tags, &q.Points, &q.GroupID, &q.FigureData,
-		&q.SupportedExams,
+		&q.SupportedExams, &q.AudioTranslation, &q.TranslationAudioURL,
 	}
 }
 

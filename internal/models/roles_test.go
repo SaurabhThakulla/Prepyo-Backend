@@ -108,3 +108,26 @@ func TestNewUserProfileFreeHasNoExpiry(t *testing.T) {
 		t.Error("PaidPlanActive = true on the free plan")
 	}
 }
+
+// Premium is an admin, or a live paid plan above the free tier: the same rule
+// for the mistake bank and the English version of Korean items.
+func TestIsPremium(t *testing.T) {
+	future := time.Now().Add(48 * time.Hour)
+	past := time.Now().Add(-48 * time.Hour)
+	cases := []struct {
+		name string
+		user User
+		want bool
+	}{
+		{"admin", User{Role: RoleAdmin}, true},
+		{"live paid plan", User{Role: RoleTaiyari, PlanID: "pro", PlanValidUntil: &future}, true},
+		{"expired plan", User{Role: RoleTaiyari, PlanID: "pro", PlanValidUntil: &past}, false},
+		{"free plan", User{Role: RoleSuru, PlanID: "free", PlanValidUntil: &future}, false},
+		{"no plan", User{Role: RoleSuru, PlanID: "free"}, false},
+	}
+	for _, c := range cases {
+		if got := c.user.IsPremium(); got != c.want {
+			t.Errorf("%s: IsPremium() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

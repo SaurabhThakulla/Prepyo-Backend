@@ -241,9 +241,15 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The English version of a Korean script is a premium feature.
+	review := question.ForReview()
+	if !user.IsPremium() {
+		review.AudioTranslation, review.TranslationAudioURL = "", ""
+	}
+
 	httpx.JSON(w, http.StatusCreated, map[string]any{
 		"attempt":   attempt,
-		"review":    question.ForReview(),
+		"review":    review,
 		"xpAwarded": awarded,
 		"streak":    streak,
 		"missions":  missions,
