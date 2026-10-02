@@ -202,6 +202,23 @@ func fieldsOf(q *models.Question) []any {
 	}
 }
 
+// InOpenMock reports whether questionID is part of a mock the user is sitting
+// now: an unexpired IELTS listening mock or an unfinished PTE mock. Its script
+// and English version are answer keys, so they are not served until the mock
+// is over. Questions the user only practises are unaffected.
+func (r *Repository) InOpenMock(ctx context.Context, userID, questionID string) (bool, error) {
+	var open bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM listening_mock_sessions
+			 WHERE user_id = $1 AND status = 'in_progress' AND expires_at > now() AND $2 = ANY(question_ids)
+		) OR EXISTS (
+			SELECT 1 FROM pte_mock_items i JOIN pte_mock_sessions s ON s.id = i.session_id
+			 WHERE s.user_id = $1 AND s.status = 'in_progress' AND i.question_id = $2
+		)`, userID, questionID).Scan(&open)
+	return open, err
+}
+
 type QuestionAsset struct {
 	ID          string
 	ContentType string

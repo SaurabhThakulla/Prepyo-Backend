@@ -133,6 +133,9 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 // that has no recording. It is fetched when the learner presses play, so the
 // script (and the answers in it) is not part of the question payload.
 func (h *Handler) playback(w http.ResponseWriter, r *http.Request) {
+	if h.inOpenMock(w, r, "questions.playback") {
+		return
+	}
 	q, err := h.repo.ByID(r.Context(), chi.URLParam(r, "questionID"))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -160,6 +163,9 @@ func (h *Handler) translation(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "The English version is a Premium feature. Please upgrade your plan.")
 		return
 	}
+	if h.inOpenMock(w, r, "questions.translation") {
+		return
+	}
 	q, err := h.repo.ByID(r.Context(), chi.URLParam(r, "questionID"))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -175,6 +181,22 @@ func (h *Handler) translation(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	httpx.JSON(w, http.StatusOK, map[string]any{"text": q.AudioTranslation, "audioUrl": q.TranslationAudioURL})
+}
+
+// inOpenMock refuses the request, and reports true, when the question belongs
+// to a mock the learner is sitting: its script is the answer key until then.
+func (h *Handler) inOpenMock(w http.ResponseWriter, r *http.Request, op string) bool {
+	user := reqctx.MustUser(r.Context())
+	open, err := h.repo.InOpenMock(r.Context(), user.ID, chi.URLParam(r, "questionID"))
+	if err != nil {
+		httpx.Internal(w, h.log, op, err)
+		return true
+	}
+	if open {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden, "This isn't available while the question is part of a mock test you are taking.")
+		return true
+	}
+	return false
 }
 
 // playbackAudio is the same script spoken on the server, as a list of short
