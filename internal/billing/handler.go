@@ -152,6 +152,11 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 				"That transaction has already been submitted. We are reviewing it.")
 			return
 		}
+		if errors.Is(err, ErrTooManyPending) {
+			httpx.Error(w, http.StatusTooManyRequests, httpx.CodeLimitReached,
+				"You already have payments waiting for review. Please wait until we have checked them before sending another.")
+			return
+		}
 		httpx.Internal(w, h.log, "billing.confirm", err)
 		return
 	}

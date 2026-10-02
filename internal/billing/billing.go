@@ -360,6 +360,14 @@ func planIsActive(user models.User) bool {
 // button cannot become two requests for the same money.
 var ErrDuplicateTransaction = errors.New("transaction already submitted")
 
+// MaxPendingPayments is how many payments one learner may have waiting for
+// review. Each carries a screenshot of up to 4 MB, so without a cap one
+// account could fill the database disk.
+const MaxPendingPayments = 3
+
+// ErrTooManyPending means the learner already has MaxPendingPayments waiting.
+var ErrTooManyPending = errors.New("too many payments waiting for review")
+
 type RequestPaymentParams struct {
 	UserID         string
 	Plan           models.Plan
@@ -397,6 +405,17 @@ func (s *Service) RequestPayment(ctx context.Context, pool *pgxpool.Pool, p Requ
 	defer tx.Rollback(ctx)
 	if err = referrals.LockLifecycle(ctx, tx); err != nil {
 		return err
+	}
+	// Counted under the lifecycle lock, so two requests at once cannot both
+	// slip under the cap.
+	var pending int
+	if err = tx.QueryRow(ctx,
+		`SELECT count(*) FROM subscription_payments WHERE user_id = $1 AND status = 'pending'`,
+		p.UserID).Scan(&pending); err != nil {
+		return fmt.Errorf("count pending payments: %w", err)
+	}
+	if pending >= MaxPendingPayments {
+		return ErrTooManyPending
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO subscription_payments
