@@ -49,6 +49,8 @@ type Service struct {
 	adminEmail    string
 	adminPassword string
 	adminMu       sync.Mutex
+	// adminAttempts holds recent wrong passwords for the admin account, keyed
+	// by the client IP they came from.
 	adminAttempts map[string][]time.Time
 }
 
@@ -76,13 +78,16 @@ func (s *Service) AdminLoginConfigured() bool {
 // session. It is the only password login in the product: every learner account
 // signs in with Google, and this one exists because admin@prepyo.online has no
 // Google account behind it.
-func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (models.User, string, error) {
+//
+// Wrong passwords lock out the client IP they came from, not the account, so
+// nobody can lock the admin out by failing on purpose from elsewhere.
+func (s *Service) SignInAsAdmin(ctx context.Context, email, password, clientIP string) (models.User, string, error) {
 	if !s.AdminLoginConfigured() {
 		return models.User{}, "", ErrAdminLoginNotConfigured
 	}
 
 	email = strings.ToLower(strings.TrimSpace(email))
-	if s.adminLoginLocked(email, time.Now()) {
+	if s.adminLoginLocked(clientIP, time.Now()) {
 		return models.User{}, "", ErrAdminLoginRateLimited
 	}
 
@@ -91,10 +96,14 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 	emailOK := subtle.ConstantTimeCompare([]byte(email), []byte(s.adminEmail))
 	passwordOK := subtle.ConstantTimeCompare([]byte(password), []byte(s.adminPassword))
 	if emailOK&passwordOK != 1 {
-		s.recordAdminFailure(email, time.Now())
+		// Only guesses at the real account count: a wrong email can never
+		// succeed, and recording every made-up one would grow without end.
+		if emailOK == 1 {
+			s.recordAdminFailure(clientIP, time.Now())
+		}
 		return models.User{}, "", ErrAdminCredentials
 	}
-	s.clearAdminFailures(email)
+	s.clearAdminFailures(clientIP)
 
 	user, err := s.users.ByEmail(ctx, s.adminEmail)
 	if err != nil {
@@ -125,44 +134,71 @@ func (s *Service) SignInAsAdmin(ctx context.Context, email, password string) (mo
 const adminLoginWindow = 10 * time.Minute
 const adminLoginMaxFailures = 5
 
-// adminLoginLocked adds an account/email dimension to the outer IP limiter.
-// Only failed attempts count, so signing in correctly never locks anyone out.
-// The key is the normalized email, so changing IPs does not evade throttling.
-func (s *Service) adminLoginLocked(email string, now time.Time) bool {
+// adminLoginMaxTracked caps how many client IPs are remembered at once. Past
+// it, expired entries are swept and then the stalest IP is forgotten, so a
+// flood from many addresses cannot grow memory without limit.
+const adminLoginMaxTracked = 10000
+
+// adminLoginLocked adds a per-client dimension to the outer rate limiter: five
+// wrong admin passwords from one IP lock that IP out for the window. Only
+// failures count, so signing in correctly never locks anyone out.
+func (s *Service) adminLoginLocked(clientIP string, now time.Time) bool {
 	s.adminMu.Lock()
 	defer s.adminMu.Unlock()
-	return len(s.recentAdminFailures(email, now)) >= adminLoginMaxFailures
+	return len(s.recentAdminFailures(clientIP, now)) >= adminLoginMaxFailures
 }
 
-// recordAdminFailure notes a wrong email or password for email.
-func (s *Service) recordAdminFailure(email string, now time.Time) {
+// recordAdminFailure notes a wrong admin password from clientIP.
+func (s *Service) recordAdminFailure(clientIP string, now time.Time) {
 	s.adminMu.Lock()
 	defer s.adminMu.Unlock()
-	s.adminAttempts[email] = append(s.recentAdminFailures(email, now), now)
+	if _, known := s.adminAttempts[clientIP]; !known && len(s.adminAttempts) >= adminLoginMaxTracked {
+		s.makeRoomForAdminFailure(now)
+	}
+	s.adminAttempts[clientIP] = append(s.recentAdminFailures(clientIP, now), now)
 }
 
-// clearAdminFailures forgets past failures once the right credential is given.
-func (s *Service) clearAdminFailures(email string) {
+// makeRoomForAdminFailure drops expired entries and, if that frees nothing,
+// the IP whose last failure is oldest. The caller must hold adminMu.
+func (s *Service) makeRoomForAdminFailure(now time.Time) {
+	var stalest string
+	var stalestAt time.Time
+	for ip := range s.adminAttempts {
+		failures := s.recentAdminFailures(ip, now)
+		if len(failures) == 0 {
+			continue
+		}
+		if last := failures[len(failures)-1]; stalest == "" || last.Before(stalestAt) {
+			stalest, stalestAt = ip, last
+		}
+	}
+	if len(s.adminAttempts) >= adminLoginMaxTracked {
+		delete(s.adminAttempts, stalest)
+	}
+}
+
+// clearAdminFailures forgets clientIP's failures once it signs in correctly.
+func (s *Service) clearAdminFailures(clientIP string) {
 	s.adminMu.Lock()
 	defer s.adminMu.Unlock()
-	delete(s.adminAttempts, email)
+	delete(s.adminAttempts, clientIP)
 }
 
 // recentAdminFailures drops failures older than the window and returns the
 // rest. The caller must hold adminMu.
-func (s *Service) recentAdminFailures(email string, now time.Time) []time.Time {
+func (s *Service) recentAdminFailures(clientIP string, now time.Time) []time.Time {
 	cutoff := now.Add(-adminLoginWindow)
-	failures := s.adminAttempts[email][:0]
-	for _, at := range s.adminAttempts[email] {
+	failures := s.adminAttempts[clientIP][:0]
+	for _, at := range s.adminAttempts[clientIP] {
 		if at.After(cutoff) {
 			failures = append(failures, at)
 		}
 	}
 	if len(failures) == 0 {
-		delete(s.adminAttempts, email)
+		delete(s.adminAttempts, clientIP)
 		return nil
 	}
-	s.adminAttempts[email] = failures
+	s.adminAttempts[clientIP] = failures
 	return failures
 }
 

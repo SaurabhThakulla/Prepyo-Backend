@@ -2,10 +2,12 @@ package auth
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/referrals"
 	"github.com/prepyo/backend/internal/reqctx"
@@ -126,7 +128,7 @@ func (h *Handler) adminSignIn(w http.ResponseWriter, r *http.Request) {
 
 	}
 
-	user, token, err := h.service.SignInAsAdmin(r.Context(), req.Email, req.Password)
+	user, token, err := h.service.SignInAsAdmin(r.Context(), req.Email, req.Password, clientIP(r))
 
 	switch {
 
@@ -208,4 +210,17 @@ func (h *Handler) googleSignIn(w http.ResponseWriter, r *http.Request) {
 
 	h.setSessionCookie(w, token)
 	httpx.JSON(w, http.StatusOK, map[string]any{"user": models.NewUserProfile(user)})
+}
+
+// clientIP is the address admin sign-in failures are counted against: the
+// visitor's real IP as the router's trusted-proxy middleware resolved it, or
+// the connection's own address when that middleware is not in front.
+func clientIP(r *http.Request) string {
+	if ip := middleware.GetClientIP(r.Context()); ip != "" {
+		return ip
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
