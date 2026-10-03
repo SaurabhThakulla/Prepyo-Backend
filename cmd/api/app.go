@@ -22,6 +22,7 @@ import (
 	"github.com/prepyo/backend/internal/fullmock"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/leaderboards"
+	"github.com/prepyo/backend/internal/learn"
 	"github.com/prepyo/backend/internal/listeningmock"
 	"github.com/prepyo/backend/internal/mistakes"
 	"github.com/prepyo/backend/internal/mockpapers"
@@ -85,6 +86,7 @@ type app struct {
 	progressHandler      *progress.Handler
 	gamificationHandler  *gamification.Handler
 	leaderboardHandler   *leaderboards.Handler
+	learnHandler         *learn.Handler
 	notificationHandler  *notifications.Handler
 	billingHandler       *billing.Handler
 	referralHandler      *referrals.Handler
@@ -151,6 +153,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		evaluationHandler:    evaluations.NewHandler(evaluationService, evaluationRepo, log),
 		writingMockHandler:   writingmock.NewHandler(writingMockService, log),
 		speechHandler:        speech.NewHandler(speechService, log),
+		learnHandler:         learn.NewHandler(learn.NewRepository(pool), log),
 		listeningMockHandler: listeningmock.NewHandler(listeningMockService, speechService, log),
 		speakingMockHandler:  speakingmock.NewHandler(speakingMockService, speechService, log),
 		fullMockHandler:      fullmock.NewHandler(fullMockService, log),
@@ -246,6 +249,7 @@ func (a *app) router() http.Handler {
 				quick.Mount("/progress", a.progressHandler.Routes())
 				quick.Mount("/gamification", a.gamificationHandler.Routes())
 				quick.Mount("/leaderboards", a.leaderboardHandler.Routes())
+				quick.Mount("/learn", a.learnHandler.Routes())
 				quick.Mount("/notifications", a.notificationHandler.Routes())
 
 				// Only raising a report or replying is throttled; reading your
