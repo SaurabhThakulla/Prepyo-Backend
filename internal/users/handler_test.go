@@ -80,6 +80,31 @@ func TestOnboardingAnswersAreChecked(t *testing.T) {
 	})
 }
 
+// EPS-TOPIK tests reading and listening only, so onboarding cannot save
+// speaking or writing as its focus.
+func TestOnboardingFocusFollowsTheExam(t *testing.T) {
+	for _, c := range []struct {
+		exam  models.ExamType
+		skill string
+		ok    bool
+	}{
+		{models.ExamEPSTOPIK, "listening", true},
+		{models.ExamEPSTOPIK, "reading", true},
+		{models.ExamEPSTOPIK, "speaking", false},
+		{models.ExamEPSTOPIK, "writing", false},
+		{models.ExamIELTS, "speaking", true},
+		{models.ExamPTE, "writing", true},
+	} {
+		params := UpdateProfileParams{}
+		problems := map[string]string{}
+		skill := c.skill
+		applyOnboardingAnswers(updateRequest{FocusSkill: &skill}, c.exam, &params, problems)
+		if ok := problems["focusSkill"] == "" && params.FocusSkill != nil; ok != c.ok {
+			t.Errorf("%s focus %s: accepted = %v, want %v (%v)", c.exam, c.skill, ok, c.ok, problems)
+		}
+	}
+}
+
 func TestTargetScoreFollowsTheExamScale(t *testing.T) {
 	cases := []struct {
 		exam  models.ExamType

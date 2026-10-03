@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -341,10 +342,15 @@ func applyOnboardingAnswers(req updateRequest, exam models.ExamType, params *Upd
 	}
 
 	if req.FocusSkill != nil {
-		if models.SkillType(*req.FocusSkill).Valid() {
-			params.FocusSkill = req.FocusSkill
-		} else {
+		skill := models.SkillType(*req.FocusSkill)
+		switch {
+		case !skill.Valid():
 			problems["focusSkill"] = "Choose speaking, writing, reading or listening."
+		case !slices.Contains(models.SkillsFor(exam), skill):
+			// EPS-TOPIK has no speaking or writing section to focus on.
+			problems["focusSkill"] = "Choose a skill this exam tests."
+		default:
+			params.FocusSkill = req.FocusSkill
 		}
 	}
 
