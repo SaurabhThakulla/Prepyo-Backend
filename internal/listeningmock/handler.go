@@ -32,6 +32,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/{sessionID}", h.get)
 	r.Get("/{sessionID}/parts/{partNo}/script", h.script)
 	r.Get("/{sessionID}/parts/{partNo}/audio", h.audio)
+	r.Get("/{sessionID}/parts/{partNo}/recording", h.recording)
 	r.Put("/{sessionID}/answers", h.saveDrafts)
 	r.Post("/{sessionID}/submit", h.submit)
 	return r
@@ -94,6 +95,23 @@ func (h *Handler) audio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	speech.WriteSegments(w, r, h.speech, h.log, script, nil)
+}
+
+// recording is the part's stored recording, played before any voice is tried.
+// An empty url means there is none yet.
+func (h *Handler) recording(w http.ResponseWriter, r *http.Request) {
+	partNo, err := strconv.Atoi(chi.URLParam(r, "partNo"))
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That part is not on this paper.")
+		return
+	}
+	url, err := h.svc.Recording(r.Context(), reqctx.MustUser(r.Context()), chi.URLParam(r, "sessionID"), partNo)
+	if err != nil {
+		h.writeError(w, "listeningmock.recording", err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	httpx.JSON(w, http.StatusOK, map[string]any{"url": url})
 }
 
 type answersRequest struct {

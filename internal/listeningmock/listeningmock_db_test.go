@@ -160,3 +160,45 @@ func TestFullMockPaperSitsBesideAnOpenSectionMock(t *testing.T) {
 		t.Fatalf("section mock start = %s (%v), want the learner's own paper %s", again.ID, err, own.ID)
 	}
 }
+
+// A part's stored recording is served while the paper is open, and a part
+// with none answers "" so the browser reads the script instead.
+func TestListeningPartRecording(t *testing.T) {
+	pool, svc, user := setup(t)
+	ctx := context.Background()
+	session, err := svc.Start(ctx, user, StartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Whatever part 1 has stored now is put back afterwards.
+	var previous *string
+	if err := pool.QueryRow(ctx, `SELECT audio_url FROM listening_parts WHERE test_id = $1 AND part_no = 1`, session.testID).Scan(&previous); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `UPDATE listening_parts SET audio_url = $1 WHERE test_id = $2 AND part_no = 1`, previous, session.testID)
+	})
+	if _, err := pool.Exec(ctx, `UPDATE listening_parts SET audio_url = NULL WHERE test_id = $1 AND part_no = 1`, session.testID); err != nil {
+		t.Fatal(err)
+	}
+	if url, err := svc.Recording(ctx, user, session.ID, 1); err != nil || url != "" {
+		t.Fatalf("before recording: %q (%v), want empty", url, err)
+	}
+	const asset = "tts_en_test_listening_part"
+	if _, err := pool.Exec(ctx, `INSERT INTO question_assets (id, content_type, byte_size, data) VALUES ($1, 'audio/mpeg', 1, '\x00')
+		ON CONFLICT (id) DO NOTHING`, asset); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM question_assets WHERE id = $1`, asset) })
+	if _, err := pool.Exec(ctx, `UPDATE listening_parts SET audio_url = $1 WHERE test_id = $2 AND part_no = 1`,
+		"/api/v1/questions/assets/"+asset, session.testID); err != nil {
+		t.Fatal(err)
+	}
+	url, err := svc.Recording(ctx, user, session.ID, 1)
+	if err != nil || url != "/api/v1/questions/assets/"+asset {
+		t.Fatalf("recording = %q (%v)", url, err)
+	}
+	if _, err := svc.Recording(ctx, user, session.ID, 9); !errors.Is(err, ErrNoPart) {
+		t.Fatalf("missing part = %v, want ErrNoPart", err)
+	}
+}

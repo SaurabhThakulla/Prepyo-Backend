@@ -71,6 +71,10 @@ type Step struct {
 	CueCard       *CueCard `json:"cueCard,omitempty"`
 	PrepSeconds   int      `json:"prepSeconds,omitempty"`
 	AnswerSeconds int      `json:"answerSeconds"`
+	// Stored recordings of the lead and the question (voice_clips), played
+	// before any live voice is tried. Empty when a line has none yet.
+	LeadAudioURL     string `json:"leadAudioUrl,omitempty"`
+	QuestionAudioURL string `json:"questionAudioUrl,omitempty"`
 }
 
 // CueCard is the Part 2 task card.
@@ -574,5 +578,8 @@ func (s *Service) hydrate(ctx context.Context, session Session) (Session, error)
 		return Session{}, fmt.Errorf("decode speaking set: %w", err)
 	}
 	session.Steps = StepsFor(content)
+	if err := s.attachRecordings(ctx, session.Steps); err != nil {
+		return Session{}, err
+	}
 	return session, nil
 }

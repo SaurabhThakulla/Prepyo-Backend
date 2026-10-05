@@ -167,3 +167,62 @@ func TestExpiredSpeakingTestWithTooLittleIsClosed(t *testing.T) {
 		t.Fatalf("next start = %s (%v), want a new test", next.ID, err)
 	}
 }
+
+// The examiner's recorded lines come with the steps, matched by their text;
+// a line with no recording has no URL, so the player speaks it live.
+func TestSpeakingStepsCarryStoredRecordings(t *testing.T) {
+	svc, _, user := setup(t, fakeListener{})
+	ctx := context.Background()
+	session, err := svc.Start(ctx, user, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := session.Steps[0]
+	// Recordings already stored for these two lines are put back afterwards.
+	saved := map[string]string{}
+	rows, err := svc.db.Query(ctx, `SELECT text, asset_id FROM voice_clips WHERE text IN ($1, $2)`, first.Lead, first.Question)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var text, id string
+		if err := rows.Scan(&text, &id); err != nil {
+			t.Fatal(err)
+		}
+		saved[text] = id
+	}
+	rows.Close()
+	t.Cleanup(func() {
+		for text, id := range saved {
+			_, _ = svc.db.Exec(context.Background(), `INSERT INTO voice_clips (text, asset_id) VALUES ($1, $2)
+				ON CONFLICT (text) DO UPDATE SET asset_id = EXCLUDED.asset_id`, text, id)
+		}
+	})
+	if _, err := svc.db.Exec(ctx, `DELETE FROM voice_clips WHERE text IN ($1, $2)`, first.Lead, first.Question); err != nil {
+		t.Fatal(err)
+	}
+	if bare, err := svc.Resume(ctx, user, session.ID); err != nil || bare.Steps[0].LeadAudioURL != "" || bare.Steps[0].QuestionAudioURL != "" {
+		t.Fatalf("with no recordings: %+v (%v)", bare.Steps[0], err)
+	}
+	const asset = "tts_en_test_examiner_line"
+	if _, err := svc.db.Exec(ctx, `INSERT INTO question_assets (id, content_type, byte_size, data) VALUES ($1, 'audio/mpeg', 1, '\x00')
+		ON CONFLICT (id) DO NOTHING`, asset); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = svc.db.Exec(context.Background(), `DELETE FROM question_assets WHERE id = $1`, asset) })
+	if _, err := svc.db.Exec(ctx, `INSERT INTO voice_clips (text, asset_id) VALUES ($1, $2)
+		ON CONFLICT (text) DO UPDATE SET asset_id = EXCLUDED.asset_id`, first.Question, asset); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := svc.Resume(ctx, user, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := resumed.Steps[0]
+	if got.QuestionAudioURL != "/api/v1/questions/assets/"+asset {
+		t.Fatalf("question recording = %q", got.QuestionAudioURL)
+	}
+	if got.LeadAudioURL != "" {
+		t.Fatalf("lead has no recording but got %q", got.LeadAudioURL)
+	}
+}

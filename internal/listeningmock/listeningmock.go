@@ -309,6 +309,26 @@ func (s *Service) Script(ctx context.Context, user models.User, id string, partN
 	return script, err
 }
 
+// Recording is the URL of one part's stored recording, or "" when it has none
+// and the script is read aloud instead. Like the script, it is served only
+// while the paper is open.
+func (s *Service) Recording(ctx context.Context, user models.User, id string, partNo int) (string, error) {
+	session, err := s.byID(ctx, s.db, user.ID, id)
+	if err != nil {
+		return "", err
+	}
+	if session.Status != "in_progress" {
+		return "", ErrPaperClosed
+	}
+	var url string
+	err = s.db.QueryRow(ctx, `SELECT COALESCE(audio_url, '') FROM listening_parts WHERE test_id = $1 AND part_no = $2`,
+		session.testID, partNo).Scan(&url)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNoPart
+	}
+	return url, err
+}
+
 // SaveDrafts stores the answers so far, while time remains.
 func (s *Service) SaveDrafts(ctx context.Context, user models.User, id string, answers []models.AnswerSubmission, partsPlayed int) (int, error) {
 	session, err := s.byID(ctx, s.db, user.ID, id)
