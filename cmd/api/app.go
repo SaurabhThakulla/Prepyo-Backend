@@ -286,6 +286,25 @@ func (a *app) router() http.Handler {
 			adminOnly.Mount("/admin", a.adminHandler.Routes())
 			adminOnly.Mount("/admin/mock-papers", a.mockPapersHandler.AdminRoutes())
 		})
+
+		// The WhatsApp admin bot: a shared key in place of a session, and only
+		// the payment and report queues behind it. Not mounted at all without
+		// BOT_API_KEY, so the paths do not exist on a deployment that has no bot.
+		if a.cfg.BotAPIEnabled() {
+			v1.Group(func(bot chi.Router) {
+				bot.Use(middleware.Timeout(requestTimeout))
+				// The bot polls a few times a minute; this only stops a caller
+				// from guessing keys at speed.
+				bot.Use(rateLimit(120, time.Minute))
+				bot.Use(auth.RequireBotKey(
+					a.cfg.BotAPIKey,
+					a.cfg.BotAllowedCIDRs,
+					a.authService.BotActor(a.cfg.BotActorEmail),
+					a.log,
+				))
+				bot.Mount("/bot", a.adminHandler.BotRoutes())
+			})
+		}
 	})
 
 	var serveWeb http.Handler

@@ -58,9 +58,22 @@ type Config struct {
 	AdminEmail    string
 	AdminPassword string
 
+	// BotAPIKey opens /api/v1/bot: the payment and report queues, and nothing
+	// else from the admin area, for the WhatsApp admin bot. Empty keeps those
+	// routes off entirely.
+	BotAPIKey string
+	// BotActorEmail is the admin account the bot's reviews and replies are
+	// recorded under. Defaults to AdminEmail.
+	BotActorEmail string
+	// BotAllowedCIDRs, when set, are the only addresses the bot routes answer.
+	BotAllowedCIDRs []string
+
 	// WebDistDir is the optional directory path to frontend production build assets.
 	WebDistDir string
 }
+
+// BotAPIEnabled reports whether the bot routes should be mounted at all.
+func (c Config) BotAPIEnabled() bool { return c.BotAPIKey != "" }
 
 // AdminLoginEnabled reports whether the admin password endpoint has a
 // credential to check against. When false it returns 503 rather than comparing
@@ -113,6 +126,9 @@ var LocalProxyCIDRs = []string{
 	"192.168.0.0/16",
 	"fc00::/7",
 }
+
+// MinBotAPIKeyLength is the shortest BOT_API_KEY the server will start with.
+const MinBotAPIKeyLength = 32
 
 func Load() (*Config, error) {
 	loadDotEnv()
@@ -167,7 +183,21 @@ func Load() (*Config, error) {
 		AdminEmail:    strings.ToLower(stringOr("ADMIN_EMAIL", "admin@prepyo.online")),
 		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
 
+		BotAPIKey:       strings.TrimSpace(os.Getenv("BOT_API_KEY")),
+		BotActorEmail:   strings.ToLower(stringOr("BOT_ACTOR_EMAIL", stringOr("ADMIN_EMAIL", "admin@prepyo.online"))),
+		BotAllowedCIDRs: listOr("BOT_ALLOWED_CIDRS", nil),
+
 		WebDistDir: os.Getenv("WEB_DIST_DIR"),
+	}
+
+	// A short key on routes that can approve a payment is worse than no routes.
+	if cfg.BotAPIKey != "" && len(cfg.BotAPIKey) < MinBotAPIKeyLength {
+		problems = append(problems, fmt.Sprintf("BOT_API_KEY must be at least %d characters", MinBotAPIKeyLength))
+	}
+	for _, prefix := range cfg.BotAllowedCIDRs {
+		if _, _, err := net.ParseCIDR(prefix); err != nil {
+			problems = append(problems, "BOT_ALLOWED_CIDRS contains an invalid CIDR: "+prefix)
+		}
 	}
 
 	if cfg.WebDistDir != "" {
