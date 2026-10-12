@@ -63,6 +63,26 @@ func (h *Handler) Routes() chi.Router {
 	return r
 }
 
+// BotRoutes is the part of the admin area the WhatsApp bot may reach: the two
+// review queues and nothing else. Users, roles, question authoring and
+// announcements are deliberately absent, so a leaked bot key cannot touch them.
+//
+// The handlers are the same ones Routes mounts, so a payment approved from
+// WhatsApp goes through exactly the code a dashboard approval does. Mount it
+// behind auth.RequireBotKey.
+func (h *Handler) BotRoutes() chi.Router {
+	r := chi.NewRouter()
+	r.Get("/reports", h.reports)
+	r.Get("/reports/{id}", h.report)
+	r.Post("/reports/{id}/replies", h.replyReport)
+	r.Patch("/reports/{id}/resolve", h.resolveReport)
+
+	r.Get("/payments", h.payments)
+	r.Get("/payments/{id}/proof", h.paymentProof)
+	r.Patch("/payments/{id}/review", h.reviewPayment)
+	return r
+}
+
 type metrics struct {
 	Questions        int `json:"questions"`
 	Mocks            int `json:"mocks"`
