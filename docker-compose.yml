@@ -15,11 +15,8 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://prepyo:prepyo_pass@postgres:5432/prepyo_db?sslmode=disable}
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
-      AI_BASE_URL: ${AI_BASE_URL:-https://codecraftapi.com/v1}
+      AI_BASE_URL: ${AI_BASE_URL:-https://openrouter.ai/api/v1}
       AI_API_KEY: ${AI_API_KEY:-}
-      CODE_CRAFT: ${CODE_CRAFT:-}
-      AI_AUDIO_BASE_URL: ${AI_AUDIO_BASE_URL:-}
-      AI_AUDIO_API_KEY: ${AI_AUDIO_API_KEY:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@prepyo.online}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
