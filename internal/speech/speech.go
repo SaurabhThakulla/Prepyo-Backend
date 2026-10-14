@@ -3,7 +3,7 @@
 //
 // A script is split into turns by its speaker labels ("Receptionist: …"), the
 // labels are dropped, and each turn is cut into pieces short enough for the
-// provider (200 characters for Groq Orpheus) at sentence and then phrase
+// provider (200 characters for Orpheus) at sentence and then phrase
 // boundaries. Each speaker gets their own voice. A clip is made the first time
 // it is played and cached by a hash of model, voice and text.
 package speech
@@ -253,8 +253,8 @@ func (s *Service) Clip(ctx context.Context, id string) ([]byte, string, error) {
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	if _, err := s.db.Exec(saveCtx, `
-		UPDATE speech_clips SET data = $2, synthesized_at = now() WHERE id = $1 AND data IS NULL`, id, audio); err != nil {
+		UPDATE speech_clips SET data = $2, content_type = 'audio/mpeg', synthesized_at = now() WHERE id = $1 AND data IS NULL`, id, audio); err != nil {
 		return nil, "", fmt.Errorf("cache speech clip: %w", err)
 	}
-	return audio, "audio/wav", nil
+	return audio, "audio/mpeg", nil
 }
