@@ -19,6 +19,7 @@ bin/
 # Environment variables
 .env
 .env.local
+.env.prod
 
 # OS / IDE
 .DS_Store
@@ -29,3 +30,7 @@ Thumbs.db
 .agents/
 agent/
 skills-lock.json
+
+# Tests stay local: new test files are not committed. Test files already in
+# the repository are still tracked; add a new one on purpose with git add -f.
+*_test.go
