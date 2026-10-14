@@ -3,6 +3,8 @@ package scoring
 import (
 	"fmt"
 	"strings"
+
+	"github.com/prepyo/backend/internal/models"
 )
 
 // Verbatim scoring: the tasks where the learner is told exactly what to say.
@@ -46,6 +48,10 @@ type VerbatimResult struct {
 	// text. Both are capped for display; Accuracy is over everything.
 	Missed []string
 	Added  []string
+	// Inserted counts every added word; Added is capped for display.
+	Inserted int
+	// Marks is the given text word by word, as it was heard.
+	Marks []models.WordMark
 }
 
 // maxListedWords keeps feedback readable. A learner who missed forty words does
@@ -60,15 +66,32 @@ const maxListedWords = 8
 // count against the learner here, which is why the caller keeps this to content
 // and leaves the rest of the band to other criteria.
 func ScoreVerbatim(expected, spoken string) VerbatimResult {
-	expectedWords := words(expected)
-	spokenWords := words(spoken)
+	display := strings.Fields(expected)
+	var expectedWords []string
+	owner := []int{} // display word each expected word came from
+	for i, token := range display {
+		for _, w := range words(spellNumbers(token)) {
+			expectedWords = append(expectedWords, w)
+			owner = append(owner, i)
+		}
+	}
+	// A " / " in the spoken text marks a pause; it is never a word.
+	var spokenWords []string
+	pauseAfter := map[int]bool{}
+	for _, segment := range strings.Split(spoken, PauseMark) {
+		spokenWords = append(spokenWords, words(spellNumbers(segment))...)
+		if len(spokenWords) > 0 {
+			pauseAfter[len(spokenWords)-1] = true
+		}
+	}
+	delete(pauseAfter, len(spokenWords)-1)
 
 	result := VerbatimResult{Expected: len(expectedWords)}
 	if len(expectedWords) == 0 {
 		return result
 	}
 
-	matchedExpected, matchedSpoken := longestCommonSubsequence(expectedWords, spokenWords)
+	matchedExpected, matchedSpoken, pairs := longestCommonSubsequence(expectedWords, spokenWords)
 	result.Matched = len(matchedExpected)
 	result.Accuracy = float64(result.Matched) / float64(len(expectedWords))
 
@@ -78,17 +101,49 @@ func ScoreVerbatim(expected, spoken string) VerbatimResult {
 		}
 	}
 	for i, word := range spokenWords {
-		if !matchedSpoken[i] && len(result.Added) < maxListedWords {
+		if matchedSpoken[i] {
+			continue
+		}
+		result.Inserted++
+		if len(result.Added) < maxListedWords {
 			result.Added = append(result.Added, word)
+		}
+	}
+
+	result.Marks = make([]models.WordMark, len(display))
+	for i, token := range display {
+		result.Marks[i] = models.WordMark{Text: token, Said: true}
+	}
+	for i := range expectedWords {
+		if !matchedExpected[i] {
+			result.Marks[owner[i]].Said = false
+		}
+	}
+	// A pause sits after the last given word heard before it.
+	last := -1
+	for j := range spokenWords {
+		if e, ok := pairs[j]; ok {
+			last = e
+		}
+		if pauseAfter[j] && last >= 0 {
+			result.Marks[owner[last]].PauseAfter = true
 		}
 	}
 	return result
 }
 
+// PauseMark separates the stretches of a transcript said without a pause.
+const PauseMark = " / "
+
+// Errors is Pearson's Read Aloud count: a replaced, left-out or added word is one error each.
+func (r VerbatimResult) Errors() int {
+	return max(r.Expected-r.Matched, r.Inserted)
+}
+
 // longestCommonSubsequence marks which positions on each side are part of the
 // longest in-order match. The tables are O(n*m); the inputs here are one
 // sentence or one short passage, so that is a few thousand cells at worst.
-func longestCommonSubsequence(expected, spoken []string) (map[int]bool, map[int]bool) {
+func longestCommonSubsequence(expected, spoken []string) (map[int]bool, map[int]bool, map[int]int) {
 	rows, cols := len(expected), len(spoken)
 	table := make([][]int, rows+1)
 	for i := range table {
@@ -107,11 +162,13 @@ func longestCommonSubsequence(expected, spoken []string) (map[int]bool, map[int]
 
 	inExpected := make(map[int]bool, rows)
 	inSpoken := make(map[int]bool, cols)
+	pairs := make(map[int]int, cols) // spoken index -> expected index
 	i, j := 0, 0
 	for i < rows && j < cols {
 		switch {
 		case expected[i] == spoken[j]:
 			inExpected[i], inSpoken[j] = true, true
+			pairs[j] = i
 			i, j = i+1, j+1
 		case table[i+1][j] >= table[i][j+1]:
 			i++
@@ -119,7 +176,7 @@ func longestCommonSubsequence(expected, spoken []string) (map[int]bool, map[int]
 			j++
 		}
 	}
-	return inExpected, inSpoken
+	return inExpected, inSpoken, pairs
 }
 
 // VerbatimFeedback is the sentence a learner reads about their content mark.

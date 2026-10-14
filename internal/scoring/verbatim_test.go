@@ -88,19 +88,17 @@ func TestIsVerbatimTask(t *testing.T) {
 
 func TestDeliveryFluency(t *testing.T) {
 	steady := Delivery{DurationSeconds: 40, WordsSpoken: 90, PauseCount: 1, LongestPauseSeconds: 0.8, SpeakingRatio: 0.85}
-	if got := steady.FluencyAccuracy(); got < 0.95 {
-		t.Errorf("steady delivery scored %.2f, want near 1", got)
+	if got := steady.FluencyPoints(); got != 4 {
+		t.Errorf("one hesitation at a steady pace scored %d of 5, want 4", got)
 	}
 
 	halting := Delivery{DurationSeconds: 40, WordsSpoken: 30, PauseCount: 9, LongestPauseSeconds: 4.5, SpeakingRatio: 0.35}
-	if got := halting.FluencyAccuracy(); got > 0.5 {
-		t.Errorf("halting delivery scored %.2f, want well below steady", got)
+	if got := halting.FluencyPoints(); got > 1 {
+		t.Errorf("halting delivery scored %d of 5, want 0 or 1", got)
 	}
 
-	// Without measurements there is nothing to judge, and inventing a pace mark
-	// is the thing this whole path exists to avoid.
 	var unmeasured Delivery
-	if unmeasured.Measured() || unmeasured.FluencyAccuracy() != 0 {
-		t.Error("unmeasured delivery reported a fluency score")
+	if unmeasured.Measured() {
+		t.Error("an empty delivery reported itself as measured")
 	}
 }
