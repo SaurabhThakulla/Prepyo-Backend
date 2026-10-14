@@ -49,49 +49,42 @@ func (d Delivery) Measured() bool {
 	return d.DurationSeconds > 0 && d.SpeakingRatio > 0
 }
 
-// FluencyAccuracy scores pace and hesitation between 0 and 1.
-//
-// It starts from full marks and takes away for what was actually measured, so
-// every deduction can be pointed at in the feedback. A learner who speaks at a
-// steady pace without long silences keeps the lot.
-func (d Delivery) FluencyAccuracy() float64 {
-	if !d.Measured() {
-		return 0
+// FluencyPoints rates pace and hesitation on Pearson's Oral Fluency scale (0-5).
+func (d Delivery) FluencyPoints() int {
+	// Hesitations, per the ladder: none 5, one 4, more than one 3, two or three 2, many 1.
+	var points int
+	switch {
+	case d.PauseCount == 0:
+		points = 5
+	case d.PauseCount == 1:
+		points = 4
+	case d.PauseCount <= 3:
+		points = 3
+	case d.PauseCount <= 5:
+		points = 2
+	default:
+		points = 1
 	}
-
-	score := 1.0
-
-	// Pace. The penalty grows with the distance outside the band rather than
-	// stepping, so 95 words a minute is not treated like 40.
-	if rate := d.WordsPerMinute(); rate > 0 {
+	if d.LongestPauseSeconds >= longPauseSeconds {
+		points = min(points, 2)
+	}
+	// Pace is judged only on recordings long enough for lead-in silence not to dominate.
+	if rate := d.WordsPerMinute(); d.DurationSeconds >= 10 && rate > 0 {
 		switch {
-		case rate < slowWordsPerMinute:
-			score -= 0.4 * clamp(float64(slowWordsPerMinute-rate)/slowWordsPerMinute, 0, 1)
-		case rate > fastWordsPerMinute:
-			score -= 0.3 * clamp(float64(rate-fastWordsPerMinute)/float64(fastWordsPerMinute), 0, 1)
+		case rate < 70:
+			points = min(points, 1)
+		case rate < slowWordsPerMinute, rate > fastWordsPerMinute:
+			points--
 		}
 	}
-
-	// Hesitation. Two pauses in a forty-second answer is human; ten is not.
-	if d.DurationSeconds > 0 {
-		pausesPerMinute := float64(d.PauseCount) * 60 / float64(d.DurationSeconds)
-		if pausesPerMinute > 4 {
-			score -= 0.3 * clamp((pausesPerMinute-4)/8, 0, 1)
-		}
-	}
-
-	// One long silence costs on its own: it is what a listener remembers.
-	if d.LongestPauseSeconds > 2 {
-		score -= 0.2 * clamp((d.LongestPauseSeconds-2)/4, 0, 1)
-	}
-
-	// Mostly-silent recordings are not fluent answers, whatever the words say.
 	if d.SpeakingRatio < 0.5 {
-		score -= 0.3 * clamp((0.5-d.SpeakingRatio)/0.5, 0, 1)
+		points--
 	}
-
-	return clamp(score, 0, 1)
+	return max(points, 0)
 }
+
+// longPauseSeconds is the silence Pearson's ladder calls a long pause.
+const longPauseSeconds = 2.0
 
 // Feedback describes the delivery in the terms it was measured in, so a learner
 // can check it against their own recording.
