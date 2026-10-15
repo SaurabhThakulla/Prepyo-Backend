@@ -18,8 +18,8 @@ import (
 // accepted on the account). Callers fall back to the browser's own voice.
 var ErrSpeechUnavailable = errors.New("speech synthesis unavailable")
 
-// MaxSpeechChars is the most text one speech request may carry. Groq's Orpheus
-// model accepts 200 characters per request.
+// MaxSpeechChars is the most text one speech request may carry, kept at the
+// 200 characters Orpheus was first used with.
 const MaxSpeechChars = 200
 
 // SpeechAvailable reports whether the server can speak a script itself.
@@ -35,7 +35,7 @@ func (g *Gateway) SpeechModel() string { return g.ttsModel }
 func (g *Gateway) SpeechVoices() []string { return g.ttsVoices }
 
 // Synthesize speaks one short piece of text (at most MaxSpeechChars) in a
-// voice and returns WAV audio.
+// voice and returns MP3 audio.
 func (g *Gateway) Synthesize(ctx context.Context, voice, text string) ([]byte, error) {
 	if !g.SpeechAvailable() {
 		return nil, fmt.Errorf("%w: no audio provider is configured", ErrSpeechUnavailable)
@@ -49,7 +49,7 @@ func (g *Gateway) Synthesize(ctx context.Context, voice, text string) ([]byte, e
 		"model":           g.ttsModel,
 		"voice":           voice,
 		"input":           text,
-		"response_format": "wav",
+		"response_format": "mp3",
 	})
 	if err != nil {
 		return nil, err
@@ -86,13 +86,14 @@ func (g *Gateway) Synthesize(ctx context.Context, voice, text string) ([]byte, e
 }
 
 // Transcribe turns one recording into text on the audio provider (Whisper on
-// Groq). format is the file extension of the audio, such as "wav" or "mp3".
+// OpenRouter). format is the file extension of the audio, such as "wav" or "mp3".
 func (g *Gateway) Transcribe(ctx context.Context, audio []byte, format string) (string, Usage, error) {
 	if !g.audio.configured() {
 		return "", Usage{}, fmt.Errorf("%w: no audio provider is configured", ErrUnavailable)
 	}
-	return g.transcribeAudio(ctx, SpeakingRequest{
+	heard, usage, err := g.transcribeAudio(ctx, SpeakingRequest{
 		AudioBase64: base64.StdEncoding.EncodeToString(audio),
 		AudioFormat: format,
 	})
+	return heard.Text, usage, err
 }
