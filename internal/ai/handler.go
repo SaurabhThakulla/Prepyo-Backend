@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/gamification"
+	"github.com/prepyo/backend/internal/institution"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/notifications"
 	"github.com/prepyo/backend/internal/reqctx"
@@ -157,6 +158,15 @@ func (h *Handler) tutor(w http.ResponseWriter, r *http.Request) {
 	exam := user.TargetExam
 	if !exam.Valid() {
 		exam = models.ExamPTE
+	}
+
+	if blocked, err := institution.AIBlocked(r.Context(), h.db, user.ID); err != nil {
+		httpx.Internal(w, h.log, "ai.tutor.institution", err)
+		return
+	} else if blocked {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached,
+			"The AI tutor is not included in your institution's free plan.")
+		return
 	}
 
 	reservation, err := h.reserveTutorMessage(r.Context(), user)
