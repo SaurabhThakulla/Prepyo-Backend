@@ -13,7 +13,7 @@ import (
 // prompt. It is deliberately a different version from SpeakingPromptVersion:
 // feedback produced this way saw words, not a recording, and stored evaluations
 // have to stay traceable to which of the two produced them.
-const SpeakingTranscriptPromptVersion = "speaking.transcript.v3"
+const SpeakingTranscriptPromptVersion = "speaking.transcript.v4"
 
 // SpokenTranscriptRequest is a speaking answer that was transcribed on the
 // learner's device, for providers that serve text models only.
@@ -102,10 +102,14 @@ func parseSpokenTranscript(raw string, req SpokenTranscriptRequest) (models.Eval
 	transcript := strings.TrimSpace(req.Transcript)
 
 	var payload evaluationPayload
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+	if err := json.Unmarshal([]byte(unfence(raw)), &payload); err != nil {
 		return models.Evaluation{}, fmt.Errorf("the reply was not valid JSON (%w)", err)
 	}
 
+	var traits []pteTrait
+	if req.Exam == models.ExamPTE {
+		traits = pteSpeakingTraits(pteSpeakingTask("", req.TaskName), false)
+	}
 	evaluation, err := validateFeedback(payload, feedbackSpec{
 		Exam:     req.Exam,
 		Skill:    models.SkillSpeaking,
@@ -118,6 +122,7 @@ func parseSpokenTranscript(raw string, req SpokenTranscriptRequest) (models.Eval
 		// Pronunciation is not observable in a transcript, so the usual
 		// four-criterion IELTS shape does not apply here.
 		WithoutPronunciation: true,
+		PTETraits:            traits,
 	})
 	if err != nil {
 		return models.Evaluation{}, err
@@ -141,19 +146,7 @@ func transcriptSystemPrompt(req SpokenTranscriptRequest) string {
 		return ieltsTranscriptSystemPrompt(req)
 	}
 
-	var b strings.Builder
-	b.WriteString(pteTranscriptGuidance(req))
-	b.WriteString("\nThe example below already uses this exam's scale. Copy its shape, never its numbers.\n\n")
-	b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
-{
-  "summary": "two or three sentences of evidence-based assessment, ending with the provisional-estimate caveat",
-  "estimatedScore": {"value": %.1f, "confidence": "low"},
-  "criteria": [{"name": "...", "score": <score on 10-90 scale>, "maxScore": 90, "feedback": "..."}],
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "..."}]
-}`, exampleScore(req.MinScore, req.MaxScore)))
-	return b.String()
+	return pteTranscriptGuidance(req) + "\n" + pteReplyShape("", "low", ", ending with the provisional-estimate caveat")
 }
 
 // ieltsTranscriptSystemPrompt scores an IELTS answer from a transcript. It can
@@ -171,15 +164,7 @@ func ieltsTranscriptSystemPrompt(req SpokenTranscriptRequest) string {
 	fmt.Fprintf(&b, "\nReturn exactly three criteria: %s. Each has maxScore 9, a whole-band score, and feedback that cites evidence from the transcript. Do not return a Pronunciation criterion.\n", ieltsSpeakingCriteria(false))
 	b.WriteString("estimatedScore.value is the mean of those three criteria rounded to the nearest half band (.25 rounds up to the next half band, .75 up to the next whole band). Because pronunciation is missing it is a three-criterion practice estimate, not an IELTS Speaking band; say in the summary that pronunciation was not assessed.\n")
 	b.WriteString("Set estimatedScore.confidence to low or medium. A transcript-only judgement is never high confidence.\n")
-	b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
-{
-  "summary": "two or three sentences of evidence-based assessment, ending with the note that pronunciation was not assessed",
-  "estimatedScore": {"value": %.1f, "confidence": "low"},
-  "criteria": [{"name": "...", "score": <whole-band score>, "maxScore": 9, "feedback": "..."}],
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "..."}]
-}`, exampleScore(req.MinScore, req.MaxScore)))
+	b.WriteString(ieltsReplyShape("", "low", ", ending with the note that pronunciation was not assessed"))
 	return b.String()
 }
 
