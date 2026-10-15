@@ -10,7 +10,7 @@ func TestProviderCompletionsURL(t *testing.T) {
 		baseURL string
 		want    string
 	}{
-		{"codecraft", "https://codecraftapi.com/v1", "https://codecraftapi.com/v1/chat/completions"},
+		{"openrouter", "https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1/chat/completions"},
 		{"custom", "https://api.example.com/v1", "https://api.example.com/v1/chat/completions"},
 	}
 
@@ -24,19 +24,19 @@ func TestProviderCompletionsURL(t *testing.T) {
 }
 
 func TestProviderNameIsHost(t *testing.T) {
-	if got := newProvider("https://codecraftapi.com/v1", "key").name; got != "codecraftapi.com" {
-		t.Errorf("name = %q, want %q", got, "codecraftapi.com")
+	if got := newProvider("https://openrouter.ai/api/v1", "key").name; got != "openrouter.ai" {
+		t.Errorf("name = %q, want %q", got, "openrouter.ai")
 	}
 }
 
 func TestProviderConfigured(t *testing.T) {
-	if newProvider("https://codecraftapi.com/v1", "").configured() {
+	if newProvider("https://openrouter.ai/api/v1", "").configured() {
 		t.Error("configured() = true without an api key")
 	}
 	if newProvider("", "key").configured() {
 		t.Error("configured() = true without a base url")
 	}
-	if !newProvider("https://codecraftapi.com/v1", "key").configured() {
+	if !newProvider("https://openrouter.ai/api/v1", "key").configured() {
 		t.Error("configured() = false with both set")
 	}
 }
@@ -51,13 +51,11 @@ func TestFallbackCandidates(t *testing.T) {
 	if len(candidates) == 0 {
 		t.Fatal("expected fallback candidates, got empty")
 	}
-	if candidates[0] != "gpt-5.6-luna" {
-		t.Errorf("expected first fallback to be gpt-5.6-luna, got %q", candidates[0])
+	if candidates[0] != "anthropic/claude-haiku-5.5" {
+		t.Errorf("expected first fallback to be anthropic/claude-haiku-5.5, got %q", candidates[0])
 	}
 
-	audioCandidates := fallbackCandidates("gemini-3.8-flash-high", true)
-	if len(audioCandidates) == 0 || audioCandidates[0] != "gemini-3.7-flash" {
-		t.Errorf("expected first audio fallback to be gemini-3.7-flash, got %v", audioCandidates)
+	if got := fallbackCandidates("anthropic/claude-haiku-5.5", false); len(got) != 1 {
+		t.Errorf("expected Haiku alone, got %v", got)
 	}
 }
-
