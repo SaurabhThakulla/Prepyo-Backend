@@ -52,13 +52,19 @@ func TestParseSpeakingAcceptsSilenceWithNullScore(t *testing.T) {
 func TestParseSpeakingCarriesTranscript(t *testing.T) {
 	raw := `{"transcript":"The global transition toward sustainable energy.",
 	         "summary":"Clear and steady.","estimatedScore":{"value":79,"confidence":"medium"},
-	         "criteria":[{"name":"Oral Fluency","score":4,"maxScore":5,"feedback":"Even pace."}],
+	         "criteria":[{"name":"Content","score":5,"maxScore":6,"feedback":"Every word."},
+	                     {"name":"Oral Fluency","score":4,"maxScore":5,"feedback":"Even pace."},
+	                     {"name":"Pronunciation","score":4,"maxScore":5,"feedback":"Clear."}],
 	         "strengths":["Steady pace"],"weaknesses":["Flat intonation"],
 	         "sentenceFeedback":[{"original":"The global transition toward sustainable energy.","correction":"x","issueType":"pronunciation","explanation":"y"}]}`
 
 	evaluation, err := parseSpeaking(raw, pteSpeaking())
 	if err != nil {
 		t.Fatalf("valid reply was rejected: %v", err)
+	}
+	// 13 of 16 points: 10 + 80*13/16 = 75.
+	if evaluation.EstimatedScore == nil || *evaluation.EstimatedScore != 75 {
+		t.Errorf("score = %v, want 75 from the trait points", evaluation.EstimatedScore)
 	}
 	if evaluation.Transcript != "The global transition toward sustainable energy." {
 		t.Errorf("transcript not carried through: %q", evaluation.Transcript)
@@ -72,7 +78,7 @@ func TestParseSpeakingCarriesTranscript(t *testing.T) {
 // learner typed, so an invented sentence must be dropped the same way.
 func TestParseSpeakingDropsSentencesNotInTranscript(t *testing.T) {
 	raw := `{"transcript":"Cities retain heat.","summary":"Brief but clear.",
-	         "estimatedScore":{"value":65,"confidence":"low"},
+	         "estimatedScore":{"value":null,"confidence":"low"},
 	         "criteria":[],"strengths":[],"weaknesses":[],
 	         "sentenceFeedback":[{"original":"A sentence never spoken.","correction":"x","issueType":"grammar","explanation":"y"}]}`
 
@@ -85,27 +91,23 @@ func TestParseSpeakingDropsSentencesNotInTranscript(t *testing.T) {
 	}
 }
 
-// The off-scale guard is shared with writing; this pins it for speaking too,
-// because the speaking prompt carries its own worked example.
+// A PTE speaking reply without its Pearson traits is asked for again.
 func TestParseSpeakingRejectsOffScaleScore(t *testing.T) {
 	raw := `{"transcript":"Cities retain heat.","summary":"Brief.",
 	         "estimatedScore":{"value":8.5,"confidence":"high"},
 	         "criteria":[],"strengths":[],"weaknesses":[],"sentenceFeedback":[]}`
 
 	if _, err := parseSpeaking(raw, pteSpeaking()); err == nil {
-		t.Fatal("expected an 8.5 band to be rejected on the 10-90 PTE scale")
+		t.Fatal("expected a reply without traits to be rejected")
 	}
 }
 
-func TestSpeakingSystemPromptExampleMatchesExam(t *testing.T) {
-	pte := speakingSystemPrompt(SpeakingRequest{Exam: models.ExamPTE, MinScore: 10, MaxScore: 90})
-	if !strings.Contains(pte, `"value": 70.0`) {
-		t.Errorf("PTE prompt should show a PTE-scale example score:\n%s", pte)
-	}
-
-	ielts := speakingSystemPrompt(SpeakingRequest{Exam: models.ExamIELTS, MinScore: 0, MaxScore: 9})
-	if !strings.Contains(ielts, `"value": 7.0`) {
-		t.Errorf("IELTS prompt should show an IELTS-scale example score:\n%s", ielts)
+func TestSpeakingSystemPromptHasNoExampleScore(t *testing.T) {
+	for _, exam := range []models.ExamType{models.ExamPTE, models.ExamIELTS} {
+		prompt := speakingSystemPrompt(SpeakingRequest{Exam: exam, MinScore: 0, MaxScore: 90})
+		if exampleValue.MatchString(prompt) {
+			t.Errorf("%s prompt carries a numeric example score:\n%s", exam, prompt)
+		}
 	}
 }
 
