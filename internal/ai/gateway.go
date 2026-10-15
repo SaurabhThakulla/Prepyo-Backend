@@ -129,6 +129,12 @@ type chatRequest struct {
 	ResponseFormat *responseFmt  `json:"response_format,omitempty"`
 	Temperature    float64       `json:"temperature"`
 	MaxTokens      int           `json:"max_tokens,omitempty"`
+	Reasoning      *reasoning    `json:"reasoning,omitempty"`
+}
+
+// reasoning is OpenRouter's switch for a model's hidden thinking tokens.
+type reasoning struct {
+	Enabled bool `json:"enabled"`
 }
 
 type chatMessage struct {
@@ -138,9 +144,29 @@ type chatMessage struct {
 
 // contentPart is one element of a multimodal turn.
 type contentPart struct {
-	Type  string      `json:"type"`
-	Text  string      `json:"text,omitempty"`
-	Audio *audioInput `json:"input_audio,omitempty"`
+	Type         string        `json:"type"`
+	Text         string        `json:"text,omitempty"`
+	Audio        *audioInput   `json:"input_audio,omitempty"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+// cacheControl marks a prompt prefix the provider may cache for five minutes.
+type cacheControl struct {
+	Type string `json:"type"`
+}
+
+// withCachedSystemPrompt marks the system prompt for caching. Grading system
+// prompts are the same for every answer to a task type, so a cache hit bills
+// that part at a tenth of the price; a miss costs a quarter more for it.
+func withCachedSystemPrompt(messages []chatMessage) []chatMessage {
+	out := append([]chatMessage(nil), messages...)
+	for i, m := range out {
+		if text, ok := m.Content.(string); ok && m.Role == "system" {
+			out[i].Content = []contentPart{{Type: "text", Text: text, CacheControl: &cacheControl{Type: "ephemeral"}}}
+			break
+		}
+	}
+	return out
 }
 
 type audioInput struct {
@@ -170,15 +196,10 @@ type chatResponse struct {
 
 func fallbackCandidates(primary string, isAudio bool) []string {
 	primary = strings.TrimSpace(primary)
-	var pool []string
-	if isAudio {
-		if strings.Contains(primary, "/") {
-			pool = []string{primary, "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite"}
-		} else {
-			pool = []string{primary, "gemini-3.7-flash", "gemini-3.6-flash"}
-		}
-	} else {
-		pool = []string{primary, "gpt-5.6-luna", "claude-sonnet-5", "gpt-5.5", "gemini-3.7-flash"}
+	// Every text task runs on Haiku; audio has no second model to fall back to.
+	pool := []string{primary}
+	if !isAudio {
+		pool = append(pool, config.DefaultAIModel)
 	}
 
 	seen := make(map[string]bool)
@@ -192,15 +213,7 @@ func fallbackCandidates(primary string, isAudio bool) []string {
 		result = append(result, m)
 	}
 	if len(result) == 0 {
-		if isAudio {
-			if strings.Contains(primary, "/") {
-				result = []string{"google/gemini-2.5-flash"}
-			} else {
-				result = []string{"gemini-3.7-flash"}
-			}
-		} else {
-			result = []string{"gpt-5.6-luna"}
-		}
+		result = []string{config.DefaultAIModel}
 	}
 	return result
 }
@@ -249,7 +262,15 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 			MaxTokens:   g.maxTokens,
 		}
 		if wantJSON {
+			// Grading replies: the same answer should get the same marks.
+			payload.Temperature = 0
 			payload.ResponseFormat = &responseFmt{Type: "json_object"}
+			// Hidden thinking was about half of a grading's output tokens and did
+			// not make the marks closer to target, so grading runs without it.
+			payload.Reasoning = &reasoning{Enabled: false}
+			if strings.HasPrefix(candidateModel, "anthropic/") {
+				payload.Messages = withCachedSystemPrompt(messages)
+			}
 		}
 
 		body, err := json.Marshal(payload)
@@ -374,17 +395,17 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 	return parsed.Choices[0].Message.Content, usage, nil
 }
 
-// transcribeAudio uploads the raw recording to a dedicated audio transcription endpoint (such as Groq Whisper).
-func (g *Gateway) transcribeAudio(ctx context.Context, req SpeakingRequest) (string, Usage, error) {
+// transcribeAudio uploads the raw recording to the audio provider's transcription endpoint (Whisper on OpenRouter).
+func (g *Gateway) transcribeAudio(ctx context.Context, req SpeakingRequest) (transcription, Usage, error) {
 	started := time.Now()
 	audioBytes, err := base64.StdEncoding.DecodeString(req.AudioBase64)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("decode audio base64: %w", err)
+		return transcription{}, Usage{}, fmt.Errorf("decode audio base64: %w", err)
 	}
 
 	model := g.models.Speaking
 	if !strings.Contains(strings.ToLower(model), "whisper") {
-		model = "whisper-large-v3-turbo"
+		model = config.DefaultSpeechModel
 	}
 
 	var body bytes.Buffer
@@ -397,22 +418,28 @@ func (g *Gateway) transcribeAudio(ctx context.Context, req SpeakingRequest) (str
 
 	part, err := writer.CreateFormFile("file", filename)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("create form file: %w", err)
+		return transcription{}, Usage{}, fmt.Errorf("create form file: %w", err)
 	}
 	if _, err := part.Write(audioBytes); err != nil {
-		return "", Usage{}, fmt.Errorf("write audio to form: %w", err)
+		return transcription{}, Usage{}, fmt.Errorf("write audio to form: %w", err)
 	}
 
 	if err := writer.WriteField("model", model); err != nil {
-		return "", Usage{}, fmt.Errorf("write model field: %w", err)
+		return transcription{}, Usage{}, fmt.Errorf("write model field: %w", err)
+	}
+	// verbose_json adds word timings, from which pauses are measured; the price is per audio second either way.
+	for _, field := range [][2]string{{"response_format", "verbose_json"}, {"timestamp_granularities[]", "word"}} {
+		if err := writer.WriteField(field[0], field[1]); err != nil {
+			return transcription{}, Usage{}, fmt.Errorf("write %s field: %w", field[0], err)
+		}
 	}
 	if err := writer.Close(); err != nil {
-		return "", Usage{}, fmt.Errorf("close multipart writer: %w", err)
+		return transcription{}, Usage{}, fmt.Errorf("close multipart writer: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.audio.transcriptionsURL(), &body)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("create transcription request: %w", err)
+		return transcription{}, Usage{}, fmt.Errorf("create transcription request: %w", err)
 	}
 	httpReq.Header.Set("User-Agent", defaultAIUserAgent)
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
@@ -420,25 +447,27 @@ func (g *Gateway) transcribeAudio(ctx context.Context, req SpeakingRequest) (str
 
 	res, err := g.client.Do(httpReq)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return transcription{}, Usage{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	defer res.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
-		return "", Usage{}, err
+		return transcription{}, Usage{}, err
 	}
 
 	if res.StatusCode != http.StatusOK {
 		g.log.Error("transcription provider error", "status", res.StatusCode, "body", string(raw))
-		return "", Usage{}, fmt.Errorf("transcription provider returned %d: %s", res.StatusCode, string(raw))
+		return transcription{}, Usage{}, fmt.Errorf("transcription provider returned %d: %s", res.StatusCode, string(raw))
 	}
 
 	var resp struct {
-		Text string `json:"text"`
+		Text     string        `json:"text"`
+		Duration float64       `json:"duration"`
+		Words    []whisperWord `json:"words"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return "", Usage{}, fmt.Errorf("decode transcription response: %w", err)
+		return transcription{}, Usage{}, fmt.Errorf("decode transcription response: %w", err)
 	}
 
 	usage := Usage{
@@ -447,5 +476,5 @@ func (g *Gateway) transcribeAudio(ctx context.Context, req SpeakingRequest) (str
 		PromptVersion: "audio.transcription",
 		LatencyMS:     int(time.Since(started).Milliseconds()),
 	}
-	return strings.TrimSpace(resp.Text), usage, nil
+	return transcription{Text: strings.TrimSpace(resp.Text), Delivery: deliveryFromWords(resp.Words, resp.Duration), Marked: markPauses(resp.Words)}, usage, nil
 }
