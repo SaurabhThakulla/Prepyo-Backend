@@ -33,6 +33,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/users", h.users)
 	r.Patch("/users/{id}/role", h.setUserRole)
 	r.Patch("/users/{id}/exam", h.setUserExam)
+	r.Get("/consultancies", h.consultancies)
+	r.Get("/consultancies/{id}", h.consultancy)
 	r.Get("/reading/passages", h.passages)
 	r.Post("/reading/passages", h.createPassage)
 	r.Get("/reading/passages/{id}", h.passage)

@@ -91,6 +91,9 @@ func (s *Service) CheckAIGradings(ctx context.Context, db database.DB, user mode
 	if state.AIGradingUnitsUsed+units <= state.AIGradingsLimit*UnitsPerGrading {
 		return state, nil
 	}
+	if state.AIBlocked {
+		return state, ErrGradingLimitReached // no "upgrade" notice: the plan is the institution's
+	}
 	period := "in this plan period"
 	switch state.AIGradingsPeriod {
 	case GradingsPerDay:

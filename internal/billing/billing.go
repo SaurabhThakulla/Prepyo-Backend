@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prepyo/backend/internal/database"
 	"github.com/prepyo/backend/internal/gamification"
+	"github.com/prepyo/backend/internal/institution"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/notifications"
 	"github.com/prepyo/backend/internal/referrals"
@@ -170,6 +171,15 @@ func (s *Service) State(ctx context.Context, db database.DB, user models.User) (
 	if user.PlanValidUntil != nil {
 		state.ValidUntil = user.PlanValidUntil.Format(time.DateOnly)
 	}
+
+	// A free institution's students get reading and listening only.
+	if state.AIBlocked, err = institution.AIBlocked(ctx, db, user.ID); err != nil {
+		return models.SubscriptionState{}, err
+	}
+	if state.AIBlocked {
+		state.AIGradingsLimit = 0
+		state.TotalMockTestsAllowed = 0
+	}
 	return state, nil
 }
 
@@ -232,14 +242,23 @@ func (s *Service) CheckSubTestCredits(ctx context.Context, db database.DB, user 
 // transaction: it goes out exactly when the request is being refused, and that
 // refusal rolls the transaction back. A failure is logged, never returned; a
 // missed notice must not turn a clear "limit reached" into a server error.
+// It runs in the background: callers often hold the user row FOR UPDATE, and
+// the insert's foreign key to users waits for that lock until they roll back.
 func (s *Service) notifyOnce(ctx context.Context, p notifications.CreateParams) {
 	if s.notifications == nil {
 		return
 	}
-	if err := s.notifications.Notify(context.WithoutCancel(ctx), p); err != nil {
-		slog.Default().Warn("limit notification failed", "type", p.Type, "error", err)
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifyTimeout)
+		defer cancel()
+		if err := s.notifications.Notify(ctx, p); err != nil {
+			slog.Default().Warn("limit notification failed", "type", p.Type, "error", err)
+		}
+	}()
 }
+
+// notifyTimeout bounds a background notice, so a stuck lock cannot hold a pool connection for long.
+const notifyTimeout = 30 * time.Second
 
 var ErrSessionRequired = errors.New("start this task before submitting answers")
 
@@ -273,6 +292,9 @@ func (s *Service) CheckMockAllowance(ctx context.Context, db database.DB, user m
 		return state, err
 	}
 	// Full mocks are counted on every plan, unlimited ones included.
+	if state.AIBlocked {
+		return state, ErrMockLimitReached // no "upgrade" notice: the plan is the institution's
+	}
 	if state.MockTestsUsed >= state.TotalMockTestsAllowed {
 		validUntil := "none"
 		if user.PlanValidUntil != nil {
