@@ -92,6 +92,8 @@ type Answer struct {
 	// Source says where the transcript came from: "server" (Whisper) or
 	// "browser" (the device's recogniser).
 	Source string `json:"source"`
+	// Pauses is what Whisper's word timings showed, when it transcribed.
+	Pauses string `json:"pauses,omitempty"`
 }
 
 // Session is a dealt speaking test.
@@ -401,9 +403,10 @@ func (s *Service) SaveAnswer(ctx context.Context, user models.User, id string, p
 		Transcript: strings.TrimSpace(p.BrowserTranscript)}
 	if audio, err := base64.StdEncoding.DecodeString(p.AudioBase64); err == nil && len(audio) > 0 &&
 		s.listener != nil && s.listener.SpeakingAvailable() && ai.AudioFormats[p.Format] {
-		if text, _, err := s.listener.Transcribe(ctx, audio, p.Format); err == nil {
+		if text, heard, err := ai.TranscribeWithPauses(ctx, s.listener, audio, p.Format); err == nil {
 			answer.Transcript = strings.TrimSpace(text)
 			answer.Source = "server"
+			answer.Pauses = ai.PauseNote(heard)
 		}
 		// A failed transcription keeps the browser's transcript: the answer
 		// is not lost because one provider call failed.
@@ -458,7 +461,7 @@ func (s *Service) Submit(ctx context.Context, user models.User, id string) (Resu
 		if strings.TrimSpace(a.Transcript) != "" {
 			heard++
 		}
-		turns = append(turns, ai.SpeakingTestTurn{Part: step.Part, Question: question, Answer: a.Transcript, Seconds: a.DurationSeconds})
+		turns = append(turns, ai.SpeakingTestTurn{Part: step.Part, Question: question, Answer: a.Transcript, Seconds: a.DurationSeconds, Pauses: a.Pauses})
 	}
 	// A test with almost nothing said cannot be rated as a test.
 	if heard < 3 {
