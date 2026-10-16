@@ -2,6 +2,7 @@ package evaluations
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/prepyo/backend/internal/ai"
@@ -11,21 +12,14 @@ import (
 
 // verbatimScoringVersion is stamped on evaluations produced by alignment rather
 // than by a model, so stored feedback stays traceable to how it was made.
-const verbatimScoringVersion = "verbatim.v1"
+const verbatimScoringVersion = "verbatim.v2"
 
-// contentWeight is how much of the estimate the words carry on a task where the
-// words were given. Delivery is the rest. Pearson weights content heavily on
-// Read Aloud for the same reason: a learner who skips half the passage has not
-// done the task, however smoothly they said the other half.
-const contentWeight = 0.7
+// assumedPoints stands in for a trait Prepyo could not measure: the middle of Pearson's 0-5 scale.
+const assumedPoints = 3
 
-// verbatimEvaluation builds feedback for a task with one right answer, without
-// asking a model anything.
-//
-// Two criteria, both measured: content from the alignment, oral fluency from
-// what the browser timed. When the browser measured nothing, fluency is left
-// out entirely and the estimate rests on content alone - an unmeasured criterion
-// is not a criterion, and guessing at one is what this path exists to avoid.
+// verbatimEvaluation marks Read Aloud and Repeat Sentence on Pearson's three
+// traits (Score Guide July 2025): Content from the alignment, Oral Fluency from
+// the measured pauses and pace, Pronunciation assumed, never perfect.
 func verbatimEvaluation(
 	question models.Question,
 	version models.ExamVersion,
@@ -34,55 +28,92 @@ func verbatimEvaluation(
 ) models.Evaluation {
 	alignment := scoring.ScoreVerbatim(expected, spoken)
 	scale := scoring.Scale{Min: version.MinScore, Max: version.MaxScore, Step: version.ScoreStep}
+	content, contentMax := verbatimContentPoints(question.TypeID, alignment)
 
-	criteria := []models.EvaluationCriterion{{
-		Name:     "Content",
-		Score:    scale.EstimateFromAccuracy(alignment.Accuracy),
-		MaxScore: version.MaxScore,
-		Feedback: alignment.Feedback(),
-	}}
-
-	accuracy := alignment.Accuracy
+	fluency, fluencyNote := assumedPoints, "Your pauses and pace could not be measured on this recording, so this counts as 3 of 5."
 	if delivery.Measured() {
-		fluency := delivery.FluencyAccuracy()
-		criteria = append(criteria, models.EvaluationCriterion{
-			Name:     "Oral Fluency",
-			Score:    scale.EstimateFromAccuracy(fluency),
-			MaxScore: version.MaxScore,
-			Feedback: delivery.Feedback(),
-		})
-		accuracy = contentWeight*alignment.Accuracy + (1-contentWeight)*fluency
+		fluency, fluencyNote = delivery.FluencyPoints(), delivery.Feedback()+" "+fluencyTip(delivery)
+	}
+	pronunciation := assumedPoints
+	// Pearson gives no points at all when Content is 0.
+	if content == 0 {
+		fluency, pronunciation = 0, 0
 	}
 
-	estimate := scale.EstimateFromAccuracy(accuracy)
+	criteria := []models.EvaluationCriterion{
+		{Name: "Content", Score: float64(content), MaxScore: float64(contentMax), Feedback: alignment.Feedback()},
+		{Name: "Pronunciation", Score: float64(pronunciation), MaxScore: 5, Feedback: pronunciationNote(alignment)},
+		{Name: "Oral Fluency", Score: float64(fluency), MaxScore: 5, Feedback: fluencyNote},
+	}
+	estimate := scale.EstimateFromAccuracy(float64(content+pronunciation+fluency) / float64(contentMax+10))
 
 	return models.Evaluation{
 		Exam:              question.Exam,
 		Skill:             models.SkillSpeaking,
 		EvaluationVersion: ai.EvaluationVersion,
 		EstimatedScore:    &estimate,
-		// Measured, not estimated by a model - but still read from a device
-		// transcript, which has its own errors, so never "high".
-		ScoreConfidence:  "medium",
+		// Pronunciation is assumed, so the estimate is never better than low confidence.
+		ScoreConfidence:  "low",
 		Summary:          verbatimSummary(question, alignment, delivery),
 		Criteria:         criteria,
 		Strengths:        verbatimStrengths(alignment, delivery),
 		Weaknesses:       verbatimWeaknesses(alignment, delivery),
 		SentenceFeedback: []models.SentenceFeedback{},
-		Transcript:       spoken,
+		Transcript:       strings.Join(strings.Fields(strings.ReplaceAll(spoken, scoring.PauseMark, " ")), " "),
+		Words:            alignment.Marks,
 	}
+}
+
+// verbatimContentPoints is Content on Pearson's scale for the task.
+func verbatimContentPoints(typeID string, a scoring.VerbatimResult) (points, outOf int) {
+	if a.Expected == 0 {
+		return 0, 5
+	}
+	if strings.Contains(typeID, "repeat-sentence") {
+		// Repeat Sentence: 3 every word in order, 2 at least half, 1 less than half, 0 almost nothing.
+		switch {
+		case a.Matched == a.Expected:
+			return 3, 3
+		case a.Accuracy >= 0.5:
+			return 2, 3
+		case a.Accuracy >= 0.1:
+			return 1, 3
+		}
+		return 0, 3
+	}
+	// Read Aloud counts errors against the text's length; Prepyo puts that share on 0-5.
+	share := float64(a.Expected-a.Errors()) / float64(a.Expected)
+	return int(math.Round(5 * math.Max(0, share))), 5
+}
+
+func pronunciationNote(a scoring.VerbatimResult) string {
+	note := "Not measured from your recording yet, so it counts as 3 of 5, the middle of Pearson's scale."
+	if len(a.Missed) > 0 {
+		note += " Words heard as something else are often pronunciation slips: practise " + strings.Join(a.Missed[:min(3, len(a.Missed))], ", ") + "."
+	}
+	return note
+}
+
+func fluencyTip(d scoring.Delivery) string {
+	switch {
+	case d.PauseCount > 1:
+		return "Read in phrases and keep going after a slip instead of stopping."
+	case d.WordsPerMinute() > 0 && d.WordsPerMinute() < 100:
+		return "Aim for a natural speaking pace, about 120-160 words a minute."
+	}
+	return "Keep this smooth, even rhythm."
 }
 
 func verbatimSummary(question models.Question, alignment scoring.VerbatimResult, delivery scoring.Delivery) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s is marked against the exact words you were given. ", question.TypeName)
+	fmt.Fprintf(&b, "%s is marked on Content, Pronunciation and Oral Fluency, as in the exam. ", question.TypeName)
 	fmt.Fprintf(&b, "You said %d of the %d words in order.", alignment.Matched, alignment.Expected)
 
 	if delivery.Measured() {
 		fmt.Fprintf(&b, " %s", delivery.Feedback())
 	}
 
-	b.WriteString(" Pronunciation was not assessed: this score comes from the words your device heard, not from the recording itself.")
+	b.WriteString(" Pronunciation was not assessed yet: it counts as 3 of 5, so this estimate is cautious.")
 	return b.String()
 }
 
@@ -96,7 +127,7 @@ func verbatimStrengths(alignment scoring.VerbatimResult, delivery scoring.Delive
 		strengths = append(strengths, "You kept most of the text and its order")
 	}
 
-	if delivery.Measured() && delivery.FluencyAccuracy() >= 0.8 {
+	if delivery.Measured() && delivery.FluencyPoints() >= 4 {
 		strengths = append(strengths, "Your pace stayed steady, without long hesitations")
 	}
 	return strengths

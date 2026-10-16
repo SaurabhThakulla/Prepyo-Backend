@@ -102,6 +102,38 @@ func (h *Handler) evaluateWriting(w http.ResponseWriter, r *http.Request) {
 // who starts a moment early.
 const maxRecordingSeconds = 180
 
+// deliveryInput is what the browser measured from the recording's waveform.
+type deliveryInput struct {
+	DurationSeconds     int     `json:"durationSeconds"`
+	PauseCount          int     `json:"pauseCount"`
+	LongestPauseSeconds float64 `json:"longestPauseSeconds"`
+	SpeakingRatio       float64 `json:"speakingRatio"`
+}
+
+// deliveryOf checks the browser's measurements like any other client input: a
+// "pause" longer than the recording, or a speaking ratio above 1, means the
+// numbers are not describing a recording and are dropped rather than scored.
+func (h *Handler) deliveryOf(m *deliveryInput, words int, op string) scoring.Delivery {
+	if m == nil {
+		return scoring.Delivery{}
+	}
+	sane := m.DurationSeconds > 0 && m.DurationSeconds <= maxRecordingSeconds &&
+		m.PauseCount >= 0 && m.PauseCount <= m.DurationSeconds &&
+		m.LongestPauseSeconds >= 0 && m.LongestPauseSeconds <= float64(m.DurationSeconds) &&
+		m.SpeakingRatio >= 0 && m.SpeakingRatio <= 1
+	if !sane {
+		h.log.Warn("ignored implausible delivery measurements", "op", op, "delivery", m)
+		return scoring.Delivery{}
+	}
+	return scoring.Delivery{
+		DurationSeconds:     m.DurationSeconds,
+		WordsSpoken:         words,
+		PauseCount:          m.PauseCount,
+		LongestPauseSeconds: m.LongestPauseSeconds,
+		SpeakingRatio:       m.SpeakingRatio,
+	}
+}
+
 func (h *Handler) evaluateSpeaking(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		QuestionID string `json:"questionId"`
@@ -109,6 +141,8 @@ func (h *Handler) evaluateSpeaking(w http.ResponseWriter, r *http.Request) {
 		Audio           string `json:"audio"`
 		Format          string `json:"format"`
 		DurationSeconds int    `json:"durationSeconds"`
+		// Delivery is the browser's pause and pace measurements, if it took them.
+		Delivery *deliveryInput `json:"delivery"`
 	}
 	if !httpx.DecodeLimit(w, r, &req, h.log, "evaluations.evaluateSpeaking", httpx.MaxAudioBodyBytes) {
 		return
@@ -159,6 +193,8 @@ func (h *Handler) evaluateSpeaking(w http.ResponseWriter, r *http.Request) {
 		Audio:           audio,
 		AudioFormat:     req.Format,
 		DurationSeconds: req.DurationSeconds,
+		// Words are counted once Whisper has transcribed the recording.
+		Delivery: h.deliveryOf(req.Delivery, 0, "evaluations.evaluateSpeaking"),
 	})
 	if err != nil {
 		h.writeError(w, err, "evaluations.evaluateSpeaking", map[string]string{
@@ -194,12 +230,7 @@ func (h *Handler) evaluateSpeakingTranscript(w http.ResponseWriter, r *http.Requ
 		// Delivery is what the browser measured from the waveform. Absent on a
 		// browser that could not measure it, and then pace goes unjudged
 		// rather than guessed.
-		Delivery *struct {
-			DurationSeconds     int     `json:"durationSeconds"`
-			PauseCount          int     `json:"pauseCount"`
-			LongestPauseSeconds float64 `json:"longestPauseSeconds"`
-			SpeakingRatio       float64 `json:"speakingRatio"`
-		} `json:"delivery"`
+		Delivery *deliveryInput `json:"delivery"`
 	}
 	if !httpx.Decode(w, r, &req, h.log, "evaluations.evaluateSpeakingTranscript") {
 		return
@@ -231,29 +262,7 @@ func (h *Handler) evaluateSpeakingTranscript(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Measurements arrive from the learner's own browser, so they are checked
-	// like any other client input: a "pause" longer than the recording, or a
-	// speaking ratio above 1, means the numbers are not describing a recording
-	// and are dropped rather than scored.
-	var delivery scoring.Delivery
-	if m := req.Delivery; m != nil {
-		sane := m.DurationSeconds > 0 && m.DurationSeconds <= maxRecordingSeconds &&
-			m.PauseCount >= 0 && m.PauseCount <= m.DurationSeconds &&
-			m.LongestPauseSeconds >= 0 && m.LongestPauseSeconds <= float64(m.DurationSeconds) &&
-			m.SpeakingRatio >= 0 && m.SpeakingRatio <= 1
-		if sane {
-			delivery = scoring.Delivery{
-				DurationSeconds:     m.DurationSeconds,
-				WordsSpoken:         len(strings.Fields(transcript)),
-				PauseCount:          m.PauseCount,
-				LongestPauseSeconds: m.LongestPauseSeconds,
-				SpeakingRatio:       m.SpeakingRatio,
-			}
-		} else {
-			h.log.Warn("ignored implausible delivery measurements",
-				"op", "evaluations.evaluateSpeakingTranscript", "delivery", m)
-		}
-	}
+	delivery := h.deliveryOf(req.Delivery, len(strings.Fields(transcript)), "evaluations.evaluateSpeakingTranscript")
 
 	user := reqctx.MustUser(r.Context())
 	outcome, err := h.service.EvaluateSpeakingTranscript(r.Context(), TranscriptRequest{

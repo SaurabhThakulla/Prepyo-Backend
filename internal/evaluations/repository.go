@@ -31,7 +31,7 @@ func NewRepository(db database.DB) *Repository {
 const selectFields = `
 	id, COALESCE(question_id, ''), exam, skill, evaluation_version, estimated_score,
 	score_confidence, summary, criteria, strengths, weaknesses, sentence_feedback,
-	COALESCE(model_rewrite, ''), transcript, created_at`
+	COALESCE(model_rewrite, ''), transcript, word_marks, created_at`
 
 type SaveParams struct {
 	UserID      string
@@ -71,22 +71,26 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 	if err != nil {
 		return models.Evaluation{}, fmt.Errorf("marshal weaknesses: %w", err)
 	}
+	wordsJSON, err := json.Marshal(e.Words)
+	if err != nil || e.Words == nil {
+		wordsJSON = []byte("[]")
+	}
 
 	err = db.QueryRow(ctx, `
 		INSERT INTO ai_evaluations (
 			user_id, question_id, exam, skill, evaluation_version, request_fingerprint,
 			estimated_score, score_confidence, summary, criteria, strengths, weaknesses,
 			sentence_feedback, model_rewrite, transcript, provider, model, prompt_version,
-			prompt_tokens, completion_tokens, latency_ms)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+			prompt_tokens, completion_tokens, latency_ms, word_marks)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 		RETURNING `+selectFields,
 		p.UserID, questionID, e.Exam, e.Skill, e.EvaluationVersion, p.Fingerprint,
 		e.EstimatedScore, e.ScoreConfidence, e.Summary, string(criteriaJSON), string(strengthsJSON), string(weaknessesJSON),
 		string(feedbackJSON), e.ModelRewrite, e.Transcript, p.Usage.Provider, p.Usage.Model, p.Usage.PromptVersion,
-		p.Usage.PromptTokens, p.Usage.CompletionTokens, p.Usage.LatencyMS,
+		p.Usage.PromptTokens, p.Usage.CompletionTokens, p.Usage.LatencyMS, string(wordsJSON),
 	).Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion, &e.EstimatedScore,
 		&e.ScoreConfidence, &e.Summary, &e.Criteria, &e.Strengths, &e.Weaknesses,
-		&e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.CreatedAt)
+		&e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.Words, &e.CreatedAt)
 	if err != nil {
 		return models.Evaluation{}, fmt.Errorf("save evaluation: %w", err)
 	}
@@ -157,6 +161,6 @@ func scan(row pgx.Row) (models.Evaluation, error) {
 	var e models.Evaluation
 	err := row.Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion,
 		&e.EstimatedScore, &e.ScoreConfidence, &e.Summary, &e.Criteria, &e.Strengths,
-		&e.Weaknesses, &e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.CreatedAt)
+		&e.Weaknesses, &e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.Words, &e.CreatedAt)
 	return e, err
 }

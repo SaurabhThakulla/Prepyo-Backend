@@ -219,6 +219,8 @@ type SpeakingRequest struct {
 	Audio           []byte
 	AudioFormat     string
 	DurationSeconds int
+	// Delivery is what the browser measured from the waveform, or zero.
+	Delivery scoring.Delivery
 }
 
 // EvaluateSpeaking runs the same flow as EvaluateWriting for a recording.
@@ -276,11 +278,17 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.WordMatchUnits); err != nil {
 			return Outcome{}, err
 		}
-		transcript, usage, err := s.gateway.Transcribe(ctx, req.Audio, req.AudioFormat)
+		transcript, heard, usage, err := s.gateway.TranscribeMarked(ctx, req.Audio, req.AudioFormat)
 		if err != nil {
 			return Outcome{}, err
 		}
-		evaluation := verbatimEvaluation(question, version, material.expected, strings.TrimSpace(transcript), scoring.Delivery{})
+		// Whisper's timings match the pauses marked in the transcript, so they win over the browser's.
+		delivery := req.Delivery
+		if heard.Measured() {
+			delivery = heard
+		}
+		delivery.WordsSpoken = len(strings.Fields(strings.ReplaceAll(transcript, scoring.PauseMark, " ")))
+		evaluation := verbatimEvaluation(question, version, material.expected, strings.TrimSpace(transcript), delivery)
 		usage.Model, usage.PromptVersion = usage.Model+"+verbatim-alignment", verbatimScoringVersion
 		return s.persist(ctx, persistParams{
 			User:          req.User,
@@ -307,6 +315,7 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		AudioBase64:     base64.StdEncoding.EncodeToString(req.Audio),
 		AudioFormat:     req.AudioFormat,
 		DurationSeconds: req.DurationSeconds,
+		Delivery:        req.Delivery,
 		MinScore:        version.MinScore,
 		MaxScore:        version.MaxScore,
 	})
