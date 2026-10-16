@@ -121,6 +121,8 @@ type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	LatencyMS        int
+	// CostUSD is what OpenRouter reports it charged, when it reports it.
+	CostUSD float64
 }
 
 type chatRequest struct {
@@ -186,8 +188,9 @@ type chatResponse struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
+		PromptTokens     int     `json:"prompt_tokens"`
+		CompletionTokens int     `json:"completion_tokens"`
+		Cost             float64 `json:"cost"`
 	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
@@ -390,6 +393,7 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 		PromptVersion:    promptVersion,
 		PromptTokens:     parsed.Usage.PromptTokens,
 		CompletionTokens: parsed.Usage.CompletionTokens,
+		CostUSD:          parsed.Usage.Cost,
 		LatencyMS:        int(time.Since(started).Milliseconds()),
 	}
 	return parsed.Choices[0].Message.Content, usage, nil

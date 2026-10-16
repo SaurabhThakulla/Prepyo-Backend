@@ -25,6 +25,7 @@ func verbatimEvaluation(
 	version models.ExamVersion,
 	expected, spoken string,
 	delivery scoring.Delivery,
+	rating *ai.DeliveryRating,
 ) models.Evaluation {
 	alignment := scoring.ScoreVerbatim(expected, spoken)
 	scale := scoring.Scale{Min: version.MinScore, Max: version.MaxScore, Step: version.ScoreStep}
@@ -34,7 +35,14 @@ func verbatimEvaluation(
 	if delivery.Measured() {
 		fluency, fluencyNote = delivery.FluencyPoints(), delivery.Feedback()+" "+fluencyTip(delivery)
 	}
-	pronunciation := assumedPoints
+	pronunciation, pronunciationFeedback := assumedPoints, pronunciationNote(alignment)
+	confidence := "low"
+	if rating != nil {
+		pronunciation, pronunciationFeedback = rating.Pronunciation, rating.PronunciationFeedback
+		fluency, fluencyNote = rating.Fluency, rating.FluencyFeedback
+		confidence = "medium"
+		markUnclear(alignment.Marks, rating.Unclear)
+	}
 	// Pearson gives no points at all when Content is 0.
 	if content == 0 {
 		fluency, pronunciation = 0, 0
@@ -42,7 +50,7 @@ func verbatimEvaluation(
 
 	criteria := []models.EvaluationCriterion{
 		{Name: "Content", Score: float64(content), MaxScore: float64(contentMax), Feedback: alignment.Feedback()},
-		{Name: "Pronunciation", Score: float64(pronunciation), MaxScore: 5, Feedback: pronunciationNote(alignment)},
+		{Name: "Pronunciation", Score: float64(pronunciation), MaxScore: 5, Feedback: pronunciationFeedback},
 		{Name: "Oral Fluency", Score: float64(fluency), MaxScore: 5, Feedback: fluencyNote},
 	}
 	estimate := scale.EstimateFromAccuracy(float64(content+pronunciation+fluency) / float64(contentMax+10))
@@ -52,15 +60,14 @@ func verbatimEvaluation(
 		Skill:             models.SkillSpeaking,
 		EvaluationVersion: ai.EvaluationVersion,
 		EstimatedScore:    &estimate,
-		// Pronunciation is assumed, so the estimate is never better than low confidence.
-		ScoreConfidence:  "low",
-		Summary:          verbatimSummary(question, alignment, delivery),
-		Criteria:         criteria,
-		Strengths:        verbatimStrengths(alignment, delivery),
-		Weaknesses:       verbatimWeaknesses(alignment, delivery),
-		SentenceFeedback: []models.SentenceFeedback{},
-		Transcript:       strings.Join(strings.Fields(strings.ReplaceAll(spoken, scoring.PauseMark, " ")), " "),
-		Words:            alignment.Marks,
+		ScoreConfidence:   confidence,
+		Summary:           verbatimSummary(question, alignment, delivery, rating != nil),
+		Criteria:          criteria,
+		Strengths:         verbatimStrengths(alignment, delivery),
+		Weaknesses:        verbatimWeaknesses(alignment, delivery),
+		SentenceFeedback:  []models.SentenceFeedback{},
+		Transcript:        strings.Join(strings.Fields(strings.ReplaceAll(spoken, scoring.PauseMark, " ")), " "),
+		Words:             alignment.Marks,
 	}
 }
 
@@ -104,16 +111,33 @@ func fluencyTip(d scoring.Delivery) string {
 	return "Keep this smooth, even rhythm."
 }
 
-func verbatimSummary(question models.Question, alignment scoring.VerbatimResult, delivery scoring.Delivery) string {
+// markUnclear flags the given words the audio rating found hard to understand.
+func markUnclear(marks []models.WordMark, unclear []string) {
+	want := map[string]bool{}
+	for _, w := range unclear {
+		want[strings.ToLower(strings.Trim(w, ".,;:!?\"'()"))] = true
+	}
+	for i, m := range marks {
+		if m.Said && want[strings.ToLower(strings.Trim(m.Text, ".,;:!?\"'()"))] {
+			marks[i].Unclear = true
+		}
+	}
+}
+
+func verbatimSummary(question models.Question, alignment scoring.VerbatimResult, delivery scoring.Delivery, heard bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s is marked on Content, Pronunciation and Oral Fluency, as in the exam. ", question.TypeName)
 	fmt.Fprintf(&b, "You said %d of the %d words in order.", alignment.Matched, alignment.Expected)
 
-	if delivery.Measured() {
+	if delivery.Measured() && !heard {
 		fmt.Fprintf(&b, " %s", delivery.Feedback())
 	}
 
-	b.WriteString(" Pronunciation was not assessed yet: it counts as 3 of 5, so this estimate is cautious.")
+	if heard {
+		b.WriteString(" Pronunciation and Oral Fluency were rated from your recording.")
+	} else {
+		b.WriteString(" Pronunciation was not assessed yet: it counts as 3 of 5, so this estimate is cautious.")
+	}
 	return b.String()
 }
 

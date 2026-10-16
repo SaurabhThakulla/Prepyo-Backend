@@ -85,6 +85,8 @@ func (c Config) AdminLoginEnabled() bool { return c.AdminEmail != "" && c.AdminP
 const (
 	DefaultAIModel     = "anthropic/claude-haiku-5.5"
 	DefaultSpeechModel = "openai/whisper-large-v3-turbo"
+	// DefaultDeliveryModel hears Read Aloud / Repeat Sentence audio for Pronunciation and Oral Fluency.
+	DefaultDeliveryModel = "google/gemini-2.5-flash"
 )
 
 // AIModels defines model names for each AI task capability.
@@ -92,6 +94,8 @@ type AIModels struct {
 	Writing  string
 	Speaking string
 	Tutoring string
+	// Delivery rates pronunciation and fluency from audio; "off" turns it off.
+	Delivery string
 }
 
 func (c Config) IsProduction() bool { return c.Env == "production" }
@@ -184,6 +188,7 @@ func Load() (*Config, error) {
 			Writing:  cleanAIModel(stringOr("AI_MODEL_WRITING", DefaultAIModel), DefaultAIModel),
 			Speaking: cleanAIModel(stringOr("AI_MODEL_SPEAKING", DefaultSpeechModel), DefaultSpeechModel),
 			Tutoring: cleanAIModel(stringOr("AI_MODEL_TUTORING", DefaultAIModel), DefaultAIModel),
+			Delivery: cleanAIModel(stringOr("AI_MODEL_DELIVERY", DefaultDeliveryModel), DefaultDeliveryModel),
 		},
 		SecureCookies: boolOr("SECURE_COOKIES", isProd),
 

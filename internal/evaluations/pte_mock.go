@@ -76,7 +76,7 @@ func (s *Service) EvaluatePTEMockSpeaking(ctx context.Context, userID string, qu
 	var usage ai.Usage
 	switch {
 	case strings.TrimSpace(material.expected) != "":
-		evaluation = verbatimEvaluation(question, version, material.expected, transcript, delivery)
+		evaluation = verbatimEvaluation(question, version, material.expected, transcript, delivery, nil)
 		usage = ai.Usage{Provider: "prepyo", Model: "verbatim-alignment", PromptVersion: verbatimScoringVersion}
 	case words < minTranscriptWords && !(expectsShortAnswer(question.TypeID) && words > 0):
 		evaluation = tooFewWordsEvaluation(question, version, transcript, words)

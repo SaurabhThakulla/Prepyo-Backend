@@ -821,6 +821,8 @@ type WordMark struct {
 	Text       string `json:"text"`
 	Said       bool   `json:"said"`
 	PauseAfter bool   `json:"pauseAfter,omitempty"`
+	// Unclear is a word heard but hard to understand, from an audio rating.
+	Unclear bool `json:"unclear,omitempty"`
 }
 
 type EvaluationUsage struct {

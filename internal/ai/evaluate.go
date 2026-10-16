@@ -151,6 +151,7 @@ func (u *Usage) add(other Usage) {
 	u.PromptTokens += other.PromptTokens
 	u.CompletionTokens += other.CompletionTokens
 	u.LatencyMS += other.LatencyMS
+	u.CostUSD += other.CostUSD
 }
 
 func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation, error) {
