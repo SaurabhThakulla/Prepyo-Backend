@@ -21,6 +21,7 @@ import (
 	"github.com/prepyo/backend/internal/exams"
 	"github.com/prepyo/backend/internal/fullmock"
 	"github.com/prepyo/backend/internal/gamification"
+	"github.com/prepyo/backend/internal/institution"
 	"github.com/prepyo/backend/internal/leaderboards"
 	"github.com/prepyo/backend/internal/learn"
 	"github.com/prepyo/backend/internal/listeningmock"
@@ -92,6 +93,7 @@ type app struct {
 	referralHandler      *referrals.Handler
 	reportHandler        *report.Handler
 	adminHandler         *admin.Handler
+	institutionHandler   *institution.Handler
 	mockPapersHandler    *mockpapers.Handler
 	mockPapersBuilder    *mockpapers.Builder
 }
@@ -135,6 +137,8 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	mockPapersCatalog := mockpapers.NewCatalogService(pool, mockPapersRepo, mockPapersBuilder)
 	mockPapersHandler := mockpapers.NewHandler(mockPapersCatalog, mockPapersBuilder, mockPapersRepo, log)
 
+	authHandler := auth.NewHandler(authService, cfg.SecureCookies, cfg.SessionTTL)
+
 	return &app{
 		cfg:         cfg,
 		pool:        pool,
@@ -142,7 +146,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		authService: authService,
 
 		userRepo:             userRepo,
-		authHandler:          auth.NewHandler(authService, cfg.SecureCookies, cfg.SessionTTL),
+		authHandler:          authHandler,
 		userHandler:          users.NewHandler(pool, userRepo, progressService, billingService, log),
 		examHandler:          exams.NewHandler(examRepo, log),
 		questionHandler:      questions.NewHandler(questionRepo, log).WithSpeech(speechService),
@@ -167,6 +171,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		referralHandler:      referrals.NewHandler(referralService, log),
 		reportHandler:        report.NewHandler(pool, log),
 		adminHandler:         admin.NewHandler(pool, log),
+		institutionHandler:   institution.NewHandler(pool, cfg.SessionTTL, cfg.SecureCookies, authHandler.SignInUser, log),
 		mockPapersHandler:    mockPapersHandler,
 		mockPapersBuilder:    mockPapersBuilder,
 	}
@@ -217,6 +222,10 @@ func (a *app) router() http.Handler {
 			public.With(rateLimit(600, time.Minute), rateLimitByDevice(60, time.Minute)).
 				Mount("/auth", a.authHandler.Routes())
 			public.Mount("/exams", a.examHandler.Routes())
+
+			// Institution sign-up, login, dashboard and students; it checks its own sessions.
+			public.With(rateLimit(600, time.Minute), rateLimitByDevice(60, time.Minute)).
+				Mount("/institution", a.institutionHandler.Routes(rateLimit(20, time.Hour), rateLimitByDevice(5, time.Hour)))
 
 			// Plans are public; everything else here needs a session, and is
 			// limited per device once the session is known.

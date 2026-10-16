@@ -42,10 +42,10 @@ func run() error {
 		log.Warn("AI_API_KEY is not set: evaluation and tutor endpoints will return 503")
 	}
 
-	// Speaking runs on its own provider because the text one has no model that
-	// accepts audio, so it can be missing while everything else works.
+	// Speaking needs a provider that transcribes audio (Whisper on OpenRouter),
+	// so it can be missing while everything else works.
 	if !cfg.SpeakingEnabled() {
-		log.Warn("AI_AUDIO_API_KEY is not set: speaking evaluation will return 503, other AI endpoints are unaffected")
+		log.Warn("no audio provider is configured: speaking evaluation will return 503, other AI endpoints are unaffected")
 	}
 
 	// A cap set too low truncates every reply, and a truncated reply fails
