@@ -4,13 +4,11 @@ package ai
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
@@ -68,8 +66,6 @@ type provider struct {
 func (p provider) configured() bool { return p.apiKey != "" && p.baseURL != "" }
 
 func (p provider) completionsURL() string { return p.baseURL + "/chat/completions" }
-
-func (p provider) transcriptionsURL() string { return p.baseURL + "/audio/transcriptions" }
 
 func newProvider(baseURL, apiKey string) provider {
 	name := baseURL
@@ -397,88 +393,4 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 		LatencyMS:        int(time.Since(started).Milliseconds()),
 	}
 	return parsed.Choices[0].Message.Content, usage, nil
-}
-
-// transcribeAudio uploads the raw recording to the audio provider's transcription endpoint (Whisper on OpenRouter).
-func (g *Gateway) transcribeAudio(ctx context.Context, req SpeakingRequest) (transcription, Usage, error) {
-	started := time.Now()
-	audioBytes, err := base64.StdEncoding.DecodeString(req.AudioBase64)
-	if err != nil {
-		return transcription{}, Usage{}, fmt.Errorf("decode audio base64: %w", err)
-	}
-
-	model := g.models.Speaking
-	if !strings.Contains(strings.ToLower(model), "whisper") {
-		model = config.DefaultSpeechModel
-	}
-
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-
-	filename := "audio." + req.AudioFormat
-	if req.AudioFormat == "" {
-		filename = "audio.wav"
-	}
-
-	part, err := writer.CreateFormFile("file", filename)
-	if err != nil {
-		return transcription{}, Usage{}, fmt.Errorf("create form file: %w", err)
-	}
-	if _, err := part.Write(audioBytes); err != nil {
-		return transcription{}, Usage{}, fmt.Errorf("write audio to form: %w", err)
-	}
-
-	if err := writer.WriteField("model", model); err != nil {
-		return transcription{}, Usage{}, fmt.Errorf("write model field: %w", err)
-	}
-	// verbose_json adds word timings, from which pauses are measured; the price is per audio second either way.
-	for _, field := range [][2]string{{"response_format", "verbose_json"}, {"timestamp_granularities[]", "word"}} {
-		if err := writer.WriteField(field[0], field[1]); err != nil {
-			return transcription{}, Usage{}, fmt.Errorf("write %s field: %w", field[0], err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return transcription{}, Usage{}, fmt.Errorf("close multipart writer: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.audio.transcriptionsURL(), &body)
-	if err != nil {
-		return transcription{}, Usage{}, fmt.Errorf("create transcription request: %w", err)
-	}
-	httpReq.Header.Set("User-Agent", defaultAIUserAgent)
-	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
-	httpReq.Header.Set("Authorization", "Bearer "+g.audio.apiKey)
-
-	res, err := g.client.Do(httpReq)
-	if err != nil {
-		return transcription{}, Usage{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
-	}
-	defer res.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-	if err != nil {
-		return transcription{}, Usage{}, err
-	}
-
-	if res.StatusCode != http.StatusOK {
-		g.log.Error("transcription provider error", "status", res.StatusCode, "body", string(raw))
-		return transcription{}, Usage{}, fmt.Errorf("transcription provider returned %d: %s", res.StatusCode, string(raw))
-	}
-
-	var resp struct {
-		Text     string        `json:"text"`
-		Duration float64       `json:"duration"`
-		Words    []whisperWord `json:"words"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return transcription{}, Usage{}, fmt.Errorf("decode transcription response: %w", err)
-	}
-
-	usage := Usage{
-		Provider:      g.audio.name,
-		Model:         model,
-		PromptVersion: "audio.transcription",
-		LatencyMS:     int(time.Since(started).Milliseconds()),
-	}
-	return transcription{Text: strings.TrimSpace(resp.Text), Delivery: deliveryFromWords(resp.Words, resp.Duration), Marked: markPauses(resp.Words)}, usage, nil
 }

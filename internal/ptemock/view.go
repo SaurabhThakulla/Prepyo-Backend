@@ -361,7 +361,7 @@ type ReviewItem struct {
 	Response    *models.AnswerSubmission `json:"response,omitempty"`
 	Transcript  string                   `json:"transcript,omitempty"`
 	// TranscriptSource says who transcribed a spoken answer: the server
-	// (Whisper), or the learner's browser where the server could not.
+	// (Gemini), or the learner's browser where the server could not.
 	TranscriptSource string   `json:"transcriptSource,omitempty"`
 	Scored           bool     `json:"scored"`
 	Percent          *int     `json:"percent"`

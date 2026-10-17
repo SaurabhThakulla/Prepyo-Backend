@@ -72,7 +72,7 @@ type Evaluator interface {
 	EvaluatePTEMockWriting(ctx context.Context, userID string, question models.Question, text, sessionID string) (models.Evaluation, error)
 }
 
-// Transcriber turns a recording into text on the server: Whisper on the audio
+// Transcriber turns a recording into text on the server: Gemini on the audio
 // provider (Groq). ai.Gateway implements it. Spoken answers are transcribed
 // the way the IELTS speaking mock does it (speakingmock.SaveAnswer): by the
 // server wherever it can, with the browser's transcript as the fallback.
@@ -415,7 +415,7 @@ const (
 	SourceServer  = "server"
 )
 
-// transcribeTimeout bounds the Whisper call made while the learner waits to
+// transcribeTimeout bounds the Gemini call made while the learner waits to
 // move on.
 const transcribeTimeout = 30 * time.Second
 
@@ -437,7 +437,7 @@ func (s *Service) Submit(ctx context.Context, user models.User, id string, posit
 		if text, heard, ok := s.transcribeTimed(ctx, user.ID, id, position, answer); ok {
 			answer.Transcript, source = text, SourceServer
 			if saneDelivery(answer.Delivery) == nil {
-				answer.Delivery = heard // the browser measured nothing usable; Whisper's word timings stand in
+				answer.Delivery = heard // the browser measured nothing usable; no timings from the transcription; the browser's stand
 			}
 		}
 	}
@@ -487,7 +487,7 @@ func (s *Service) Submit(ctx context.Context, user models.User, id string, posit
 	return s.view(ctx, session, items)
 }
 
-// transcribe turns an uploaded recording into text with Whisper. It runs
+// transcribe turns an uploaded recording into text with Gemini. It runs
 // before the paper is locked,
 // so a slow provider never holds the learner's paper, and only for the spoken
 // item actually on screen, so the endpoint cannot be used as a free
@@ -497,7 +497,7 @@ func (s *Service) transcribe(ctx context.Context, userID, id string, position in
 	return text, ok
 }
 
-// transcribeTimed is transcribe plus the pauses Whisper's word timings show, when it measured them.
+// transcribeTimed is transcribe plus no pauses, which only the browser measures.
 func (s *Service) transcribeTimed(ctx context.Context, userID, id string, position int, answer Answer) (string, *Delivery, bool) {
 	if !s.ServerTranscription() || !ai.AudioFormats[answer.Format] {
 		return "", nil, false

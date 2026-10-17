@@ -85,7 +85,7 @@ func (g *Gateway) Synthesize(ctx context.Context, voice, text string) ([]byte, e
 	return raw, nil
 }
 
-// Transcribe turns one recording into text on the audio provider (Whisper on
+// Transcribe turns one recording into text on the audio provider (Gemini on
 // OpenRouter). format is the file extension of the audio, such as "wav" or "mp3".
 func (g *Gateway) Transcribe(ctx context.Context, audio []byte, format string) (string, Usage, error) {
 	if !g.audio.configured() {

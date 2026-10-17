@@ -81,10 +81,11 @@ func (c Config) BotAPIEnabled() bool { return c.BotAPIKey != "" }
 func (c Config) AdminLoginEnabled() bool { return c.AdminEmail != "" && c.AdminPassword != "" }
 
 // DefaultAIModel and DefaultSpeechModel are the OpenRouter models used when
-// AI_MODEL_* is not set: Haiku for every text task, Whisper for recordings.
+// AI_MODEL_* is not set: Haiku for every text task, Gemini for recordings.
 const (
 	DefaultAIModel     = "anthropic/claude-haiku-5.5"
-	DefaultSpeechModel = "openai/whisper-large-v3-turbo"
+	// DefaultSpeechModel transcribes recordings; Whisper is no longer used.
+	DefaultSpeechModel = "google/gemini-2.5-flash-lite"
 	// DefaultDeliveryModel hears Read Aloud / Repeat Sentence audio for Pronunciation and Oral Fluency.
 	DefaultDeliveryModel = "google/gemini-2.5-flash"
 )
@@ -164,7 +165,7 @@ func Load() (*Config, error) {
 	//
 	// Set AI_SPEAKING_ENABLED explicitly when the text provider does serve an
 	// audio-capable model on the same key.
-	// OpenRouter serves Whisper on the same key, so it counts as an audio provider.
+	// OpenRouter serves Gemini audio models on the same key, so it counts as an audio provider.
 	audioConfigured := stringOr("AI_AUDIO_BASE_URL", "") != "" || stringOr("AI_AUDIO_API_KEY", "") != "" ||
 		strings.Contains(aiBaseURL, "openrouter.ai")
 
@@ -186,7 +187,7 @@ func Load() (*Config, error) {
 
 		AIModels: AIModels{
 			Writing:  cleanAIModel(stringOr("AI_MODEL_WRITING", DefaultAIModel), DefaultAIModel),
-			Speaking: cleanAIModel(stringOr("AI_MODEL_SPEAKING", DefaultSpeechModel), DefaultSpeechModel),
+			Speaking: cleanSpeechModel(stringOr("AI_MODEL_SPEAKING", DefaultSpeechModel)),
 			Tutoring: cleanAIModel(stringOr("AI_MODEL_TUTORING", DefaultAIModel), DefaultAIModel),
 			Delivery: cleanAIModel(stringOr("AI_MODEL_DELIVERY", DefaultDeliveryModel), DefaultDeliveryModel),
 		},
@@ -385,6 +386,14 @@ func cleanAIModel(val, fallback string) string {
 		return fallback
 	}
 	return val
+}
+
+// cleanSpeechModel keeps an old Whisper setting from breaking speaking: Whisper is not a chat model, so Gemini is used.
+func cleanSpeechModel(val string) string {
+	if strings.Contains(strings.ToLower(val), "whisper") {
+		return DefaultSpeechModel
+	}
+	return cleanAIModel(val, DefaultSpeechModel)
 }
 
 func loadDotEnv() {

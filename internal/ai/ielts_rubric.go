@@ -200,6 +200,7 @@ func isIELTS(exam models.ExamType) bool { return exam == models.ExamIELTS }
 const ieltsRatingRules = `- Rate each criterion on its own, in whole bands from 0 to 9, using the ladder under it. Criteria often differ by a band; do not let one strong criterion lift the others.
 - Choose the band whose description fits the response as a whole. When it shows features of two adjacent bands, give the lower one unless it fully fits every positive feature of the higher one.
 - Judge only the evidence in this response. Do not compare it with typical candidates or aim for an expected average. High bands do not require native-like language, but bands 8 and 9 need their own features to be clearly present, not merely an absence of serious errors.
+- Mark as an experienced examiner does: band 7 or above in a criterion needs its features shown consistently across the whole response, and one clear, repeated weakness keeps that criterion at 6 or below. Length, topic words or a confident tone earn nothing on their own.
 
 `
 

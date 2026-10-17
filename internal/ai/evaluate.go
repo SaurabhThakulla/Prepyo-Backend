@@ -12,7 +12,7 @@ import (
 )
 
 // WritingPromptVersion identifies the active writing evaluation prompt version.
-const WritingPromptVersion = "writing.v5" // band ladders, Pearson trait points, score worked out in code.
+const WritingPromptVersion = "writing.v6" // band ladders, Pearson trait points, score worked out in code.
 
 // EvaluationVersion is the evaluation schema version.
 const EvaluationVersion = "v1"

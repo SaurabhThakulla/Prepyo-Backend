@@ -87,7 +87,7 @@ func main() {
 	workers := flag.Int("workers", 4, "parallel requests")
 	only := flag.String("only", "", "grade only sample ids containing this text")
 	out := flag.String("out", "", "write results JSON here")
-	audio := flag.String("audio", "", "comma-separated recordings to transcribe with Whisper instead of grading")
+	audio := flag.String("audio", "", "comma-separated recordings to transcribe with Gemini instead of grading")
 	flag.Parse()
 
 	key := os.Getenv("AI_API_KEY")
@@ -101,7 +101,7 @@ func main() {
 		AIAPIKey:         key,
 		AIAudioBaseURL:   strings.TrimRight(firstNonEmpty(os.Getenv("AI_BASE_URL"), "https://openrouter.ai/api/v1"), "/"),
 		AIAudioAPIKey:    key,
-		AIModels:         config.AIModels{Writing: model, Speaking: model, Tutoring: model},
+		AIModels:         config.AIModels{Writing: model, Speaking: config.DefaultSpeechModel, Tutoring: model},
 		AIRequestTimeout: 120 * time.Second,
 		AIMaxTokens:      8000,
 	}
@@ -295,7 +295,7 @@ func report(results []result, runs int) {
 	fmt.Printf("replies rejected by validation and re-asked: %d\n", validationFailures.Load())
 }
 
-// transcribe sends each recording to Whisper and prints what it heard.
+// transcribe sends each recording to Gemini and prints what it heard.
 func transcribe(g *ai.Gateway, files []string) {
 	for _, f := range files {
 		data, err := os.ReadFile(strings.TrimSpace(f))

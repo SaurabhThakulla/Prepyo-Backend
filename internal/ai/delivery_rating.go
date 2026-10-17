@@ -9,7 +9,7 @@ import (
 )
 
 // DeliveryPromptVersion is stamped on usage for audio-rated Pronunciation and Oral Fluency.
-const DeliveryPromptVersion = "pte.delivery.v1"
+const DeliveryPromptVersion = "pte.delivery.v2"
 
 // DeliveryRating is Pronunciation and Oral Fluency on Pearson's 0-5 ladders, heard from the audio.
 type DeliveryRating struct {
@@ -89,6 +89,7 @@ An accent is not a fault on its own; lower the score for sounds, stress or inton
 ` + ptePronunciationLadder + `
 
 Give 4 or 5 only when the recording clearly meets that band; when between two bands, give the lower.
+Hold the line on delivery: reading word by word or with flat, even stress keeps Oral Fluency at 3 or below, and two or more words a listener has to guess keep Pronunciation at 3 or below.
 
 Reply with JSON only:
 {"pronunciation": <0-5>, "pronunciationFeedback": "<one or two sentences naming the sounds or words to fix>", "oralFluency": <0-5>, "oralFluencyFeedback": "<one or two sentences on rhythm, phrasing and pauses>", "unclearWords": ["<words from the given text that were mispronounced or hard to understand>"]}`

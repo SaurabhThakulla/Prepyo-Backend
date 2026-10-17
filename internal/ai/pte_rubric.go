@@ -129,6 +129,7 @@ func pteWritingGuidance(req WritingRequest) string {
 	fmt.Fprintf(&b, "\nReturn exactly these traits, each scored in whole points on Pearson's own scale, with maxScore set to that trait's maximum: %s.\n", pteTraitList(traits))
 	b.WriteString("- Content and Form are gates: a response scored 0 on either earns no points at all. Score Content 0 for an off-topic answer or one built mainly from memorised material.\n")
 	b.WriteString("- Choose the level whose description fits best. When a response sits between two levels, give the lower one unless it fully fits the higher one.\n")
+	b.WriteString("- Mark as an experienced examiner does: the top two levels of a trait need every feature of that level shown throughout, and one clear, repeated weakness keeps a trait below them. Length, topic words or a confident tone earn nothing on their own.\n")
 	b.WriteString("- Prepyo converts the points to the 10-90 scale itself. Set estimatedScore.value to the total of your trait points, or null if the response cannot be judged.\n")
 	b.WriteString("- Set estimatedScore.confidence to low, medium or high based on how much evidence the response gives you.\n")
 
@@ -237,6 +238,7 @@ func pluralCriteria(n int) string {
 // ptePointsRules closes every PTE speaking prompt: how the points are used.
 const ptePointsRules = `- Content (or Appropriacy) is a gate: a response scored 0 on it earns no points at all. Score it 0 for an irrelevant answer or one built mainly from memorised material.
 - Choose the level whose description fits best. When a response sits between two levels, give the lower one unless it fully fits the higher one.
+- Mark as an experienced examiner does: the top two levels of a trait need every feature of that level shown throughout, and one clear, repeated weakness keeps a trait below them. Length, topic words or a confident tone earn nothing on their own.
 - Prepyo converts the points to the 10-90 scale itself. Set estimatedScore.value to the total of your trait points, or null if the response cannot be judged.
 `
 

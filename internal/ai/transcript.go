@@ -13,7 +13,7 @@ import (
 // prompt. It is deliberately a different version from SpeakingPromptVersion:
 // feedback produced this way saw words, not a recording, and stored evaluations
 // have to stay traceable to which of the two produced them.
-const SpeakingTranscriptPromptVersion = "speaking.transcript.v4"
+const SpeakingTranscriptPromptVersion = "speaking.transcript.v5"
 
 // SpokenTranscriptRequest is a speaking answer that was transcribed on the
 // learner's device, for providers that serve text models only.

@@ -54,7 +54,7 @@ func (h *Handler) catalog(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"mocks": entries,
 		"tasks": tasks,
-		// Whether spoken answers are transcribed here (Whisper), so the
+		// Whether spoken answers are transcribed here (Gemini), so the
 		// pre-test check knows whether the browser's recognition matters.
 		"serverTranscription": h.svc.ServerTranscription(),
 	})

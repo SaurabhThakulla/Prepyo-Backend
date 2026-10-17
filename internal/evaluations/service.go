@@ -287,7 +287,7 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 				return Outcome{}, err
 			}
 		}
-		// The audio model rates delivery while Whisper transcribes; without it scoring falls back to assumed values.
+		// Gemini rates delivery while it also transcribes; without the rating, scoring falls back to assumed values.
 		var rating *ai.DeliveryRating
 		var ratingUsage ai.Usage
 		rated := make(chan struct{})
@@ -309,7 +309,7 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		if err != nil {
 			return Outcome{}, err
 		}
-		// Whisper's timings match the pauses marked in the transcript, so they win over the browser's.
+		// Pauses come from the browser; the transcription has no timings.
 		delivery := req.Delivery
 		if heard.Measured() {
 			delivery = heard
@@ -569,14 +569,18 @@ func (s *Service) persist(ctx context.Context, p persistParams) (Outcome, error)
 		return Outcome{}, err
 	}
 
-	awarded, err := s.xp.Award(ctx, tx, gamification.AwardParams{
-		UserID:    p.User.ID,
-		Amount:    gamification.XPEvaluation,
-		Reason:    p.XPReason,
-		SourceKey: "evaluation:" + saved.ID,
-	})
-	if err != nil {
-		return Outcome{}, err
+	// An answer that could not be rated at all earns no XP.
+	awarded := 0
+	if saved.EstimatedScore != nil {
+		awarded, err = s.xp.Award(ctx, tx, gamification.AwardParams{
+			UserID:    p.User.ID,
+			Amount:    gamification.XPEvaluation,
+			Reason:    p.XPReason,
+			SourceKey: "evaluation:" + saved.ID,
+		})
+		if err != nil {
+			return Outcome{}, err
+		}
 	}
 
 	streak, err := s.xp.TouchStreak(ctx, tx, p.User)

@@ -13,7 +13,7 @@ import (
 // SpeakingPromptVersion is stamped on every stored evaluation. Change it
 // whenever the prompt below changes, so old feedback stays traceable to the
 // wording that produced it.
-const SpeakingPromptVersion = "speaking.v5"
+const SpeakingPromptVersion = "speaking.v6"
 
 // AudioFormats are the encodings the provider accepts inline. Callers convert
 // a browser recording to one of these before submitting; the gateway does not
@@ -70,84 +70,36 @@ func (g *Gateway) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (mo
 		return models.Evaluation{}, Usage{}, fmt.Errorf("%w: no audio provider is configured", ErrUnavailable)
 	}
 
-	// With a Whisper model, transcribe the recording first and then evaluate the
-	// transcript on the text model (Haiku, which cannot hear audio itself).
-	if strings.Contains(strings.ToLower(g.models.Speaking), "whisper") {
-		heard, transcribeUsage, err := g.transcribeAudio(ctx, req)
-		if err != nil {
-			return models.Evaluation{}, transcribeUsage, err
-		}
-		transcript := heard.Text
-		if transcript == "" {
-			return models.Evaluation{}, transcribeUsage, fmt.Errorf("%w: could not transcribe speech from audio", ErrBadOutput)
-		}
-
-		// The browser's waveform measurement is used when it sent one; otherwise
-		// the pauses Whisper's word timings show.
-		delivery := req.Delivery
-		if !delivery.Measured() {
-			delivery = heard.Delivery
-		}
-		delivery.WordsSpoken = len(strings.Fields(transcript))
-		eval, evalUsage, err := g.EvaluateSpokenTranscript(ctx, SpokenTranscriptRequest{
-			Exam:            req.Exam,
-			TaskName:        req.TaskName,
-			Prompt:          req.Prompt,
-			ExpectedText:    req.ExpectedText,
-			SourceText:      req.SourceText,
-			ReferenceAnswer: req.ReferenceAnswer,
-			Transcript:      transcript,
-			DurationSeconds: req.DurationSeconds,
-			WordCount:       len(strings.Fields(transcript)),
-			Delivery:        delivery.Summary(),
-			MinScore:        req.MinScore,
-			MaxScore:        req.MaxScore,
-		})
-		evalUsage.add(transcribeUsage)
-		return eval, evalUsage, err
+	// Gemini transcribes the recording, then the text model (Haiku) grades the
+	// transcript: far cheaper than having the audio model grade it as well.
+	heard, transcribeUsage, err := g.transcribeAudio(ctx, req)
+	if err != nil {
+		return models.Evaluation{}, transcribeUsage, err
+	}
+	transcript := heard.Text
+	if transcript == "" {
+		return models.Evaluation{}, transcribeUsage, fmt.Errorf("%w: could not transcribe speech from audio", ErrBadOutput)
 	}
 
-	return g.evaluateSpeakingMultimodal(ctx, req)
-}
-
-func (g *Gateway) evaluateSpeakingMultimodal(ctx context.Context, req SpeakingRequest) (models.Evaluation, Usage, error) {
-	messages := []chatMessage{
-		{Role: "system", Content: speakingSystemPrompt(req)},
-		{Role: "user", Content: []contentPart{
-			{Type: "text", Text: speakingUserPrompt(req)},
-			{Type: "input_audio", Audio: &audioInput{Data: req.AudioBase64, Format: req.AudioFormat}},
-		}},
-	}
-
-	var usage Usage
-	for attempt := 1; attempt <= maxValidationAttempts; attempt++ {
-		raw, attemptUsage, err := g.complete(ctx, g.audio, g.models.Speaking, SpeakingPromptVersion, messages, true)
-		usage.add(attemptUsage)
-		if err != nil {
-			return models.Evaluation{}, Usage{}, err
-		}
-
-		evaluation, problem := parseSpeaking(raw, req)
-		if problem == nil {
-			return evaluation, usage, nil
-		}
-
-		g.log.Error("ai output failed validation",
-			"model", g.models.Speaking, "attempt", attempt, "error", problem)
-
-		if attempt == maxValidationAttempts || ctx.Err() != nil {
-			break
-		}
-
-		messages = append(messages,
-			chatMessage{Role: "assistant", Content: raw},
-			chatMessage{Role: "user", Content: fmt.Sprintf(
-				"That reply was rejected: %s. Send the complete JSON again with that fixed and everything else unchanged.",
-				problem)},
-		)
-	}
-
-	return models.Evaluation{}, usage, ErrBadOutput
+	// Pauses are the browser's waveform measurement; the audio model gives no timings.
+	delivery := req.Delivery
+	delivery.WordsSpoken = len(strings.Fields(transcript))
+	eval, evalUsage, err := g.EvaluateSpokenTranscript(ctx, SpokenTranscriptRequest{
+		Exam:            req.Exam,
+		TaskName:        req.TaskName,
+		Prompt:          req.Prompt,
+		ExpectedText:    req.ExpectedText,
+		SourceText:      req.SourceText,
+		ReferenceAnswer: req.ReferenceAnswer,
+		Transcript:      transcript,
+		DurationSeconds: req.DurationSeconds,
+		WordCount:       len(strings.Fields(transcript)),
+		Delivery:        delivery.Summary(),
+		MinScore:        req.MinScore,
+		MaxScore:        req.MaxScore,
+	})
+	evalUsage.add(transcribeUsage)
+	return eval, evalUsage, err
 }
 
 // parseSpeaking decodes and validates one reply. It returns the underlying

@@ -10,7 +10,7 @@ import (
 )
 
 // SpeakingTestPromptVersion identifies the whole-test speaking prompt.
-const SpeakingTestPromptVersion = "speaking.test.v3"
+const SpeakingTestPromptVersion = "speaking.test.v4"
 
 // SpeakingTestTurn is one question of a Speaking test and the answer given.
 type SpeakingTestTurn struct {
@@ -18,7 +18,7 @@ type SpeakingTestTurn struct {
 	Question string
 	Answer   string
 	Seconds  int
-	// Pauses is what Whisper's word timings showed, or empty.
+	// Pauses is empty: transcription gives no timings.
 	Pauses string
 }
 
@@ -33,7 +33,7 @@ type SpeakingTestRequest struct {
 // each answer. IELTS rates "average performance across all parts of the test",
 // so the three parts are judged together rather than answer by answer.
 //
-// The answers were transcribed (Whisper on the audio provider, or the
+// The answers were transcribed (Gemini on the audio provider, or the
 // browser's recogniser), so pronunciation cannot be judged: the estimate uses
 // Fluency and Coherence, Lexical Resource and Grammatical Range and Accuracy,
 // and says so.

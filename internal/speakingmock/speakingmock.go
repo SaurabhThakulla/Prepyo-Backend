@@ -3,7 +3,7 @@
 //
 // The examiner's questions are spoken by the browser's voice (or the server's,
 // where the browser has none). Each answer is recorded and transcribed as soon
-// as it ends: on the audio provider (Whisper on Groq) where one is configured,
+// as it ends: on the audio provider (Gemini on OpenRouter) where one is configured,
 // otherwise from the browser's own recogniser. The whole test is then rated
 // once, across all three parts, as IELTS rates it. Transcripts cannot show
 // pronunciation, so the estimate covers the other three criteria and says so.
@@ -89,10 +89,10 @@ type Answer struct {
 	Key             string `json:"key"`
 	Transcript      string `json:"transcript"`
 	DurationSeconds int    `json:"durationSeconds"`
-	// Source says where the transcript came from: "server" (Whisper) or
+	// Source says where the transcript came from: "server" (Gemini) or
 	// "browser" (the device's recogniser).
 	Source string `json:"source"`
-	// Pauses is what Whisper's word timings showed, when it transcribed.
+	// Pauses is empty: transcription gives no timings, only the browser measures pauses.
 	Pauses string `json:"pauses,omitempty"`
 }
 

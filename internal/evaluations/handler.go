@@ -193,7 +193,7 @@ func (h *Handler) evaluateSpeaking(w http.ResponseWriter, r *http.Request) {
 		Audio:           audio,
 		AudioFormat:     req.Format,
 		DurationSeconds: req.DurationSeconds,
-		// Words are counted once Whisper has transcribed the recording.
+		// Words are counted once Gemini has transcribed the recording.
 		Delivery: h.deliveryOf(req.Delivery, 0, "evaluations.evaluateSpeaking"),
 	})
 	if err != nil {

@@ -43,12 +43,12 @@ When the last item is done (or the learner ends the test) the paper moves to
 Spoken answers are transcribed the way the IELTS speaking mock does it
 (`speakingmock.SaveAnswer`). Every spoken answer is sent with its recording
 (mp3, or wav if encoding fails) and the browser's own transcript. `Submit`
-transcribes the recording with Whisper on the audio provider
+transcribes the recording with Gemini on the audio provider
 (`AI_AUDIO_BASE_URL` / `AI_AUDIO_API_KEY`, Groq) and keeps that; if the call
 fails, or no audio provider is configured, the browser's transcript is kept, so
 an answer is never lost to one failed call. The recording is used and dropped,
 never stored; `pte_mock_items.transcript_source` records `server` or `browser`.
-Whisper only runs for the spoken item on screen, so the endpoint is not a free
+Gemini only runs for the spoken item on screen, so the endpoint is not a free
 transcription service. The catalog's `serverTranscription` tells the pre-test
 check whether the browser's own recognition matters.
 

@@ -42,7 +42,7 @@ func run() error {
 		log.Warn("AI_API_KEY is not set: evaluation and tutor endpoints will return 503")
 	}
 
-	// Speaking needs a provider that transcribes audio (Whisper on OpenRouter),
+	// Speaking needs a provider that transcribes audio (Gemini on OpenRouter),
 	// so it can be missing while everything else works.
 	if !cfg.SpeakingEnabled() {
 		log.Warn("no audio provider is configured: speaking evaluation will return 503, other AI endpoints are unaffected")
