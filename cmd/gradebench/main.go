@@ -89,17 +89,26 @@ func main() {
 	out := flag.String("out", "", "write results JSON here")
 	audio := flag.String("audio", "", "comma-separated recordings to transcribe with Gemini instead of grading")
 	flag.Parse()
-
+	loadedCfg, _ := config.Load()
 	key := os.Getenv("AI_API_KEY")
+	baseURL := os.Getenv("AI_BASE_URL")
+	if loadedCfg != nil {
+		if key == "" {
+			key = loadedCfg.AIAPIKey
+		}
+		if baseURL == "" {
+			baseURL = loadedCfg.AIBaseURL
+		}
+	}
 	if key == "" {
 		fmt.Fprintln(os.Stderr, "AI_API_KEY is not set")
 		os.Exit(2)
 	}
 	model := firstNonEmpty(os.Getenv("AI_MODEL_WRITING"), config.DefaultAIModel)
 	cfg := &config.Config{
-		AIBaseURL:        strings.TrimRight(firstNonEmpty(os.Getenv("AI_BASE_URL"), "https://openrouter.ai/api/v1"), "/"),
+		AIBaseURL:        strings.TrimRight(firstNonEmpty(baseURL, "https://openrouter.ai/api/v1"), "/"),
 		AIAPIKey:         key,
-		AIAudioBaseURL:   strings.TrimRight(firstNonEmpty(os.Getenv("AI_BASE_URL"), "https://openrouter.ai/api/v1"), "/"),
+		AIAudioBaseURL:   strings.TrimRight(firstNonEmpty(baseURL, "https://openrouter.ai/api/v1"), "/"),
 		AIAudioAPIKey:    key,
 		AIModels:         config.AIModels{Writing: model, Speaking: config.DefaultSpeechModel, Tutoring: model},
 		AIRequestTimeout: 120 * time.Second,
@@ -332,12 +341,22 @@ func loadSamples(dir, only string) ([]sample, error) {
 			return nil, fmt.Errorf("%s: %w", f, err)
 		}
 		for _, s := range list {
-			if only == "" || strings.Contains(s.ID, only) {
+			if only == "" || matchesFilter(s.ID, only) {
 				all = append(all, s)
 			}
 		}
 	}
 	return all, nil
+}
+
+func matchesFilter(id, filter string) bool {
+	for _, part := range strings.Split(filter, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" && strings.Contains(id, part) {
+			return true
+		}
+	}
+	return false
 }
 
 func fmtScore(s *float64) string {
