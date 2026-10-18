@@ -162,5 +162,5 @@ func scan(row pgx.Row) (models.Evaluation, error) {
 	err := row.Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion,
 		&e.EstimatedScore, &e.ScoreConfidence, &e.Summary, &e.Criteria, &e.Strengths,
 		&e.Weaknesses, &e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.Words, &e.CreatedAt)
-	return e, err
+	return onPTEScale(e), err
 }

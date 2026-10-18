@@ -27,6 +27,11 @@ func pteWritingTraits(task string) []pteTrait {
 		return []pteTrait{{"Content", 4, true}, {"Form", 1, true}, {"Grammar", 2, false}, {"Vocabulary", 2, false}}
 	case pteTaskSummarizeSpokenText:
 		return []pteTrait{{"Content", 4, true}, {"Form", 2, true}, {"Grammar", 2, false}, {"Vocabulary", 2, false}, {"Spelling", 2, false}}
+	case pteTaskWriteEmail:
+		return []pteTrait{
+			{"Content", 3, true}, {"Email Conventions", 2, false}, {"Form", 2, true}, {"Organization", 2, false},
+			{"Vocabulary", 2, false}, {"Grammar", 2, false}, {"Spelling", 2, false},
+		}
 	}
 	return []pteTrait{
 		{"Content", 6, true}, {"Form", 2, true}, {"Development, Structure and Coherence", 6, false},
@@ -76,6 +81,8 @@ func pteFormFromLength(task string, words int) int {
 		return -1
 	case pteTaskSummarizeSpokenText:
 		return lengthBand(words, 50, 70, 40, 100)
+	case pteTaskWriteEmail:
+		return lengthBand(words, 50, 120, 30, 140)
 	}
 	return lengthBand(words, 200, 300, 120, 380)
 }
@@ -131,7 +138,14 @@ func ptePointsScore(criteria []models.EvaluationCriterion, traits []pteTrait, fo
 		sum += out[i].Score
 		total += float64(t.Max)
 	}
-	return math.Round(10 + 80*sum/total), out, nil
+	overall := math.Round(10 + 80*sum/total)
+	for i, t := range traits {
+		if t.Max > 0 {
+			out[i].Score = math.Round(10 + 80*out[i].Score/float64(t.Max))
+			out[i].MaxScore = 90
+		}
+	}
+	return overall, out, nil
 }
 
 func traitKey(name string) string {

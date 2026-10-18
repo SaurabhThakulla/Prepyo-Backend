@@ -11,7 +11,7 @@ import (
 // DeliveryPromptVersion is stamped on usage for audio-rated Pronunciation and Oral Fluency.
 const DeliveryPromptVersion = "pte.delivery.v2"
 
-// DeliveryRating is Pronunciation and Oral Fluency on Pearson's 0-5 ladders, heard from the audio.
+// DeliveryRating is Pronunciation and Oral Fluency on Pearson's 10-90 scale, heard from the audio.
 type DeliveryRating struct {
 	Pronunciation         int      `json:"pronunciation"`
 	PronunciationFeedback string   `json:"pronunciationFeedback"`
@@ -66,8 +66,8 @@ func parseDeliveryRating(raw string) (DeliveryRating, error) {
 	if err := json.Unmarshal([]byte(unfence(raw)), &r); err != nil {
 		return DeliveryRating{}, fmt.Errorf("the reply was not valid JSON (%w)", err)
 	}
-	if r.Pronunciation < 0 || r.Pronunciation > 5 || r.Fluency < 0 || r.Fluency > 5 {
-		return DeliveryRating{}, fmt.Errorf("pronunciation and oralFluency must be whole numbers from 0 to 5")
+	if r.Pronunciation < 10 || r.Pronunciation > 90 || r.Fluency < 10 || r.Fluency > 90 {
+		return DeliveryRating{}, fmt.Errorf("pronunciation and oralFluency must be whole numbers from 10 to 90")
 	}
 	if strings.TrimSpace(r.PronunciationFeedback) == "" || strings.TrimSpace(r.FluencyFeedback) == "" {
 		return DeliveryRating{}, fmt.Errorf("pronunciationFeedback and oralFluencyFeedback must not be empty")
@@ -78,18 +78,24 @@ func parseDeliveryRating(raw string) (DeliveryRating, error) {
 	return r, nil
 }
 
-var deliverySystemPrompt = `You are a strict PTE Academic examiner rating one spoken response to a Read Aloud or Repeat Sentence task.
-Listen to the audio itself. Rate only HOW it was spoken, never which words were said: content is marked elsewhere.
+var deliverySystemPrompt = `You are an experienced PTE Academic examiner rating one spoken response to a Read Aloud or Repeat Sentence task.
+Listen to the audio recording. Rate only HOW it was spoken (delivery), never which words were said: content accuracy is marked separately.
 
-Oral Fluency (0-5), Pearson's scale. Judge rhythm, phrasing, stress and smoothness across the whole response; reading word by word, uneven pacing, hesitations, repetitions and false starts all count against it.
-` + pteFluencyLadder + `
+Rate Oral Fluency (10-90) and Pronunciation (10-90) directly on Pearson's official 10-90 PTE scale.
 
-Pronunciation (0-5), Pearson's scale. Judge vowels, consonants, word stress and sentence stress against what a wide range of listeners would understand.
-An accent is not a fault on its own; lower the score for sounds, stress or intonation that make words harder to understand or that the listener has to adjust to.
-` + ptePronunciationLadder + `
+Oral Fluency (10-90):
+- 79-90: Smooth, natural exam rhythm (120-150 words per minute); appropriate phrasing; no mid-sentence hesitations or false starts.
+- 65-78: Sustained speech with consistent rhythm; natural breath pauses between clauses; minor hesitations without stopping the overall flow.
+- 50-64: Noticeable uneven rhythm or hesitations; reading word-by-word; several mid-sentence pauses.
+- 30-49: Frequent hesitations, repeated words, choppy phrasing, or long silences.
+- 10-29: Extremely slow, halting, isolated single words, or mostly silent.
 
-Give 4 or 5 only when the recording clearly meets that band; when between two bands, give the lower.
-Hold the line on delivery: reading word by word or with flat, even stress keeps Oral Fluency at 3 or below, and two or more words a listener has to guess keep Pronunciation at 3 or below.
+Pronunciation (10-90):
+- 79-90: Every word and sound easily understood by any listener; clear vowel and consonant articulation; standard word and sentence stress.
+- 65-78: Easily intelligible throughout; vowels and consonants are clear. Natural regional accents (e.g. South Asian, Latin American, East Asian) are completely acceptable and NOT penalized as long as words are clear.
+- 50-64: Speech is mostly intelligible, but some vowel distortions, omitted word endings, or non-standard stress make a few words unclear.
+- 30-49: Many distorted sounds; listener must strain to follow; about one third of words hard to decipher.
+- 10-29: More than half of the words unintelligible or inaudible.
 
 Reply with JSON only:
-{"pronunciation": <0-5>, "pronunciationFeedback": "<one or two sentences naming the sounds or words to fix>", "oralFluency": <0-5>, "oralFluencyFeedback": "<one or two sentences on rhythm, phrasing and pauses>", "unclearWords": ["<words from the given text that were mispronounced or hard to understand>"]}`
+{"pronunciation": <whole number 10-90>, "pronunciationFeedback": "<one or two sentences on sounds or word stress to polish>", "oralFluency": <whole number 10-90>, "oralFluencyFeedback": "<one or two sentences on rhythm, phrasing and pacing>", "unclearWords": ["<words from the text that were mispronounced or hard to understand>"]}`

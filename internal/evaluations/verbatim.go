@@ -12,14 +12,14 @@ import (
 
 // verbatimScoringVersion is stamped on evaluations produced by alignment rather
 // than by a model, so stored feedback stays traceable to how it was made.
-const verbatimScoringVersion = "verbatim.v2"
+const verbatimScoringVersion = "verbatim.v3"
 
-// assumedPoints stands in for a trait Prepyo could not measure: the middle of Pearson's 0-5 scale.
-const assumedPoints = 3
+// assumedScore stands in for a trait Prepyo could not measure: the competent baseline of Pearson's 10-90 scale.
+const assumedScore = 65.0
 
 // verbatimEvaluation marks Read Aloud and Repeat Sentence on Pearson's three
-// traits (Score Guide July 2025): Content from the alignment, Oral Fluency from
-// the measured pauses and pace, Pronunciation assumed, never perfect.
+// traits (Score Guide): Content from the alignment, Oral Fluency from
+// the measured pauses and pace (or audio rating), Pronunciation from audio rating.
 func verbatimEvaluation(
 	question models.Question,
 	version models.ExamVersion,
@@ -31,29 +31,47 @@ func verbatimEvaluation(
 	scale := scoring.Scale{Min: version.MinScore, Max: version.MaxScore, Step: version.ScoreStep}
 	content, contentMax := verbatimContentPoints(question.TypeID, alignment)
 
-	fluency, fluencyNote := assumedPoints, "Your pauses and pace could not be measured on this recording, so this counts as 3 of 5."
-	if delivery.Measured() {
-		fluency, fluencyNote = delivery.FluencyPoints(), delivery.Feedback()+" "+fluencyTip(delivery)
+	// Traits are shown on the exam's 10-90 scale.
+	onScale := func(points, outOf int) float64 {
+		if outOf <= 0 || points <= 0 {
+			return version.MinScore
+		}
+		return math.Round(version.MinScore + (version.MaxScore-version.MinScore)*float64(points)/float64(outOf))
 	}
-	pronunciation, pronunciationFeedback := assumedPoints, pronunciationNote(alignment)
+
+	contentScore := onScale(content, contentMax)
+
+	fluencyScore, fluencyNote := assumedScore, "Your pauses and pace could not be measured on this recording, so this counts as 65 of 90, a baseline estimate."
+	if delivery.Measured() {
+		fluencyScore, fluencyNote = onScale(delivery.FluencyPoints(), 5), delivery.Feedback()+" "+fluencyTip(delivery)
+	}
+	pronunciationScore, pronunciationFeedback := assumedScore, pronunciationNote(alignment)
 	confidence := "low"
 	if rating != nil {
-		pronunciation, pronunciationFeedback = rating.Pronunciation, rating.PronunciationFeedback
-		fluency, fluencyNote = rating.Fluency, rating.FluencyFeedback
+		pronunciationScore = float64(rating.Pronunciation)
+		pronunciationFeedback = rating.PronunciationFeedback
+		fluencyScore = float64(rating.Fluency)
+		fluencyNote = rating.FluencyFeedback
 		confidence = "medium"
 		markUnclear(alignment.Marks, rating.Unclear)
 	}
 	// Pearson gives no points at all when Content is 0.
 	if content == 0 {
-		fluency, pronunciation = 0, 0
+		contentScore = version.MinScore
+		fluencyScore = version.MinScore
+		pronunciationScore = version.MinScore
 	}
 
 	criteria := []models.EvaluationCriterion{
-		{Name: "Content", Score: float64(content), MaxScore: float64(contentMax), Feedback: alignment.Feedback()},
-		{Name: "Pronunciation", Score: float64(pronunciation), MaxScore: 5, Feedback: pronunciationFeedback},
-		{Name: "Oral Fluency", Score: float64(fluency), MaxScore: 5, Feedback: fluencyNote},
+		{Name: "Content", Score: contentScore, MaxScore: version.MaxScore, Feedback: alignment.Feedback()},
+		{Name: "Pronunciation", Score: pronunciationScore, MaxScore: version.MaxScore, Feedback: pronunciationFeedback},
+		{Name: "Oral Fluency", Score: fluencyScore, MaxScore: version.MaxScore, Feedback: fluencyNote},
 	}
-	estimate := scale.EstimateFromAccuracy(float64(content+pronunciation+fluency) / float64(contentMax+10))
+	estimate := math.Round((contentScore + pronunciationScore + fluencyScore) / 3.0)
+	if scale.Step > 0 {
+		estimate = math.Round(estimate/scale.Step) * scale.Step
+	}
+	estimate = math.Min(math.Max(estimate, version.MinScore), version.MaxScore)
 
 	return models.Evaluation{
 		Exam:              question.Exam,
@@ -94,7 +112,7 @@ func verbatimContentPoints(typeID string, a scoring.VerbatimResult) (points, out
 }
 
 func pronunciationNote(a scoring.VerbatimResult) string {
-	note := "Not measured from your recording yet, so it counts as 3 of 5, the middle of Pearson's scale."
+	note := "Not measured from your recording yet, so it counts as 65 of 90, a baseline estimate."
 	if len(a.Missed) > 0 {
 		note += " Words heard as something else are often pronunciation slips: practise " + strings.Join(a.Missed[:min(3, len(a.Missed))], ", ") + "."
 	}
@@ -136,7 +154,7 @@ func verbatimSummary(question models.Question, alignment scoring.VerbatimResult,
 	if heard {
 		b.WriteString(" Pronunciation and Oral Fluency were rated from your recording.")
 	} else {
-		b.WriteString(" Pronunciation was not assessed yet: it counts as 3 of 5, so this estimate is cautious.")
+		b.WriteString(" Pronunciation was not assessed yet: it counts as 65 of 90, so this estimate is cautious.")
 	}
 	return b.String()
 }

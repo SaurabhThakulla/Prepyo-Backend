@@ -305,31 +305,31 @@ func writingSystemPrompt(req WritingRequest) string {
 func ieltsReplyShape(transcriptLine, confidence, summaryNote string) string {
 	return fmt.Sprintf(`Reply with JSON only, in this shape:
 {
-%s  "summary": "two sentences: the overall level and the main thing to improve%s",
-  "criteria": [{"name": "...", "score": <whole band>, "maxScore": 9, "feedback": "one or two sentences citing the evidence"}],
+%s  "summary": "one concise sentence: overall band level and key improvement%s",
+  "criteria": [{"name": "...", "score": <whole band>, "maxScore": 9, "feedback": "one concise sentence citing evidence"}],
   "estimatedScore": {"value": <rounded mean of the criteria, or null if the response cannot be rated>, "confidence": "%s"},
-  "strengths": ["two or three short phrases"],
-  "weaknesses": ["two or three short phrases"],
-  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "one sentence"}]
+  "strengths": ["two short phrases"],
+  "weaknesses": ["two short phrases"],
+  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "under 15 words"}]
 }
 `+replyBrevity, transcriptLine, summaryNote, confidence)
 }
 
 // replyBrevity keeps the written feedback short: the scores come from the
 // criteria, so length adds cost without adding accuracy.
-const replyBrevity = "\nKeep every text field brief and say each point once: do not repeat the criteria feedback in the summary, strengths or weaknesses. Give at most four sentenceFeedback entries, the ones that matter most.\n"
+const replyBrevity = "\nKeep every text field concise: give at most two sentenceFeedback entries (the two highest-impact corrections), one concise sentence per criterion feedback, and under 15 words per explanation.\n"
 
 // pteReplyShape is the JSON the PTE prompts ask for: trait points on
 // Pearson's scales, from which Prepyo works out the 10-90 estimate.
 func pteReplyShape(transcriptLine, confidence, summaryNote string) string {
 	return fmt.Sprintf(`Reply with JSON only, in this shape:
 {
-%s  "summary": "two sentences: the overall level and the main thing to improve%s",
-  "criteria": [{"name": "...", "score": <whole points>, "maxScore": <that trait's maximum>, "feedback": "one or two sentences citing the evidence"}],
+%s  "summary": "one concise sentence: overall level and key improvement%s",
+  "criteria": [{"name": "...", "score": <whole points>, "maxScore": <that trait's maximum>, "feedback": "one concise sentence citing evidence"}],
   "estimatedScore": {"value": <total of the trait points, or null if the response cannot be rated>, "confidence": "%s"},
-  "strengths": ["two or three short phrases"],
-  "weaknesses": ["two or three short phrases"],
-  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "one sentence"}]
+  "strengths": ["two short phrases"],
+  "weaknesses": ["two short phrases"],
+  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "under 15 words"}]
 }
 `+replyBrevity, transcriptLine, summaryNote, confidence)
 }

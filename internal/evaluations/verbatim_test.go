@@ -34,9 +34,9 @@ func TestVerbatimEvaluationScoresOnPearsonTraits(t *testing.T) {
 	if evaluation.EstimatedScore == nil {
 		t.Fatal("a perfect read produced no score")
 	}
-	// Content 5 + Pronunciation 3 (assumed) + Fluency 4 of 15 points.
-	if *evaluation.EstimatedScore != 74 {
-		t.Errorf("perfect read with one pause scored %.0f, want 74", *evaluation.EstimatedScore)
+	// Content 90 + Pronunciation 65 (assumed) + Fluency 74 (4/5): (90 + 65 + 74)/3 = 76.
+	if *evaluation.EstimatedScore != 76 {
+		t.Errorf("perfect read with one pause scored %.0f, want 76", *evaluation.EstimatedScore)
 	}
 	names := []string{}
 	for _, c := range evaluation.Criteria {
@@ -45,8 +45,8 @@ func TestVerbatimEvaluationScoresOnPearsonTraits(t *testing.T) {
 	if strings.Join(names, ",") != "Content,Pronunciation,Oral Fluency" {
 		t.Fatalf("criteria = %v", names)
 	}
-	if evaluation.Criteria[1].Score != 3 || evaluation.Criteria[1].MaxScore != 5 {
-		t.Errorf("pronunciation = %+v, want the assumed 3 of 5", evaluation.Criteria[1])
+	if evaluation.Criteria[1].Score != 65 || evaluation.Criteria[1].MaxScore != 90 {
+		t.Errorf("pronunciation = %+v, want the assumed 65 of 90", evaluation.Criteria[1])
 	}
 	if !strings.Contains(evaluation.Summary, "Pronunciation was not assessed") {
 		t.Errorf("summary does not say pronunciation went unassessed: %q", evaluation.Summary)
@@ -83,9 +83,9 @@ func TestVerbatimEvaluationPhytoplanktonRecording(t *testing.T) {
 	delivery := scoring.Delivery{DurationSeconds: 23, WordsSpoken: 38, PauseCount: 2, LongestPauseSeconds: 0.9, SpeakingRatio: 0.8}
 
 	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), given, heard, delivery, nil)
-	// Content 4 (5 errors in 38), Pronunciation 3, Fluency 2 (two pauses, 99 wpm): 9 of 15.
-	if *evaluation.EstimatedScore != 58 {
-		t.Errorf("scored %.0f, want 58 (was 81 before trait points)", *evaluation.EstimatedScore)
+	// Content 74 (4 of 5), Pronunciation 65 (assumed), Fluency 42 (2 of 5, 99 wpm & 2 pauses): (74 + 65 + 42)/3 = 60.
+	if *evaluation.EstimatedScore != 60 {
+		t.Errorf("scored %.0f, want 60", *evaluation.EstimatedScore)
 	}
 	missed := 0
 	for _, w := range evaluation.Words {
@@ -99,12 +99,12 @@ func TestVerbatimEvaluationPhytoplanktonRecording(t *testing.T) {
 }
 
 func TestVerbatimEvaluationUsesTheAudioRating(t *testing.T) {
-	rating := &ai.DeliveryRating{Pronunciation: 2, PronunciationFeedback: "Stress in phytoplankton.", Fluency: 2, FluencyFeedback: "Word by word.", Unclear: []string{"flat"}}
+	rating := &ai.DeliveryRating{Pronunciation: 75, PronunciationFeedback: "Stress in phytoplankton.", Fluency: 80, FluencyFeedback: "Word by word.", Unclear: []string{"flat"}}
 	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, scoring.Delivery{}, rating)
 
-	// Content 5 + Pronunciation 2 + Fluency 2 of 15 points.
-	if *evaluation.EstimatedScore != 58 {
-		t.Errorf("scored %.0f, want 58", *evaluation.EstimatedScore)
+	// Content 90 + Pronunciation 75 + Fluency 80: (90 + 75 + 80)/3 = 82.
+	if *evaluation.EstimatedScore != 82 {
+		t.Errorf("scored %.0f, want 82", *evaluation.EstimatedScore)
 	}
 	if evaluation.Criteria[1].Feedback != "Stress in phytoplankton." || evaluation.ScoreConfidence != "medium" {
 		t.Errorf("rating not used: %+v, confidence %s", evaluation.Criteria[1], evaluation.ScoreConfidence)

@@ -19,6 +19,8 @@ const (
 	pteTaskWriteEssay           = "write-essay"
 	pteTaskSummarizeWrittenText = "summarize-written-text"
 	pteTaskSummarizeSpokenText  = "summarize-spoken-text"
+	// pteTaskWriteEmail is PTE Core only.
+	pteTaskWriteEmail = "write-email"
 )
 
 // pteWritingTask classifies a writing question by its type id, falling back
@@ -30,6 +32,8 @@ func pteWritingTask(typeID, taskName string) string {
 		return pteTaskSummarizeWrittenText
 	case strings.Contains(id, "summarize-spoken-text") || strings.Contains(id, "sst"):
 		return pteTaskSummarizeSpokenText
+	case strings.Contains(id, "write-email"):
+		return pteTaskWriteEmail
 	case strings.Contains(id, "write-essay") || strings.Contains(id, "essay"):
 		return pteTaskWriteEssay
 	}
@@ -39,6 +43,8 @@ func pteWritingTask(typeID, taskName string) string {
 		return pteTaskSummarizeWrittenText
 	case strings.Contains(name, "summarize spoken text"):
 		return pteTaskSummarizeSpokenText
+	case strings.Contains(name, "write email"):
+		return pteTaskWriteEmail
 	case strings.Contains(name, "write essay") || strings.Contains(name, "essay"):
 		return pteTaskWriteEssay
 	}
@@ -97,9 +103,13 @@ func pteSpeakingTask(typeID, taskName string) string {
 func pteWritingGuidance(req WritingRequest) string {
 	task := pteWritingTask(req.TypeID, req.TaskName)
 
+	test := "PTE Academic"
+	if task == pteTaskWriteEmail {
+		test = "PTE Core"
+	}
 	var b strings.Builder
-	b.WriteString("You are an experienced PTE Academic assessor giving practice feedback. Your estimate is not an official score.\n\n")
-	b.WriteString("Assess against Pearson's published PTE Academic scoring criteria:\n")
+	fmt.Fprintf(&b, "You are an experienced %s assessor giving practice feedback. Your estimate is not an official score.\n\n", test)
+	fmt.Fprintf(&b, "Assess against Pearson's published %s scoring criteria:\n", test)
 	b.WriteString("- Rate each trait on the evidence in this response only. Weigh strengths and errors together.\n")
 	b.WriteString("- Judge only the text the learner wrote. Never quote or invent a sentence they did not write.\n")
 	b.WriteString("- Every entry in sentenceFeedback must copy an exact sentence from the learner's text into `original` and give an improved version with a short explanation.\n")
@@ -120,6 +130,9 @@ func pteWritingGuidance(req WritingRequest) string {
 		b.WriteString("Form (0-2): 2 = 50 to 70 words; 1 = 40-49 or 71-100 words; 0 = fewer than 40 or more than 100 words, written in capitals, no punctuation, or only bullet points or very short sentences.\n")
 		b.WriteString(pteGrammarVocabularyLadder)
 		b.WriteString(pteSpellingLadder)
+	case pteTaskWriteEmail:
+		b.WriteString("Task: Write Email (PTE Core).\n")
+		b.WriteString(pteEmailLadder)
 	default:
 		b.WriteString("Task: Write Essay.\n")
 		b.WriteString(pteEssayLadder)
@@ -238,7 +251,9 @@ func pluralCriteria(n int) string {
 // ptePointsRules closes every PTE speaking prompt: how the points are used.
 const ptePointsRules = `- Content (or Appropriacy) is a gate: a response scored 0 on it earns no points at all. Score it 0 for an irrelevant answer or one built mainly from memorised material.
 - Choose the level whose description fits best. When a response sits between two levels, give the lower one unless it fully fits the higher one.
-- Mark as an experienced examiner does: the top two levels of a trait need every feature of that level shown throughout, and one clear, repeated weakness keeps a trait below them. Length, topic words or a confident tone earn nothing on their own.
+- Mark as an experienced examiner does: the top levels of a trait need every feature of that level shown throughout, and one clear, repeated weakness keeps a trait below them. Length, topic words or a confident tone earn nothing on their own.
+- Basic or broken phrasing (e.g. simple repetitions, choppy fragments, disconnected numbers without grammatical structure) belongs in level 1 or 2 of Content. Do not award level 4 or higher unless the response shows coherent structure and standard grammatical sentences.
+- Uneven phrasing, recurring hesitations, or repetitive connectors keep Oral Fluency at level 1 or 2.
 - Prepyo converts the points to the 10-90 scale itself. Set estimatedScore.value to the total of your trait points, or null if the response cannot be judged.
 `
 
@@ -288,10 +303,20 @@ Vocabulary (0-2): 2 = appropriate word choice; 1 = word errors that do not hinde
 
 const pteSpellingLadder = "Spelling (0-2): 2 = no spelling errors; 1 = one spelling error; 0 = more than one.\n"
 
+// pteEmailLadder is Write Email from Pearson's PTE Core Score Guide (January 2024), "Scoring", in our words.
+const pteEmailLadder = `Content (0-3): 3 = deals with what the task asks fully and appropriately, covering every bullet point; 2 = deals with the task with some success and shows some understanding of it; 1 = tries but does not succeed, the task or topic possibly misunderstood; 0 = does not deal with the task, or is mostly pre-prepared or memorised material.
+Email Conventions (0-2): 2 = salutation, opening, closing and sign-off clearly present, suitable and used correctly for the situation; 1 = used inconsistently, with parts missing or ineffective (too brief, or the wrong register); 0 = few or none.
+Form (0-2): 2 = 50 to 120 words; 1 = 30-49 or 121-140 words; 0 = under 30 or over 140 words, written in capitals, or no punctuation.
+Organization (0-2): 2 = a clear structure that is easy to follow, ideas in a logical order, transitions that guide the reader; 1 = a generally acceptable structure, related ideas grouped but their link to the rest sometimes unclear, transitions mostly basic; 0 = structure missing or unsuitable, connections between ideas missing or unclear.
+Vocabulary (0-2): 2 = good command of words suited to the situation; 1 = a limited range, partly suited, with gaps that make it imprecise; 0 = mainly basic words, not enough for the situation.
+Grammar (0-2): 2 = generally consistent control with only occasional errors; 1 = a fair degree of control, errors seen but not making the reader work hard; 0 = mainly simple structures and/or frequent mistakes.
+Spelling (0-2): 2 = at most two spelling or typing errors; 1 = three or four; 0 = many, enough to make the reader work hard.
+`
+
 const pteFluencyLadder = `- 5: smooth rhythm and phrasing; no hesitations, repetitions or false starts.
 - 4: acceptable rhythm and phrasing; at most one hesitation, repetition or false start.
-- 3: acceptable speed but may be uneven; more than one hesitation, but most words in continuous phrases; few repetitions or false starts; no long pauses.
-- 2: uneven or staccato; at least one smooth three-word run; two or three hesitations, repetitions or false starts; at most one long pause.
+- 3: sustained speech with acceptable phrasing; minor hesitations, but words linked in natural clauses without staccato rhythm.
+- 2: uneven, choppy, or staccato delivery; simple disconnected words or repeated phrases ("go up up", "and then and then"); noticeable hesitations or pauses.
 - 1: irregular phrasing; many hesitations, repetitions or false starts; notably uneven; one or two long pauses.
 - 0: slow and laboured; most words isolated; more than one long pause.`
 
@@ -312,28 +337,28 @@ func pteSpeakingContentLadder(task string) string {
 	case pteTaskDescribeImage:
 		return `Content (0-6):
 - 6: describes the image fully and accurately and expands on relationships between its features; a listener could picture all of it.
-- 5: the main features described accurately, with some relationships not expanded; minor details missing.
-- 4: some accurate simple descriptions and basic relationships, but not all main features covered.
-- 3: mainly superficial description with minor inaccuracies; narrow, repeated expressions.
-- 2: minimal, superficial description with some inaccuracies.
-- 1: disconnected elements or a list of items without description.
+- 5: the main features described accurately with clear overview and relationships, with minor details missing.
+- 4: main features described with complete sentences and basic trends; some relationships covered.
+- 3: partial or superficial description; simple observations with narrow vocabulary and minor inaccuracies.
+- 2: minimal or fragmented attempt; lists individual data points or uses broken, repetitive phrasing (e.g. "it go up up") without cohesive structure.
+- 1: disconnected elements or isolated words without description.
 - 0: relevant but too limited to score higher.`
 	case pteTaskRespondToSituation:
 		return `Appropriacy (0-6):
 - 6: deals with the situation effectively; fully achieves the purpose with full regard to the context; appropriate, fully developed and persuasive.
 - 5: deals with the situation adequately; achieves the purpose with some regard to the context; minor omissions.
-- 4: partly achieves the purpose; some omissions or misunderstandings; expression adequate with some limits.
-- 3: achieves only the most basic part of the purpose; limited range; some inappropriate elements or reuse of the prompt's wording.
-- 2: some relevant content but the purpose is not achieved.
-- 1: relevant words but shows little understanding of the situation, or an appropriate reply with no elaboration at all.
+- 4: partly achieves the purpose with an appropriate response and a workable explanation or solution; expression adequate with standard sentences.
+- 3: achieves only the most basic part of the purpose; limited range and very brief reply.
+- 2: minimal or incomplete attempt; a brief or broken utterance that acknowledges the topic but does not adequately address the situation.
+- 1: isolated words showing little understanding of the situation.
 - 0: relevant but too limited to score higher.`
 	}
 	return `Content (0-6):
-- 6: full understanding; main ideas paraphrased smoothly in own words, important points expanded with specifics (for a discussion: each speaker's view and how the views relate); well connected.
+- 6: full understanding; main ideas paraphrased smoothly in own words, important points expanded with specifics; well connected.
 - 5: main ideas and some important details captured accurately in own words, with minor slips; generally smooth.
-- 4: some main ideas and details, possibly a few inaccuracies or a focus on minor points; ideas not well connected.
-- 3: some ideas, not fully accurate or not separating main points from detail; may repeat the source's wording; mostly unconnected.
-- 2: mostly inaccurate or incomplete, missing the main ideas; relies on repeating the source's wording.
+- 4: main ideas and some details captured in complete, connected sentences; shows adequate understanding.
+- 3: basic understanding; mentions some key ideas but in fragmented or disjointed phrasing, or relies heavily on verbatim prompt phrases.
+- 2: minimal understanding; fragmented clauses or broken language with basic grammatical errors; misses main arguments or presents only isolated fragments.
 - 1: isolated words and phrases from the source without meaning.
 - 0: relevant but too limited to score higher.`
 }
