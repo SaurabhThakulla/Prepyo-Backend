@@ -340,6 +340,28 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		})
 	}
 
+	// Answer Short Question is right or wrong: the transcript is matched against the answer key, not graded by a model.
+	if matchesShortAnswer(question) {
+		if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.WordMatchUnits); err != nil {
+			return Outcome{}, err
+		}
+		transcript, _, usage, err := s.gateway.TranscribeMarked(ctx, req.Audio, req.AudioFormat)
+		if err != nil {
+			return Outcome{}, err
+		}
+		usage.Model, usage.PromptVersion = usage.Model+"+short-answer-match", shortAnswerScoringVersion
+		return s.persist(ctx, persistParams{
+			User:          req.User,
+			Question:      question,
+			Fingerprint:   fingerprint,
+			Evaluation:    shortAnswerEvaluation(question, version, transcript),
+			Usage:         usage,
+			XPReason:      "Speaking evaluated: " + question.TypeName,
+			GradingUnits:  billing.WordMatchUnits,
+			GradingSource: "practice-short-answer",
+		})
+	}
+
 	if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.UnitsPerGrading); err != nil {
 		return Outcome{}, err
 	}
@@ -449,6 +471,18 @@ func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req Transcript
 				PromptVersion: verbatimScoringVersion,
 			},
 			XPReason: "Speaking evaluated: " + question.TypeName,
+		})
+	}
+
+	// Answer Short Question with an answer key is matched here, like the verbatim tasks, at no cost.
+	if matchesShortAnswer(question) {
+		return s.persist(ctx, persistParams{
+			User:        req.User,
+			Question:    question,
+			Fingerprint: fingerprint,
+			Evaluation:  shortAnswerEvaluation(question, version, transcript),
+			Usage:       ai.Usage{Provider: "prepyo", Model: "short-answer-match", PromptVersion: shortAnswerScoringVersion},
+			XPReason:    "Speaking evaluated: " + question.TypeName,
 		})
 	}
 

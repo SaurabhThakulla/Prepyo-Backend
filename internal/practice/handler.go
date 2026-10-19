@@ -73,7 +73,13 @@ func (h *Handler) listAttempts(w http.ResponseWriter, r *http.Request) {
 	user := reqctx.MustUser(r.Context())
 	page := httpx.ReadPage(r)
 
-	list, total, err := h.repo.List(r.Context(), ListParams{UserID: user.ID, Limit: page.Limit, Offset: page.Offset})
+	list, total, err := h.repo.List(r.Context(), ListParams{
+		UserID: user.ID,
+		Exam:   models.ExamType(r.URL.Query().Get("exam")),
+		Skill:  models.SkillType(r.URL.Query().Get("skill")),
+		Limit:  page.Limit,
+		Offset: page.Offset,
+	})
 	if err != nil {
 		httpx.Internal(w, h.log, "practice.listAttempts", err)
 		return

@@ -73,25 +73,39 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 
 type ListParams struct {
 	UserID string
+	Exam   models.ExamType
+	Skill  models.SkillType
 	Limit  int
 	Offset int
 }
 
 func (r *Repository) List(ctx context.Context, p ListParams) ([]models.PracticeAttempt, int, error) {
+	filter := `
+		WHERE a.user_id = $1
+		  AND ($2 = '' OR UPPER(a.exam) = UPPER($2))
+		  AND ($3 = '' OR LOWER(q.skill) = LOWER($3))`
+
 	var total int
-	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM practice_attempts WHERE user_id = $1`, p.UserID).Scan(&total); err != nil {
+	err := r.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM practice_attempts a
+		LEFT JOIN questions q ON q.id = a.question_id`+filter,
+		p.UserID, p.Exam, p.Skill).Scan(&total)
+	if err != nil {
 		return nil, 0, fmt.Errorf("count practice attempts: %w", err)
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT id, question_id, exam, exam_version_id, is_correct, score, max_score,
-		       accuracy_percentage, COALESCE(feedback, ''), COALESCE(user_response, ''),
-		       time_spent_seconds, created_at
-		FROM practice_attempts
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3`,
-		p.UserID, p.Limit, p.Offset)
+		SELECT a.id, a.question_id, COALESCE(q.title, ''), COALESCE(q.skill, ''),
+		       COALESCE(q.type_name, ''), COALESCE(q.prompt, ''),
+		       a.exam, a.exam_version_id, a.is_correct, a.score, a.max_score,
+		       a.accuracy_percentage, COALESCE(a.feedback, ''), COALESCE(a.user_response, ''),
+		       a.time_spent_seconds, a.created_at
+		FROM practice_attempts a
+		LEFT JOIN questions q ON q.id = a.question_id`+filter+`
+		ORDER BY a.created_at DESC
+		LIMIT $4 OFFSET $5`,
+		p.UserID, p.Exam, p.Skill, p.Limit, p.Offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list practice attempts: %w", err)
 	}
@@ -100,11 +114,15 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.PracticeA
 	list := []models.PracticeAttempt{}
 	for rows.Next() {
 		var a models.PracticeAttempt
-		if err := rows.Scan(&a.ID, &a.QuestionID, &a.Exam, &a.ExamVersionID, &a.IsCorrect, &a.Score,
+		var skill string
+		if err := rows.Scan(&a.ID, &a.QuestionID, &a.QuestionTitle, &skill,
+			&a.TypeName, &a.Prompt,
+			&a.Exam, &a.ExamVersionID, &a.IsCorrect, &a.Score,
 			&a.MaxScore, &a.AccuracyPercentage, &a.Feedback, &a.UserResponse,
 			&a.TimeSpentSeconds, &a.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan practice attempt: %w", err)
 		}
+		a.Skill = models.SkillType(skill)
 		list = append(list, a)
 	}
 	return list, total, rows.Err()

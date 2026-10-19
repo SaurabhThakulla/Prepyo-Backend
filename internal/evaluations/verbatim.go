@@ -12,14 +12,15 @@ import (
 
 // verbatimScoringVersion is stamped on evaluations produced by alignment rather
 // than by a model, so stored feedback stays traceable to how it was made.
-const verbatimScoringVersion = "verbatim.v3"
+const verbatimScoringVersion = "verbatim.v4"
 
 // assumedScore stands in for a trait Prepyo could not measure: the competent baseline of Pearson's 10-90 scale.
 const assumedScore = 65.0
 
 // verbatimEvaluation marks Read Aloud and Repeat Sentence on Pearson's three
 // traits (Score Guide): Content from the alignment, Oral Fluency from
-// the measured pauses and pace (or audio rating), Pronunciation from audio rating.
+// the measured pauses and pace (or audio rating), Pronunciation from the share
+// of said words the audio rating heard clearly (or its own number).
 func verbatimEvaluation(
 	question models.Question,
 	version models.ExamVersion,
@@ -43,17 +44,25 @@ func verbatimEvaluation(
 
 	fluencyScore, fluencyNote := assumedScore, "Your pauses and pace could not be measured on this recording, so this counts as 65 of 90, a baseline estimate."
 	if delivery.Measured() {
-		fluencyScore, fluencyNote = onScale(delivery.FluencyPoints(), 5), delivery.Feedback()+" "+fluencyTip(delivery)
+		fluencyScore, fluencyNote = delivery.FluencyScore(), delivery.Feedback()+" "+fluencyTip(delivery)
 	}
 	pronunciationScore, pronunciationFeedback := assumedScore, pronunciationNote(alignment)
 	confidence := "low"
 	if rating != nil {
-		pronunciationScore = float64(rating.Pronunciation)
-		pronunciationFeedback = rating.PronunciationFeedback
-		fluencyScore = float64(rating.Fluency)
-		fluencyNote = rating.FluencyFeedback
-		confidence = "medium"
+		// The audio model's own 10-90 numbers barely move (58 for most readings), so
+		// they are used only where nothing better exists: fluency without browser
+		// timings, pronunciation with too few words heard to count.
 		markUnclear(alignment.Marks, rating.Unclear)
+		pronunciationScore = float64(rating.Pronunciation)
+		if score, ok := clearWordsScore(alignment.Marks); ok {
+			pronunciationScore = score
+		}
+		pronunciationFeedback = rating.PronunciationFeedback
+		if !delivery.Measured() {
+			fluencyScore = float64(rating.Fluency)
+			fluencyNote = rating.FluencyFeedback
+		}
+		confidence = "medium"
 	}
 	// Pearson gives no points at all when Content is 0.
 	if content == 0 {
@@ -109,6 +118,33 @@ func verbatimContentPoints(typeID string, a scoring.VerbatimResult) (points, out
 	// Read Aloud counts errors against the text's length; Prepyo puts that share on 0-5.
 	share := float64(a.Expected-a.Errors()) / float64(a.Expected)
 	return int(math.Round(5 * math.Max(0, share))), 5
+}
+
+// Fewest words said for the share heard clearly to stand for Pronunciation.
+const minWordsForClearShare = 3
+
+// Share of said words heard clearly at which Pronunciation bottoms out at 10;
+// from there it rises linearly to 90 when every said word was clear.
+const clearShareFloor = 0.6
+
+// clearWordsScore is Pronunciation on 10-90 from the words said that the audio
+// rating did not flag as unclear. Missing words are left to Content, not counted twice.
+func clearWordsScore(marks []models.WordMark) (float64, bool) {
+	said, clear := 0, 0
+	for _, m := range marks {
+		if !m.Said {
+			continue
+		}
+		said++
+		if !m.Unclear {
+			clear++
+		}
+	}
+	if said < minWordsForClearShare {
+		return 0, false
+	}
+	share := (float64(clear)/float64(said) - clearShareFloor) / (1 - clearShareFloor)
+	return math.Round(10 + 80*math.Min(1, math.Max(0, share))), true
 }
 
 func pronunciationNote(a scoring.VerbatimResult) string {

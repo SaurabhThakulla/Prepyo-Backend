@@ -735,6 +735,10 @@ type AnswerSubmission struct {
 type PracticeAttempt struct {
 	ID                 string    `json:"id"`
 	QuestionID         string    `json:"questionId"`
+	QuestionTitle      string    `json:"questionTitle,omitempty"`
+	Skill              SkillType `json:"skill,omitempty"`
+	TypeName           string    `json:"typeName,omitempty"`
+	Prompt             string    `json:"prompt,omitempty"`
 	Exam               ExamType  `json:"exam"`
 	ExamVersionID      string    `json:"examVersionId"`
 	IsCorrect          bool      `json:"isCorrect"`

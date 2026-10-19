@@ -2,6 +2,7 @@ package scoring
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -82,6 +83,35 @@ func (d Delivery) FluencyPoints() int {
 	}
 	return max(points, 0)
 }
+
+// FluencyScore is Oral Fluency on 10-90, graded rather than stepped so one more
+// pause or a slower pace always shows: each hesitation costs 8 points in a
+// 35-word reading (more in a shorter answer), a long silence 12, each word a
+// minute under a natural 130 (or over 180) and a mostly silent recording cost
+// in proportion. A 100 wpm reading with two pauses lands near 40, as APEUni does.
+func (d Delivery) FluencyScore() float64 {
+	score := 90.0
+	words := math.Max(float64(d.WordsSpoken), 20)
+	score -= 8 * float64(d.PauseCount) * 35 / words
+	if d.LongestPauseSeconds >= longPauseSeconds {
+		score -= 12
+	}
+	if rate := d.WordsPerMinute(); d.DurationSeconds >= 10 && rate > 0 {
+		switch {
+		case rate < fluentWordsPerMinute:
+			score -= 1.2 * float64(fluentWordsPerMinute-rate)
+		case rate > fastWordsPerMinute:
+			score -= 0.4 * float64(rate-fastWordsPerMinute)
+		}
+	}
+	if d.SpeakingRatio < 0.5 {
+		score -= 60 * (0.5 - d.SpeakingRatio)
+	}
+	return math.Round(math.Min(90, math.Max(10, score)))
+}
+
+// fluentWordsPerMinute is a natural reading-aloud pace; FluencyScore counts down from it.
+const fluentWordsPerMinute = 130
 
 // longPauseSeconds is the silence Pearson's ladder calls a long pause.
 const longPauseSeconds = 2.0
