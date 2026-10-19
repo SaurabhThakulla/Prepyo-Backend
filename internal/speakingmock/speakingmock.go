@@ -3,7 +3,7 @@
 //
 // The examiner's questions are spoken by the browser's voice (or the server's,
 // where the browser has none). Each answer is recorded and transcribed as soon
-// as it ends: on the audio provider (Whisper on Groq) where one is configured,
+// as it ends: on the audio provider (Gemini on OpenRouter) where one is configured,
 // otherwise from the browser's own recogniser. The whole test is then rated
 // once, across all three parts, as IELTS rates it. Transcripts cannot show
 // pronunciation, so the estimate covers the other three criteria and says so.
@@ -89,9 +89,11 @@ type Answer struct {
 	Key             string `json:"key"`
 	Transcript      string `json:"transcript"`
 	DurationSeconds int    `json:"durationSeconds"`
-	// Source says where the transcript came from: "server" (Whisper) or
+	// Source says where the transcript came from: "server" (Gemini) or
 	// "browser" (the device's recogniser).
 	Source string `json:"source"`
+	// Pauses is empty: transcription gives no timings, only the browser measures pauses.
+	Pauses string `json:"pauses,omitempty"`
 }
 
 // Session is a dealt speaking test.
@@ -401,9 +403,10 @@ func (s *Service) SaveAnswer(ctx context.Context, user models.User, id string, p
 		Transcript: strings.TrimSpace(p.BrowserTranscript)}
 	if audio, err := base64.StdEncoding.DecodeString(p.AudioBase64); err == nil && len(audio) > 0 &&
 		s.listener != nil && s.listener.SpeakingAvailable() && ai.AudioFormats[p.Format] {
-		if text, _, err := s.listener.Transcribe(ctx, audio, p.Format); err == nil {
+		if text, heard, err := ai.TranscribeWithPauses(ctx, s.listener, audio, p.Format); err == nil {
 			answer.Transcript = strings.TrimSpace(text)
 			answer.Source = "server"
+			answer.Pauses = ai.PauseNote(heard)
 		}
 		// A failed transcription keeps the browser's transcript: the answer
 		// is not lost because one provider call failed.
@@ -458,7 +461,7 @@ func (s *Service) Submit(ctx context.Context, user models.User, id string) (Resu
 		if strings.TrimSpace(a.Transcript) != "" {
 			heard++
 		}
-		turns = append(turns, ai.SpeakingTestTurn{Part: step.Part, Question: question, Answer: a.Transcript, Seconds: a.DurationSeconds})
+		turns = append(turns, ai.SpeakingTestTurn{Part: step.Part, Question: question, Answer: a.Transcript, Seconds: a.DurationSeconds, Pauses: a.Pauses})
 	}
 	// A test with almost nothing said cannot be rated as a test.
 	if heard < 3 {

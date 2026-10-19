@@ -31,8 +31,8 @@ func TestLoadAudioKeyFallsBackToAIKey(t *testing.T) {
 	setEnv(t, map[string]string{
 		"APP_ENV":           "development",
 		"DATABASE_URL":      "postgres://localhost/prepyo",
+		"AI_BASE_URL":       "https://api.example.com/v1",
 		"AI_API_KEY":        "test-text-api-key",
-		"CODE_CRAFT":        "",
 		"AI_AUDIO_API_KEY":  "",
 		"test-text-api-key": "",
 	})

@@ -59,7 +59,7 @@ type itemRow struct {
 	Status      string
 	Response    *models.AnswerSubmission
 	Transcript  string
-	// TranscriptSource is "browser" or "server" (Whisper).
+	// TranscriptSource is "browser" or "server" (Gemini).
 	TranscriptSource string
 	Duration         int
 	Delivery         *Delivery

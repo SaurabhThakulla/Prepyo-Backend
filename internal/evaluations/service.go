@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -219,6 +220,8 @@ type SpeakingRequest struct {
 	Audio           []byte
 	AudioFormat     string
 	DurationSeconds int
+	// Delivery is what the browser measured from the waveform, or zero.
+	Delivery scoring.Delivery
 }
 
 // EvaluateSpeaking runs the same flow as EvaluateWriting for a recording.
@@ -273,15 +276,58 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 	// to a model: the same marking as the mock, at the cost of the
 	// transcription alone, which is a fifth of a grading.
 	if strings.TrimSpace(material.expected) != "" {
-		if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.WordMatchUnits); err != nil {
-			return Outcome{}, err
+		// The audio rating needs two units; with only one left the answer is still marked, on assumed values.
+		rate := s.gateway.DeliveryRatingAvailable()
+		if rate {
+			_, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.DeliveryRatedUnits)
+			rate = err == nil
 		}
-		transcript, usage, err := s.gateway.Transcribe(ctx, req.Audio, req.AudioFormat)
+		if !rate {
+			if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.WordMatchUnits); err != nil {
+				return Outcome{}, err
+			}
+		}
+		// Gemini rates delivery while it also transcribes; without the rating, scoring falls back to assumed values.
+		var rating *ai.DeliveryRating
+		var ratingUsage ai.Usage
+		rated := make(chan struct{})
+		go func() {
+			defer close(rated)
+			if !rate {
+				return
+			}
+			r, u, err := s.gateway.RateDelivery(ctx, req.Audio, req.AudioFormat, material.expected)
+			ratingUsage = u
+			if err != nil {
+				slog.Warn("delivery rating failed, using assumed values", "error", err)
+				return
+			}
+			rating = &r
+		}()
+		transcript, heard, usage, err := s.gateway.TranscribeMarked(ctx, req.Audio, req.AudioFormat)
+		<-rated
 		if err != nil {
 			return Outcome{}, err
 		}
-		evaluation := verbatimEvaluation(question, version, material.expected, strings.TrimSpace(transcript), scoring.Delivery{})
+		// Pauses come from the browser; the transcription has no timings.
+		delivery := req.Delivery
+		if heard.Measured() {
+			delivery = heard
+		}
+		delivery.WordsSpoken = len(strings.Fields(strings.ReplaceAll(transcript, scoring.PauseMark, " ")))
+		evaluation := verbatimEvaluation(question, version, material.expected, strings.TrimSpace(transcript), delivery, rating)
 		usage.Model, usage.PromptVersion = usage.Model+"+verbatim-alignment", verbatimScoringVersion
+		if rating != nil {
+			usage.Model += "+" + ratingUsage.Model
+			usage.PromptTokens += ratingUsage.PromptTokens
+			usage.CompletionTokens += ratingUsage.CompletionTokens
+		}
+		gradingUnits := billing.WordMatchUnits
+		if rating != nil {
+			gradingUnits = billing.DeliveryRatedUnits
+		}
+		slog.Info("read aloud scored", "deliveryModel", ratingUsage.Model, "promptTokens", ratingUsage.PromptTokens,
+			"completionTokens", ratingUsage.CompletionTokens, "deliveryCostUSD", ratingUsage.CostUSD, "rated", rating != nil)
 		return s.persist(ctx, persistParams{
 			User:          req.User,
 			Question:      question,
@@ -289,7 +335,7 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 			Evaluation:    evaluation,
 			Usage:         usage,
 			XPReason:      "Speaking evaluated: " + question.TypeName,
-			GradingUnits:  billing.WordMatchUnits,
+			GradingUnits:  gradingUnits,
 			GradingSource: "practice-read-repeat",
 		})
 	}
@@ -307,6 +353,7 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		AudioBase64:     base64.StdEncoding.EncodeToString(req.Audio),
 		AudioFormat:     req.AudioFormat,
 		DurationSeconds: req.DurationSeconds,
+		Delivery:        req.Delivery,
 		MinScore:        version.MinScore,
 		MaxScore:        version.MaxScore,
 	})
@@ -390,7 +437,7 @@ func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req Transcript
 	// provider call, and gives the same answer every time, which a model does
 	// not. See scoring.ScoreVerbatim.
 	if strings.TrimSpace(material.expected) != "" {
-		evaluation := verbatimEvaluation(question, version, material.expected, transcript, req.Delivery)
+		evaluation := verbatimEvaluation(question, version, material.expected, transcript, req.Delivery, nil)
 		return s.persist(ctx, persistParams{
 			User:        req.User,
 			Question:    question,
@@ -522,14 +569,18 @@ func (s *Service) persist(ctx context.Context, p persistParams) (Outcome, error)
 		return Outcome{}, err
 	}
 
-	awarded, err := s.xp.Award(ctx, tx, gamification.AwardParams{
-		UserID:    p.User.ID,
-		Amount:    gamification.XPEvaluation,
-		Reason:    p.XPReason,
-		SourceKey: "evaluation:" + saved.ID,
-	})
-	if err != nil {
-		return Outcome{}, err
+	// An answer that could not be rated at all earns no XP.
+	awarded := 0
+	if saved.EstimatedScore != nil {
+		awarded, err = s.xp.Award(ctx, tx, gamification.AwardParams{
+			UserID:    p.User.ID,
+			Amount:    gamification.XPEvaluation,
+			Reason:    p.XPReason,
+			SourceKey: "evaluation:" + saved.ID,
+		})
+		if err != nil {
+			return Outcome{}, err
+		}
 	}
 
 	streak, err := s.xp.TouchStreak(ctx, tx, p.User)

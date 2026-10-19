@@ -72,7 +72,7 @@ type Evaluator interface {
 	EvaluatePTEMockWriting(ctx context.Context, userID string, question models.Question, text, sessionID string) (models.Evaluation, error)
 }
 
-// Transcriber turns a recording into text on the server: Whisper on the audio
+// Transcriber turns a recording into text on the server: Gemini on the audio
 // provider (Groq). ai.Gateway implements it. Spoken answers are transcribed
 // the way the IELTS speaking mock does it (speakingmock.SaveAnswer): by the
 // server wherever it can, with the browser's transcript as the fallback.
@@ -415,7 +415,7 @@ const (
 	SourceServer  = "server"
 )
 
-// transcribeTimeout bounds the Whisper call made while the learner waits to
+// transcribeTimeout bounds the Gemini call made while the learner waits to
 // move on.
 const transcribeTimeout = 30 * time.Second
 
@@ -434,8 +434,11 @@ func (s *Service) Submit(ctx context.Context, user models.User, id string, posit
 	// otherwise the browser's. A failed transcription loses nothing.
 	source := SourceBrowser
 	if answer.Audio != "" {
-		if text, ok := s.transcribe(ctx, user.ID, id, position, answer); ok {
+		if text, heard, ok := s.transcribeTimed(ctx, user.ID, id, position, answer); ok {
 			answer.Transcript, source = text, SourceServer
+			if saneDelivery(answer.Delivery) == nil {
+				answer.Delivery = heard // the browser measured nothing usable; no timings from the transcription; the browser's stand
+			}
 		}
 	}
 	answer.Audio = ""
@@ -484,38 +487,49 @@ func (s *Service) Submit(ctx context.Context, user models.User, id string, posit
 	return s.view(ctx, session, items)
 }
 
-// transcribe turns an uploaded recording into text with Whisper. It runs
+// transcribe turns an uploaded recording into text with Gemini. It runs
 // before the paper is locked,
 // so a slow provider never holds the learner's paper, and only for the spoken
 // item actually on screen, so the endpoint cannot be used as a free
 // transcription service. Any failure leaves the answer as the browser sent it.
 func (s *Service) transcribe(ctx context.Context, userID, id string, position int, answer Answer) (string, bool) {
+	text, _, ok := s.transcribeTimed(ctx, userID, id, position, answer)
+	return text, ok
+}
+
+// transcribeTimed is transcribe plus no pauses, which only the browser measures.
+func (s *Service) transcribeTimed(ctx context.Context, userID, id string, position int, answer Answer) (string, *Delivery, bool) {
 	if !s.ServerTranscription() || !ai.AudioFormats[answer.Format] {
-		return "", false
+		return "", nil, false
 	}
 	session, err := sessionByID(ctx, s.db, userID, id, false)
 	if err != nil || session.Status != StatusInProgress || session.Current != position {
-		return "", false
+		return "", nil, false
 	}
 	var task string
 	if err := s.db.QueryRow(ctx, `SELECT task FROM pte_mock_items WHERE session_id = $1 AND position = $2`,
 		session.ID, position).Scan(&task); err != nil || Tasks[task].Marking != MarkSpoken {
-		return "", false
+		return "", nil, false
 	}
 	audio, err := base64.StdEncoding.DecodeString(answer.Audio)
 	if err != nil || len(audio) == 0 {
-		return "", false
+		return "", nil, false
 	}
 	callCtx, cancel := context.WithTimeout(ctx, transcribeTimeout)
 	defer cancel()
-	text, _, err := s.listener.Transcribe(callCtx, audio, answer.Format)
+	text, heard, err := ai.TranscribeWithPauses(callCtx, s.listener, audio, answer.Format)
 	if err != nil {
 		if s.log != nil {
 			s.log.Warn("pte mock answer not transcribed", "session", id, "position", position, "err", err)
 		}
-		return "", false
+		return "", nil, false
 	}
-	return clip(strings.TrimSpace(text), maxTranscriptChars), true
+	var measured *Delivery
+	if heard.Measured() {
+		measured = &Delivery{DurationSeconds: heard.DurationSeconds, PauseCount: heard.PauseCount,
+			LongestPauseSeconds: heard.LongestPauseSeconds, SpeakingRatio: heard.SpeakingRatio}
+	}
+	return clip(strings.TrimSpace(text), maxTranscriptChars), measured, true
 }
 
 // SaveDraft keeps the answer so far to the item on screen, which is what is

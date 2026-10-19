@@ -97,7 +97,7 @@ owner).
   has two topics; Part 2 is a cue card with 1 minute to prepare and up to 2
   minutes to talk, plus a rounding-off question; Part 3 is linked to the
   Part 2 topic. Answer time limits are Prepyo's. Each answer is recorded and
-  transcribed with Whisper on the server, or with the browser's transcript
+  transcribed with Gemini on the server, or with the browser's transcript
   if the server can't. The whole test is rated once (`speaking.test.v1`) on
   three criteria. Pronunciation is not assessed from text, and the result
   says so. A test that runs out of time with fewer than three heard answers

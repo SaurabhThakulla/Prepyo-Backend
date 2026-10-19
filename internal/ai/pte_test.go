@@ -114,11 +114,11 @@ func TestPTEPromptsContainEvidenceBasedGuidance(t *testing.T) {
 	if !strings.Contains(writing, "experienced PTE Academic assessor") {
 		t.Error("writing prompt should frame assessor neutrally")
 	}
-	if !strings.Contains(writing, "10-90 PTE points scale") {
+	if !strings.Contains(writing, "converts the points to the 10-90 scale") {
 		t.Error("writing prompt should mention 10-90 scale")
 	}
-	if !strings.Contains(writing, "Every criterion is scored on the 10-90 scale with maxScore 90") {
-		t.Error("writing prompt should state criteria maxScore is 90")
+	if !strings.Contains(writing, "on Pearson's own scale") {
+		t.Error("writing prompt should ask for Pearson trait points")
 	}
 	if !strings.Contains(writing, "Development, Structure and Coherence") || !strings.Contains(writing, "General Linguistic Range") {
 		t.Error("writing essay prompt should name Write Essay Pearson traits")
@@ -134,17 +134,17 @@ func TestPTEPromptsContainEvidenceBasedGuidance(t *testing.T) {
 	if !strings.Contains(speaking, "accent is not a fault") {
 		t.Error("speaking prompt must include the accent-is-not-a-fault guidance")
 	}
-	if !strings.Contains(speaking, "natural pause are not failures and do not cap the score") {
-		t.Error("speaking prompt must include the natural pause guidance")
+	if !strings.Contains(speaking, "at most one hesitation, repetition or false start") {
+		t.Error("speaking prompt must include Pearson's fluency levels")
 	}
 	if !strings.Contains(speaking, "Oral Fluency") || !strings.Contains(speaking, "Pronunciation") {
 		t.Error("speaking prompt should name Oral Fluency and Pronunciation traits")
 	}
-	if !strings.Contains(speaking, "10-90 PTE points scale") {
+	if !strings.Contains(speaking, "converts the points to the 10-90 scale") {
 		t.Error("speaking prompt should mention 10-90 scale")
 	}
-	if !strings.Contains(speaking, "Every criterion is scored on the 10-90 scale with maxScore 90") {
-		t.Error("speaking prompt should state criteria maxScore is 90")
+	if !strings.Contains(speaking, "on Pearson's own scale") {
+		t.Error("speaking prompt should ask for Pearson trait points")
 	}
 
 	transcriptReq := SpokenTranscriptRequest{
@@ -157,11 +157,11 @@ func TestPTEPromptsContainEvidenceBasedGuidance(t *testing.T) {
 	if !strings.Contains(transcript, "Do not include a pronunciation criterion") {
 		t.Error("transcript prompt must instruct not to include pronunciation")
 	}
-	if !strings.Contains(transcript, "10-90 PTE points scale") {
+	if !strings.Contains(transcript, "converts the points to the 10-90 scale") {
 		t.Error("transcript prompt should mention 10-90 scale")
 	}
-	if !strings.Contains(transcript, "Every criterion is scored on the 10-90 scale with maxScore 90") {
-		t.Error("transcript prompt should state criteria maxScore is 90")
+	if !strings.Contains(transcript, "on Pearson's own scale") {
+		t.Error("transcript prompt should ask for Pearson trait points")
 	}
 }
 

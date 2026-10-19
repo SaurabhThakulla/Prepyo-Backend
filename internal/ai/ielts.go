@@ -10,8 +10,10 @@ import (
 )
 
 // A scored IELTS practice response requires evidence for all four criteria.
-// A null score remains valid for silence or insufficient evidence.
-func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackSpec, score float64) error {
+// A null score remains valid for silence or insufficient evidence. It returns
+// the estimate worked out from the criteria, so the model's own arithmetic
+// never decides the band.
+func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackSpec) (float64, error) {
 	required := map[string]bool{"lexical resource": false, "grammatical range and accuracy": false}
 	if spec.Skill == models.SkillSpeaking {
 		required["fluency and coherence"] = false
@@ -30,27 +32,24 @@ func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackS
 	}
 	wanted := len(required)
 	if len(criteria) != wanted {
-		return fmt.Errorf("IELTS score requires exactly %d assessment criteria", wanted)
+		return 0, fmt.Errorf("IELTS score requires exactly %d assessment criteria", wanted)
 	}
 	sum := 0.0
 	for _, c := range criteria {
 		key := strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(c.Name, "&", "and")), " "))
 		seen, known := required[key]
 		if !known || seen || c.MaxScore != 9 || math.IsNaN(c.Score) || math.IsInf(c.Score, 0) || c.Score < 0 || c.Score > 9 || strings.TrimSpace(c.Feedback) == "" {
-			return fmt.Errorf("invalid or duplicate IELTS criterion %q", c.Name)
+			return 0, fmt.Errorf("invalid or duplicate IELTS criterion %q", c.Name)
 		}
 		// The descriptors define whole-band levels only: a criterion is rated
 		// at the band whose positive features the response fully fits.
 		if c.Score != math.Trunc(c.Score) {
-			return fmt.Errorf("IELTS criterion %q must be a whole band, got %.2f", c.Name, c.Score)
+			return 0, fmt.Errorf("IELTS criterion %q must be a whole band, got %.2f", c.Name, c.Score)
 		}
 		required[key] = true
 		sum += c.Score
 	}
 	// Combining the criteria with the overall-band rounding rule is Prepyo's
 	// convention for a single task; IELTS does not publish a per-task rule.
-	if scoring.RoundIELTSBand(sum/float64(wanted)) != score {
-		return fmt.Errorf("IELTS estimate must equal the rounded mean of the %d equally weighted criteria", wanted)
-	}
-	return nil
+	return scoring.RoundIELTSBand(sum / float64(wanted)), nil
 }

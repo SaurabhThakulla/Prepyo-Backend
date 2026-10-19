@@ -310,6 +310,9 @@ type SubscriptionState struct {
 	// AIGradingsPeriod is how often the pool renews: "day", "plan" or "month".
 	AIGradingsPeriod   string `json:"aiGradingsPeriod"`
 	AIGradingUnitsUsed int    `json:"-"`
+
+	// AIBlocked is true for a student of an institution on the free plan.
+	AIBlocked bool `json:"aiBlocked,omitempty"`
 }
 
 type Plan struct {
@@ -807,8 +810,19 @@ type Evaluation struct {
 	SentenceFeedback  []SentenceFeedback    `json:"sentenceFeedback"`
 	ModelRewrite      string                `json:"modelRewrite,omitempty"`
 	Transcript        string                `json:"transcript,omitempty"`
-	CreatedAt         time.Time             `json:"createdAt"`
-	Usage             EvaluationUsage       `json:"usage,omitempty"`
+	// Words is the given text marked word by word, on Read Aloud and Repeat Sentence only.
+	Words     []WordMark      `json:"words,omitempty"`
+	CreatedAt time.Time       `json:"createdAt"`
+	Usage     EvaluationUsage `json:"usage,omitempty"`
+}
+
+// WordMark is one word of a given text: whether it was heard, and a pause after it.
+type WordMark struct {
+	Text       string `json:"text"`
+	Said       bool   `json:"said"`
+	PauseAfter bool   `json:"pauseAfter,omitempty"`
+	// Unclear is a word heard but hard to understand, from an audio rating.
+	Unclear bool `json:"unclear,omitempty"`
 }
 
 type EvaluationUsage struct {

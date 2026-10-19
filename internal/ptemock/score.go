@@ -153,8 +153,13 @@ func FractionOfEvaluation(e models.Evaluation) (float64, bool) {
 	var score, max float64
 	for _, c := range e.Criteria {
 		if c.MaxScore > 0 {
-			score += math.Max(0, math.Min(c.Score, c.MaxScore))
-			max += c.MaxScore
+			if c.MaxScore == MaxScore {
+				score += math.Max(0, math.Min(1, (c.Score-MinScore)/(MaxScore-MinScore)))
+				max += 1.0
+			} else {
+				score += math.Max(0, math.Min(c.Score, c.MaxScore))
+				max += c.MaxScore
+			}
 		}
 	}
 	if max > 0 {

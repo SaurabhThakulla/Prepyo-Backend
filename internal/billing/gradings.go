@@ -25,6 +25,8 @@ const (
 	// WordMatchUnits is one Read Aloud or Repeat Sentence answer, marked by
 	// word-matching against its text: only its transcription is paid for.
 	WordMatchUnits = 1
+	// DeliveryRatedUnits is the same answer when an audio model also rates pronunciation and fluency.
+	DeliveryRatedUnits = 2
 )
 
 // What a sectional mock marked by the AI takes from the pool when it starts,
@@ -90,6 +92,9 @@ func (s *Service) CheckAIGradings(ctx context.Context, db database.DB, user mode
 	}
 	if state.AIGradingUnitsUsed+units <= state.AIGradingsLimit*UnitsPerGrading {
 		return state, nil
+	}
+	if state.AIBlocked {
+		return state, ErrGradingLimitReached // no "upgrade" notice: the plan is the institution's
 	}
 	period := "in this plan period"
 	switch state.AIGradingsPeriod {

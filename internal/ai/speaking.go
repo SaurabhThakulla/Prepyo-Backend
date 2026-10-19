@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/scoring"
 )
 
 // SpeakingPromptVersion is stamped on every stored evaluation. Change it
 // whenever the prompt below changes, so old feedback stays traceable to the
 // wording that produced it.
-const SpeakingPromptVersion = "speaking.v4"
+const SpeakingPromptVersion = "speaking.v6"
 
 // AudioFormats are the encodings the provider accepts inline. Callers convert
 // a browser recording to one of these before submitting; the gateway does not
@@ -41,8 +42,11 @@ type SpeakingRequest struct {
 	// DurationSeconds is what the browser actually recorded. It is passed to the
 	// model as context, never used to derive a score here.
 	DurationSeconds int
-	MinScore        float64
-	MaxScore        float64
+	// Delivery is the browser's pause and pace measurements; the word count is
+	// filled in from the transcript. Zero when nothing was measured.
+	Delivery scoring.Delivery
+	MinScore float64
+	MaxScore float64
 }
 
 // speakingPayload is the writing shape plus the transcript. The transcript is
@@ -66,82 +70,43 @@ func (g *Gateway) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (mo
 		return models.Evaluation{}, Usage{}, fmt.Errorf("%w: no audio provider is configured", ErrUnavailable)
 	}
 
-	// If the configured audio provider is a transcription service (such as Groq Whisper),
-	// transcribe the audio recording first and then evaluate the transcript via the text provider.
-	if strings.Contains(strings.ToLower(g.audio.baseURL), "groq") || strings.Contains(strings.ToLower(g.models.Speaking), "whisper") {
-		transcript, transcribeUsage, err := g.transcribeAudio(ctx, req)
-		if err != nil {
-			return models.Evaluation{}, transcribeUsage, err
-		}
-		if transcript == "" {
-			return models.Evaluation{}, transcribeUsage, fmt.Errorf("%w: could not transcribe speech from audio", ErrBadOutput)
-		}
-
-		eval, evalUsage, err := g.EvaluateSpokenTranscript(ctx, SpokenTranscriptRequest{
-			Exam:            req.Exam,
-			TaskName:        req.TaskName,
-			Prompt:          req.Prompt,
-			ExpectedText:    req.ExpectedText,
-			SourceText:      req.SourceText,
-			ReferenceAnswer: req.ReferenceAnswer,
-			Transcript:      transcript,
-			DurationSeconds: req.DurationSeconds,
-			WordCount:       len(strings.Fields(transcript)),
-			MinScore:        req.MinScore,
-			MaxScore:        req.MaxScore,
-		})
-		evalUsage.add(transcribeUsage)
-		return eval, evalUsage, err
+	// Gemini transcribes the recording, then the text model (Haiku) grades the
+	// transcript: far cheaper than having the audio model grade it as well.
+	heard, transcribeUsage, err := g.transcribeAudio(ctx, req)
+	if err != nil {
+		return models.Evaluation{}, transcribeUsage, err
+	}
+	transcript := heard.Text
+	if transcript == "" {
+		return models.Evaluation{}, transcribeUsage, fmt.Errorf("%w: could not transcribe speech from audio", ErrBadOutput)
 	}
 
-	return g.evaluateSpeakingMultimodal(ctx, req)
-}
-
-func (g *Gateway) evaluateSpeakingMultimodal(ctx context.Context, req SpeakingRequest) (models.Evaluation, Usage, error) {
-	messages := []chatMessage{
-		{Role: "system", Content: speakingSystemPrompt(req)},
-		{Role: "user", Content: []contentPart{
-			{Type: "text", Text: speakingUserPrompt(req)},
-			{Type: "input_audio", Audio: &audioInput{Data: req.AudioBase64, Format: req.AudioFormat}},
-		}},
-	}
-
-	var usage Usage
-	for attempt := 1; attempt <= maxValidationAttempts; attempt++ {
-		raw, attemptUsage, err := g.complete(ctx, g.audio, g.models.Speaking, SpeakingPromptVersion, messages, true)
-		usage.add(attemptUsage)
-		if err != nil {
-			return models.Evaluation{}, Usage{}, err
-		}
-
-		evaluation, problem := parseSpeaking(raw, req)
-		if problem == nil {
-			return evaluation, usage, nil
-		}
-
-		g.log.Error("ai output failed validation",
-			"model", g.models.Speaking, "attempt", attempt, "error", problem)
-
-		if attempt == maxValidationAttempts || ctx.Err() != nil {
-			break
-		}
-
-		messages = append(messages,
-			chatMessage{Role: "assistant", Content: raw},
-			chatMessage{Role: "user", Content: fmt.Sprintf(
-				"That reply was rejected: %s. Send the complete JSON again with that fixed and everything else unchanged.",
-				problem)},
-		)
-	}
-
-	return models.Evaluation{}, usage, ErrBadOutput
+	// Pauses are the browser's waveform measurement; the audio model gives no timings.
+	delivery := req.Delivery
+	delivery.WordsSpoken = len(strings.Fields(transcript))
+	eval, evalUsage, err := g.EvaluateSpokenTranscript(ctx, SpokenTranscriptRequest{
+		Exam:            req.Exam,
+		TaskName:        req.TaskName,
+		Prompt:          req.Prompt,
+		ExpectedText:    req.ExpectedText,
+		SourceText:      req.SourceText,
+		ReferenceAnswer: req.ReferenceAnswer,
+		Transcript:      transcript,
+		DurationSeconds: req.DurationSeconds,
+		WordCount:       len(strings.Fields(transcript)),
+		Delivery:        delivery.Summary(),
+		MinScore:        req.MinScore,
+		MaxScore:        req.MaxScore,
+	})
+	evalUsage.add(transcribeUsage)
+	return eval, evalUsage, err
 }
 
 // parseSpeaking decodes and validates one reply. It returns the underlying
 // problem rather than ErrBadOutput so the caller can quote it back to the model.
 func parseSpeaking(raw string, req SpeakingRequest) (models.Evaluation, error) {
 	var payload speakingPayload
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+	if err := json.Unmarshal([]byte(unfence(raw)), &payload); err != nil {
 		return models.Evaluation{}, fmt.Errorf("the reply was not valid JSON (%w)", err)
 	}
 	return validateSpeaking(payload, req)
@@ -160,12 +125,17 @@ func validateSpeaking(p speakingPayload, req SpeakingRequest) (models.Evaluation
 		return models.Evaluation{}, fmt.Errorf("scored %.2f but returned an empty transcript; if you could not make out any speech, set estimatedScore.value to null", *p.EstimatedScore.Value)
 	}
 
+	var traits []pteTrait
+	if req.Exam == models.ExamPTE {
+		traits = pteSpeakingTraits(pteSpeakingTask("", req.TaskName), true)
+	}
 	evaluation, err := validateFeedback(p.evaluationPayload, feedbackSpec{
-		Exam:     req.Exam,
-		Skill:    models.SkillSpeaking,
-		MinScore: req.MinScore,
-		MaxScore: req.MaxScore,
-		Quotable: transcript,
+		Exam:      req.Exam,
+		Skill:     models.SkillSpeaking,
+		MinScore:  req.MinScore,
+		MaxScore:  req.MaxScore,
+		Quotable:  transcript,
+		PTETraits: traits,
 	})
 	if err != nil {
 		return models.Evaluation{}, err
@@ -180,21 +150,11 @@ func speakingSystemPrompt(req SpeakingRequest) string {
 		return ieltsSpeakingSystemPrompt(req)
 	}
 
-	var b strings.Builder
-	b.WriteString(pteSpeakingGuidance(req))
-	b.WriteString("\nThe example below already uses this exam's scale. Copy its shape, never its numbers.\n\n")
-	b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
-{
-  "transcript": "exactly what the learner said",
-  "summary": "two or three sentences of concise, evidence-based assessment",
-  "estimatedScore": {"value": %.1f, "confidence": "medium"},
-  "criteria": [{"name": "...", "score": <score on 10-90 scale>, "maxScore": 90, "feedback": "..."}],
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "pronunciation", "explanation": "..."}]
-}`, exampleScore(req.MinScore, req.MaxScore)))
-	return b.String()
+	return pteSpeakingGuidance(req) + "\n" + pteReplyShape(transcriptShapeLine, "medium", "")
 }
+
+// transcriptShapeLine is the extra first field of a reply to a recording.
+const transcriptShapeLine = "  \"transcript\": \"exactly what the learner said\",\n"
 
 // ieltsSpeakingSystemPrompt scores one recorded IELTS answer from its audio.
 func ieltsSpeakingSystemPrompt(req SpeakingRequest) string {
@@ -209,18 +169,8 @@ func ieltsSpeakingSystemPrompt(req SpeakingRequest) string {
 	b.WriteString(responseMaterialRules(req.Exam, req.SourceText, req.ReferenceAnswer))
 	fmt.Fprintf(&b, "\nReturn exactly four criteria: %s. Each has maxScore 9, a whole-band score, and feedback that cites evidence from the recording. ", ieltsSpeakingCriteria(true))
 	b.WriteString("estimatedScore.value is the mean of the four criteria rounded to the nearest half band (.25 rounds up to the next half band, .75 up to the next whole band). It is a practice estimate for this answer, not a Speaking band.\n")
-	b.WriteString("Set estimatedScore.confidence to low, medium or high according to how much the recording gives you. A very short recording is low confidence.\n")
-	b.WriteString("The example below already uses this exam's scale. Copy its shape, never its numbers.\n\n")
-	b.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
-{
-  "transcript": "exactly what the learner said",
-  "summary": "two or three sentences of evidence-based assessment",
-  "estimatedScore": {"value": %.1f, "confidence": "medium"},
-  "criteria": [{"name": "...", "score": <whole-band score>, "maxScore": 9, "feedback": "..."}],
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "..."}]
-}`, exampleScore(req.MinScore, req.MaxScore)))
+	b.WriteString("Set estimatedScore.confidence to low, medium or high according to how much the recording gives you. A very short recording is low confidence.\n\n")
+	b.WriteString(ieltsReplyShape(transcriptShapeLine, "medium", ""))
 	return b.String()
 }
 

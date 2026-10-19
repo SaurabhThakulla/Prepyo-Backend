@@ -62,6 +62,7 @@ func NewHandler(
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Get("/attempts", h.listAttempts)
+	r.Get("/history", h.history)
 	r.Post("/attempts", h.submit)
 	r.Post("/start", h.startSession)
 	r.Post("/stop", h.stopSession)

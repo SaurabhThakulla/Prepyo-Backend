@@ -10,7 +10,7 @@ import (
 )
 
 // SpeakingTestPromptVersion identifies the whole-test speaking prompt.
-const SpeakingTestPromptVersion = "speaking.test.v1"
+const SpeakingTestPromptVersion = "speaking.test.v4"
 
 // SpeakingTestTurn is one question of a Speaking test and the answer given.
 type SpeakingTestTurn struct {
@@ -18,6 +18,8 @@ type SpeakingTestTurn struct {
 	Question string
 	Answer   string
 	Seconds  int
+	// Pauses is empty: transcription gives no timings.
+	Pauses string
 }
 
 // SpeakingTestRequest is a complete Speaking test, rated as one performance.
@@ -31,7 +33,7 @@ type SpeakingTestRequest struct {
 // each answer. IELTS rates "average performance across all parts of the test",
 // so the three parts are judged together rather than answer by answer.
 //
-// The answers were transcribed (Whisper on the audio provider, or the
+// The answers were transcribed (Gemini on the audio provider, or the
 // browser's recogniser), so pronunciation cannot be judged: the estimate uses
 // Fluency and Coherence, Lexical Resource and Grammatical Range and Accuracy,
 // and says so.
@@ -53,13 +55,18 @@ func (g *Gateway) EvaluateSpeakingTest(ctx context.Context, req SpeakingTestRequ
 		} else {
 			candidate.WriteString(answer + "\n")
 		}
-		fmt.Fprintf(&transcript, "Examiner: %s\nCandidate (%ds): %s\n", turn.Question, turn.Seconds, answer)
+		timing := fmt.Sprintf("%ds", turn.Seconds)
+		if turn.Pauses != "" {
+			timing += "; " + turn.Pauses
+		}
+		fmt.Fprintf(&transcript, "Examiner: %s\nCandidate (%s): %s\n", turn.Question, timing, answer)
 	}
 
 	var system strings.Builder
 	system.WriteString("You are an experienced IELTS Speaking assessor giving practice feedback on a complete Speaking test. You are not an official IELTS examiner, and your estimate is not an official score.\n\n")
 	system.WriteString("You are given transcripts of the candidate's answers to all three parts, produced by speech recognition. You cannot hear the recordings.\n")
 	system.WriteString("- Speech recognition removes many hesitations and makes its own mistakes. A single odd word is more likely a recognition error; be cautious about fluency judgements.\n")
+	system.WriteString("- Where an answer shows measured pauses, they are evidence of hesitation for Fluency and Coherence; there is no fixed threshold, so judge the overall pattern.\n")
 	system.WriteString("- NEVER score or comment on pronunciation, accent, intonation or stress. Do not include a pronunciation criterion.\n")
 	system.WriteString("- Every entry in sentenceFeedback must copy an exact sentence from one of the candidate's answers into `original` and give an improved version with a short explanation.\n\n")
 	system.WriteString(ieltsSpeakingGuidance("full test", false))
@@ -67,15 +74,7 @@ func (g *Gateway) EvaluateSpeakingTest(ctx context.Context, req SpeakingTestRequ
 	system.WriteString("estimatedScore.value is the mean of the three criteria rounded to the nearest half band (.25 rounds up to the next half band, .75 up to the next whole band). Because pronunciation is not assessed it is a three-criterion practice estimate, not an IELTS Speaking band; say so in the summary.\n")
 	system.WriteString("If the candidate said too little to rate, set estimatedScore.value to null and say so.\n")
 	system.WriteString("Set estimatedScore.confidence to low or medium.\n")
-	system.WriteString(fmt.Sprintf(`Reply with JSON only, in this shape:
-{
-  "summary": "three or four sentences on the whole test, ending with the note that pronunciation was not assessed",
-  "estimatedScore": {"value": %.1f, "confidence": "low"},
-  "criteria": [{"name": "...", "score": <whole-band score>, "maxScore": 9, "feedback": "..."}],
-  "strengths": ["..."],
-  "weaknesses": ["..."],
-  "sentenceFeedback": [{"original": "...", "correction": "...", "issueType": "grammar", "explanation": "..."}]
-}`, exampleScore(req.MinScore, req.MaxScore)))
+	system.WriteString(ieltsReplyShape("", "low", " on the whole test, ending with the note that pronunciation was not assessed"))
 
 	messages := []chatMessage{
 		{Role: "system", Content: system.String()},
@@ -90,7 +89,7 @@ func (g *Gateway) EvaluateSpeakingTest(ctx context.Context, req SpeakingTestRequ
 			return models.Evaluation{}, usage, err
 		}
 		var payload evaluationPayload
-		problem := json.Unmarshal([]byte(raw), &payload)
+		problem := json.Unmarshal([]byte(unfence(raw)), &payload)
 		var evaluation models.Evaluation
 		if problem == nil {
 			evaluation, problem = validateFeedback(payload, feedbackSpec{

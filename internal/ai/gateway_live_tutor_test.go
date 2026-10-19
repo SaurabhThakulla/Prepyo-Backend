@@ -17,7 +17,7 @@ func TestLiveTutorEvaluation(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		AIBaseURL: "https://codecraftapi.com/v1",
+		AIBaseURL: "https://openrouter.ai/api/v1",
 		AIAPIKey:  os.Getenv("AI_API_KEY"),
 		AIModels: config.AIModels{
 			Tutoring: "gemini-3.8-flash-high", // Intentional bad model to test fallback!

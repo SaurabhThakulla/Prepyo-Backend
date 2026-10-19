@@ -40,7 +40,7 @@ type Config struct {
 	SpeakingEvaluated bool
 
 	// AITTSModel and AITTSVoices drive server-side speech on the audio
-	// provider (Groq Orpheus by default), used when a browser cannot speak a
+	// provider (Orpheus on OpenRouter by default), used when a browser cannot speak a
 	// listening script itself. Voices are handed out one per speaker.
 	AITTSModel  string
 	AITTSVoices []string
@@ -80,11 +80,23 @@ func (c Config) BotAPIEnabled() bool { return c.BotAPIKey != "" }
 // against an empty password and letting anyone in.
 func (c Config) AdminLoginEnabled() bool { return c.AdminEmail != "" && c.AdminPassword != "" }
 
+// DefaultAIModel and DefaultSpeechModel are the OpenRouter models used when
+// AI_MODEL_* is not set: Haiku for every text task, Gemini for recordings.
+const (
+	DefaultAIModel     = "anthropic/claude-haiku-5.5"
+	// DefaultSpeechModel transcribes recordings; Whisper is no longer used.
+	DefaultSpeechModel = "google/gemini-2.5-flash-lite"
+	// DefaultDeliveryModel hears Read Aloud / Repeat Sentence audio for Pronunciation and Oral Fluency.
+	DefaultDeliveryModel = "google/gemini-2.5-flash"
+)
+
 // AIModels defines model names for each AI task capability.
 type AIModels struct {
 	Writing  string
 	Speaking string
 	Tutoring string
+	// Delivery rates pronunciation and fluency from audio; "off" turns it off.
+	Delivery string
 }
 
 func (c Config) IsProduction() bool { return c.Env == "production" }
@@ -141,8 +153,8 @@ func Load() (*Config, error) {
 	}
 	isProd := env == "production"
 
-	aiBaseURL := strings.TrimRight(stringOr("AI_BASE_URL", "https://codecraftapi.com/v1"), "/")
-	aiKey := firstOf("AI_API_KEY", "CODE_CRAFT")
+	aiBaseURL := strings.TrimRight(stringOr("AI_BASE_URL", "https://openrouter.ai/api/v1"), "/")
+	aiKey := stringOr("AI_API_KEY", "")
 	aiAudioKey := stringOr("AI_AUDIO_API_KEY", aiKey)
 
 	// Scoring a recording needs a provider that takes audio, and inheriting the
@@ -153,7 +165,9 @@ func Load() (*Config, error) {
 	//
 	// Set AI_SPEAKING_ENABLED explicitly when the text provider does serve an
 	// audio-capable model on the same key.
-	audioConfigured := stringOr("AI_AUDIO_BASE_URL", "") != "" || stringOr("AI_AUDIO_API_KEY", "") != ""
+	// OpenRouter serves Gemini audio models on the same key, so it counts as an audio provider.
+	audioConfigured := stringOr("AI_AUDIO_BASE_URL", "") != "" || stringOr("AI_AUDIO_API_KEY", "") != "" ||
+		strings.Contains(aiBaseURL, "openrouter.ai")
 
 	cfg := &Config{
 		Env:               env,
@@ -168,13 +182,14 @@ func Load() (*Config, error) {
 		AIAudioBaseURL:    strings.TrimRight(stringOr("AI_AUDIO_BASE_URL", aiBaseURL), "/"),
 		AIAudioAPIKey:     aiAudioKey,
 		SpeakingEvaluated: boolOr("AI_SPEAKING_ENABLED", audioConfigured),
-		AITTSModel:        stringOr("AI_TTS_MODEL", "canopylabs/orpheus-v1-english"),
-		AITTSVoices:       listOr("AI_TTS_VOICES", []string{"diana", "daniel", "hannah", "austin", "autumn", "troy"}),
+		AITTSModel:        stringOr("AI_TTS_MODEL", "canopylabs/orpheus-3b-0.1-ft"),
+		AITTSVoices:       listOr("AI_TTS_VOICES", []string{"tara", "leo", "leah", "dan", "jess", "zac"}),
 
 		AIModels: AIModels{
-			Writing:  cleanAIModel(stringOr("AI_MODEL_WRITING", "gpt-5.6-luna"), "gpt-5.6-luna"),
-			Speaking: cleanAIModel(stringOr("AI_MODEL_SPEAKING", "gemini-3.7-flash"), "gemini-3.7-flash"),
-			Tutoring: cleanAIModel(stringOr("AI_MODEL_TUTORING", "gpt-5.6-luna"), "gpt-5.6-luna"),
+			Writing:  cleanAIModel(stringOr("AI_MODEL_WRITING", DefaultAIModel), DefaultAIModel),
+			Speaking: cleanSpeechModel(stringOr("AI_MODEL_SPEAKING", DefaultSpeechModel)),
+			Tutoring: cleanAIModel(stringOr("AI_MODEL_TUTORING", DefaultAIModel), DefaultAIModel),
+			Delivery: cleanAIModel(stringOr("AI_MODEL_DELIVERY", DefaultDeliveryModel), DefaultDeliveryModel),
 		},
 		SecureCookies: boolOr("SECURE_COOKIES", isProd),
 
@@ -299,16 +314,6 @@ func originHost(origin string) string {
 	return host
 }
 
-// firstOf returns the first non-empty environment variable value from the provided keys.
-func firstOf(keys ...string) string {
-	for _, key := range keys {
-		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func stringOr(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
@@ -383,34 +388,47 @@ func cleanAIModel(val, fallback string) string {
 	return val
 }
 
+// cleanSpeechModel keeps an old Whisper setting from breaking speaking: Whisper is not a chat model, so Gemini is used.
+func cleanSpeechModel(val string) string {
+	if strings.Contains(strings.ToLower(val), "whisper") {
+		return DefaultSpeechModel
+	}
+	return cleanAIModel(val, DefaultSpeechModel)
+}
+
 func loadDotEnv() {
 	if len(os.Args) > 0 && (strings.HasSuffix(os.Args[0], ".test") || strings.HasSuffix(os.Args[0], ".test.exe") || strings.Contains(os.Args[0], "go_build") || strings.Contains(os.Args[0], "__debug_bin")) {
 		return
 	}
-	paths := []string{".env", "../.env", "../../.env"}
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
+	candidates := [][]string{
+		{".env.local", "../.env.local", "../../.env.local"},
+		{".env", "../.env", "../../.env"},
+	}
+	for _, paths := range candidates {
+		for _, p := range paths {
+			data, err := os.ReadFile(p)
+			if err != nil {
 				continue
 			}
-			parts := strings.SplitN(line, "=", 2)
-			if len(parts) != 2 {
-				continue
+			lines := strings.Split(string(data), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				k := strings.TrimSpace(parts[0])
+				v := strings.TrimSpace(parts[1])
+				v = strings.Trim(v, `"'`)
+				if os.Getenv(k) == "" {
+					_ = os.Setenv(k, v)
+				}
 			}
-			k := strings.TrimSpace(parts[0])
-			v := strings.TrimSpace(parts[1])
-			v = strings.Trim(v, `"'`)
-			if os.Getenv(k) == "" {
-				_ = os.Setenv(k, v)
-			}
+			break
 		}
-		break
 	}
 }
 

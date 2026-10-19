@@ -80,6 +80,16 @@ func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, nil)
 }
 
+// SignInUser starts a session for a user another package has already verified.
+func (h *Handler) SignInUser(w http.ResponseWriter, r *http.Request, userID string) error {
+	token, err := h.service.startSession(r.Context(), userID)
+	if err != nil {
+		return err
+	}
+	h.setSessionCookie(w, token)
+	return nil
+}
+
 func (h *Handler) setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:  SessionCookieName,

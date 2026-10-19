@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prepyo/backend/internal/ai"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/scoring"
 )
@@ -24,36 +25,40 @@ func pteVersion() models.ExamVersion {
 	return models.ExamVersion{Exam: models.ExamPTE, MinScore: 10, MaxScore: 90, ScoreStep: 1}
 }
 
-func TestVerbatimEvaluationScoresOnTheExamScale(t *testing.T) {
+func TestVerbatimEvaluationScoresOnPearsonTraits(t *testing.T) {
 	delivery := scoring.Delivery{
-		DurationSeconds: 20, WordsSpoken: 8, PauseCount: 1, LongestPauseSeconds: 0.8, SpeakingRatio: 0.8,
+		DurationSeconds: 4, WordsSpoken: 8, PauseCount: 1, LongestPauseSeconds: 0.8, SpeakingRatio: 0.8,
 	}
-	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, delivery)
+	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, delivery, nil)
 
 	if evaluation.EstimatedScore == nil {
 		t.Fatal("a perfect read produced no score")
 	}
-	if *evaluation.EstimatedScore < 80 || *evaluation.EstimatedScore > 90 {
-		t.Errorf("perfect read scored %.0f on the 10-90 scale", *evaluation.EstimatedScore)
+	// Content 90 + Pronunciation 65 (assumed) + Fluency 74 (4/5): (90 + 65 + 74)/3 = 76.
+	if *evaluation.EstimatedScore != 76 {
+		t.Errorf("perfect read with one pause scored %.0f, want 76", *evaluation.EstimatedScore)
 	}
-	if len(evaluation.Criteria) != 2 {
-		t.Fatalf("criteria = %d, want Content and Oral Fluency", len(evaluation.Criteria))
-	}
-	// Pronunciation is the one thing a transcript cannot show, and inventing a
-	// criterion for it is what this whole path exists to avoid.
+	names := []string{}
 	for _, c := range evaluation.Criteria {
-		if strings.Contains(strings.ToLower(c.Name), "pronunciation") {
-			t.Errorf("verbatim scoring returned a %q criterion", c.Name)
-		}
+		names = append(names, c.Name)
+	}
+	if strings.Join(names, ",") != "Content,Pronunciation,Oral Fluency" {
+		t.Fatalf("criteria = %v", names)
+	}
+	if evaluation.Criteria[1].Score != 65 || evaluation.Criteria[1].MaxScore != 90 {
+		t.Errorf("pronunciation = %+v, want the assumed 65 of 90", evaluation.Criteria[1])
 	}
 	if !strings.Contains(evaluation.Summary, "Pronunciation was not assessed") {
 		t.Errorf("summary does not say pronunciation went unassessed: %q", evaluation.Summary)
 	}
+	if len(evaluation.Words) != len(strings.Fields(passage)) {
+		t.Errorf("words = %d, want one mark per word of the passage", len(evaluation.Words))
+	}
 }
 
 func TestVerbatimEvaluationMarksDownAMissedRead(t *testing.T) {
-	full := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, scoring.Delivery{})
-	partial := verbatimEvaluation(pteQuestion(), pteVersion(), passage, "every flat map", scoring.Delivery{})
+	full := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, scoring.Delivery{}, nil)
+	partial := verbatimEvaluation(pteQuestion(), pteVersion(), passage, "every flat map", scoring.Delivery{}, nil)
 
 	if *partial.EstimatedScore >= *full.EstimatedScore {
 		t.Errorf("half a passage scored %.0f against %.0f for the whole thing",
@@ -64,12 +69,56 @@ func TestVerbatimEvaluationMarksDownAMissedRead(t *testing.T) {
 	}
 }
 
-func TestVerbatimEvaluationWithoutMeasurementsJudgesContentOnly(t *testing.T) {
-	// A browser that measured nothing must not produce a fluency mark: an
-	// unmeasured criterion is a guess wearing a number.
-	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, scoring.Delivery{})
+func TestVerbatimEvaluationNothingSaidScoresTheFloor(t *testing.T) {
+	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), passage, "", scoring.Delivery{}, nil)
+	if *evaluation.EstimatedScore != 10 {
+		t.Errorf("an empty read scored %.0f, want 10", *evaluation.EstimatedScore)
+	}
+}
 
-	if len(evaluation.Criteria) != 1 || evaluation.Criteria[0].Name != "Content" {
-		t.Fatalf("criteria = %+v, want Content alone", evaluation.Criteria)
+// The recording behind the 81 that APEUni-style marking should bring down.
+func TestVerbatimEvaluationPhytoplanktonRecording(t *testing.T) {
+	given := "Marine phytoplankton play an essential role in regulating Earth's climate by absorbing carbon dioxide through photosynthesis. When these microscopic organisms die, a significant portion of the organic carbon sinks into the deep ocean, sequestering greenhouse gases for centuries."
+	heard := "Marine psychopathians play an essential role in regulating Earth's climate by absorbing carbon dioxide through photosynthesis. When this microscopic organism dies, a significant portion of the organic carbon sinks into the deep ocean, squirting greenhouse gases for centuries."
+	delivery := scoring.Delivery{DurationSeconds: 23, WordsSpoken: 38, PauseCount: 2, LongestPauseSeconds: 0.9, SpeakingRatio: 0.8}
+
+	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), given, heard, delivery, nil)
+	// Content 74 (4 of 5), Pronunciation 65 (assumed), Fluency 42 (2 of 5, 99 wpm & 2 pauses): (74 + 65 + 42)/3 = 60.
+	if *evaluation.EstimatedScore != 60 {
+		t.Errorf("scored %.0f, want 60", *evaluation.EstimatedScore)
+	}
+	missed := 0
+	for _, w := range evaluation.Words {
+		if !w.Said {
+			missed++
+		}
+	}
+	if missed != 5 {
+		t.Errorf("%d words marked missed, want 5", missed)
+	}
+}
+
+func TestVerbatimEvaluationUsesTheAudioRating(t *testing.T) {
+	rating := &ai.DeliveryRating{Pronunciation: 75, PronunciationFeedback: "Stress in phytoplankton.", Fluency: 80, FluencyFeedback: "Word by word.", Unclear: []string{"flat"}}
+	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, scoring.Delivery{}, rating)
+
+	// Content 90 + Pronunciation 75 + Fluency 80: (90 + 75 + 80)/3 = 82.
+	if *evaluation.EstimatedScore != 82 {
+		t.Errorf("scored %.0f, want 82", *evaluation.EstimatedScore)
+	}
+	if evaluation.Criteria[1].Feedback != "Stress in phytoplankton." || evaluation.ScoreConfidence != "medium" {
+		t.Errorf("rating not used: %+v, confidence %s", evaluation.Criteria[1], evaluation.ScoreConfidence)
+	}
+	if !evaluation.Words[1].Unclear || evaluation.Words[0].Unclear {
+		t.Errorf("unclear marks = %+v", evaluation.Words[:2])
+	}
+}
+
+func TestScoreVerbatimPlacesPauses(t *testing.T) {
+	r := scoring.ScoreVerbatim(passage, "every flat map"+scoring.PauseMark+"distorts the globe it represents")
+	for i, w := range r.Marks {
+		if w.PauseAfter != (i == 2) {
+			t.Errorf("word %d %q pauseAfter = %v", i, w.Text, w.PauseAfter)
+		}
 	}
 }

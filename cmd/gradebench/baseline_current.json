@@ -1,0 +1,1198 @@
+{
+  "model": "gpt-5.6-luna",
+  "provider": "codecraftapi.com",
+  "ranAt": "2026-10-16T00:59:56+05:45",
+  "results": [
+    {
+      "id": "ielts-ac-t1-b6",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 6,
+      "score": 7,
+      "criteria": {
+        "Coherence and Cohesion": 7,
+        "Grammatical Range and Accuracy": 7,
+        "Lexical Resource": 7,
+        "Task Achievement": 7
+      },
+      "fixes": 3,
+      "feedbackChars": 3283,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1624,
+      "completionTokens": 5757,
+      "latencyMs": 84707
+    },
+    {
+      "id": "ielts-ac-t1-b6",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 6,
+      "score": 7,
+      "criteria": {
+        "Coherence and Cohesion": 7,
+        "Grammatical Range and Accuracy": 7,
+        "Lexical Resource": 7,
+        "Task Achievement": 7
+      },
+      "fixes": 3,
+      "feedbackChars": 3104,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1624,
+      "completionTokens": 4686,
+      "latencyMs": 77049
+    },
+    {
+      "id": "ielts-ac-t1-b7-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 7.5,
+      "score": 8.5,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 9,
+        "Lexical Resource": 8,
+        "Task Achievement": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 3169,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1641,
+      "completionTokens": 4363,
+      "latencyMs": 64345
+    },
+    {
+      "id": "ielts-ac-t1-b7-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 7.5,
+      "score": 8,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8,
+        "Task Achievement": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 3099,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1641,
+      "completionTokens": 3854,
+      "latencyMs": 54134
+    },
+    {
+      "id": "ielts-gt-letter-b5-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 5.5,
+      "score": 6.5,
+      "criteria": {
+        "Coherence and Cohesion": 7,
+        "Grammatical Range and Accuracy": 6,
+        "Lexical Resource": 6,
+        "Task Achievement": 7
+      },
+      "fixes": 3,
+      "feedbackChars": 3324,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1516,
+      "completionTokens": 5000,
+      "latencyMs": 72910
+    },
+    {
+      "id": "ielts-gt-letter-b5-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 5.5,
+      "score": 6.5,
+      "criteria": {
+        "Coherence and Cohesion": 7,
+        "Grammatical Range and Accuracy": 6,
+        "Lexical Resource": 6,
+        "Task Achievement": 7
+      },
+      "fixes": 4,
+      "feedbackChars": 3495,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1516,
+      "completionTokens": 4152,
+      "latencyMs": 69465
+    },
+    {
+      "id": "ielts-gt-letter-b7",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 7,
+      "score": 8.5,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 9,
+        "Lexical Resource": 8,
+        "Task Achievement": 9
+      },
+      "fixes": 3,
+      "feedbackChars": 3474,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1572,
+      "completionTokens": 4197,
+      "latencyMs": 61412
+    },
+    {
+      "id": "ielts-gt-letter-b7",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 7,
+      "score": 8.5,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 9,
+        "Lexical Resource": 8,
+        "Task Achievement": 9
+      },
+      "fixes": 3,
+      "feedbackChars": 3482,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1572,
+      "completionTokens": 3900,
+      "latencyMs": 53202
+    },
+    {
+      "id": "ielts-sp-p1-b5-5",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 1,
+      "target": 5.5,
+      "score": 5.5,
+      "criteria": {
+        "Fluency and Coherence": 6,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 5
+      },
+      "fixes": 4,
+      "feedbackChars": 2618,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1217,
+      "completionTokens": 3134,
+      "latencyMs": 61441
+    },
+    {
+      "id": "ielts-sp-p1-b5-5",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 2,
+      "target": 5.5,
+      "score": 5.5,
+      "criteria": {
+        "Fluency and Coherence": 6,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 5
+      },
+      "fixes": 3,
+      "feedbackChars": 2288,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1217,
+      "completionTokens": 3069,
+      "latencyMs": 50508
+    },
+    {
+      "id": "ielts-sp-p1-b7-5",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 1,
+      "target": 7.5,
+      "score": 8,
+      "criteria": {
+        "Fluency and Coherence": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 2485,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1242,
+      "completionTokens": 3905,
+      "latencyMs": 81103
+    },
+    {
+      "id": "ielts-sp-p1-b7-5",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 2,
+      "target": 7.5,
+      "score": 8,
+      "criteria": {
+        "Fluency and Coherence": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 2381,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1242,
+      "completionTokens": 2721,
+      "latencyMs": 42329
+    },
+    {
+      "id": "ielts-sp-p2-b6",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 1,
+      "target": 6,
+      "score": 7,
+      "criteria": {
+        "Fluency and Coherence": 7,
+        "Grammatical Range and Accuracy": 7,
+        "Lexical Resource": 7
+      },
+      "fixes": 4,
+      "feedbackChars": 3129,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1460,
+      "completionTokens": 4890,
+      "latencyMs": 106085
+    },
+    {
+      "id": "ielts-sp-p2-b6",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 2,
+      "target": 6,
+      "score": 6.5,
+      "criteria": {
+        "Fluency and Coherence": 7,
+        "Grammatical Range and Accuracy": 6,
+        "Lexical Resource": 7
+      },
+      "fixes": 4,
+      "feedbackChars": 3017,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1460,
+      "completionTokens": 3737,
+      "latencyMs": 50212
+    },
+    {
+      "id": "ielts-sp-p2-b8",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 1,
+      "target": 8,
+      "score": 8,
+      "criteria": {
+        "Fluency and Coherence": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 2998,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1503,
+      "completionTokens": 3178,
+      "latencyMs": 36840
+    },
+    {
+      "id": "ielts-sp-p2-b8",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 2,
+      "target": 8,
+      "score": 8,
+      "criteria": {
+        "Fluency and Coherence": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 3472,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1503,
+      "completionTokens": 3565,
+      "latencyMs": 57834
+    },
+    {
+      "id": "ielts-sp-p3-b6-5",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 1,
+      "target": 6.5,
+      "score": 7,
+      "criteria": {
+        "Fluency and Coherence": 7,
+        "Grammatical Range and Accuracy": 7,
+        "Lexical Resource": 7
+      },
+      "fixes": 3,
+      "feedbackChars": 2906,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1296,
+      "completionTokens": 3503,
+      "latencyMs": 66958
+    },
+    {
+      "id": "ielts-sp-p3-b6-5",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 2,
+      "target": 6.5,
+      "score": 6.5,
+      "criteria": {
+        "Fluency and Coherence": 7,
+        "Grammatical Range and Accuracy": 6,
+        "Lexical Resource": 7
+      },
+      "fixes": 4,
+      "feedbackChars": 3456,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1296,
+      "completionTokens": 3872,
+      "latencyMs": 59295
+    },
+    {
+      "id": "ielts-t2-discussion-b5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 5.5,
+      "score": 6,
+      "criteria": {
+        "Coherence and Cohesion": 6,
+        "Grammatical Range and Accuracy": 6,
+        "Lexical Resource": 6,
+        "Task Response": 6
+      },
+      "fixes": 6,
+      "feedbackChars": 4052,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1625,
+      "completionTokens": 4001,
+      "latencyMs": 63475
+    },
+    {
+      "id": "ielts-t2-discussion-b5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 5.5,
+      "score": 6,
+      "criteria": {
+        "Coherence and Cohesion": 6,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 6,
+        "Task Response": 6
+      },
+      "fixes": 4,
+      "feedbackChars": 3632,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1625,
+      "completionTokens": 4995,
+      "latencyMs": 39940
+    },
+    {
+      "id": "ielts-t2-discussion-b6-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 6.5,
+      "score": 8,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8,
+        "Task Response": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 2974,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1640,
+      "completionTokens": 4143,
+      "latencyMs": 83745
+    },
+    {
+      "id": "ielts-t2-discussion-b6-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 6.5,
+      "score": 8,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8,
+        "Task Response": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 3234,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1640,
+      "completionTokens": 3883,
+      "latencyMs": 81603
+    },
+    {
+      "id": "ielts-t2-discussion-b7-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 7.5,
+      "score": 8,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8,
+        "Task Response": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 2948,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1674,
+      "completionTokens": 2586,
+      "latencyMs": 55553
+    },
+    {
+      "id": "ielts-t2-discussion-b7-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 7.5,
+      "score": 8.5,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 9,
+        "Lexical Resource": 8,
+        "Task Response": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 3216,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1674,
+      "completionTokens": 3511,
+      "latencyMs": 50032
+    },
+    {
+      "id": "ielts-t2-discussion-short",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 4.5,
+      "score": 5,
+      "criteria": {
+        "Coherence and Cohesion": 5,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 5,
+        "Task Response": 5
+      },
+      "fixes": 3,
+      "feedbackChars": 2686,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1439,
+      "completionTokens": 3630,
+      "latencyMs": 59681
+    },
+    {
+      "id": "ielts-t2-discussion-short",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 4.5,
+      "score": 5.5,
+      "criteria": {
+        "Coherence and Cohesion": 5,
+        "Grammatical Range and Accuracy": 6,
+        "Lexical Resource": 5,
+        "Task Response": 5
+      },
+      "fixes": 3,
+      "feedbackChars": 2731,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1439,
+      "completionTokens": 4088,
+      "latencyMs": 79717
+    },
+    {
+      "id": "ielts-t2-opinion-b4",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 4,
+      "score": 5,
+      "criteria": {
+        "Coherence and Cohesion": 5,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 5,
+        "Task Response": 5
+      },
+      "fixes": 5,
+      "feedbackChars": 3561,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1446,
+      "completionTokens": 3261,
+      "latencyMs": 63300
+    },
+    {
+      "id": "ielts-t2-opinion-b4",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 4,
+      "score": 5,
+      "criteria": {
+        "Coherence and Cohesion": 5,
+        "Grammatical Range and Accuracy": 4,
+        "Lexical Resource": 5,
+        "Task Response": 5
+      },
+      "fixes": 4,
+      "feedbackChars": 3144,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1446,
+      "completionTokens": 4074,
+      "latencyMs": 78340
+    },
+    {
+      "id": "ielts-t2-opinion-b5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 5,
+      "score": 5.5,
+      "criteria": {
+        "Coherence and Cohesion": 6,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 5,
+        "Task Response": 6
+      },
+      "fixes": 5,
+      "feedbackChars": 3583,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1577,
+      "completionTokens": 4287,
+      "latencyMs": 73541
+    },
+    {
+      "id": "ielts-t2-opinion-b5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 5,
+      "score": 5.5,
+      "criteria": {
+        "Coherence and Cohesion": 6,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 5,
+        "Task Response": 6
+      },
+      "fixes": 5,
+      "feedbackChars": 3804,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1577,
+      "completionTokens": 4437,
+      "latencyMs": 82120
+    },
+    {
+      "id": "ielts-t2-opinion-b6",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 6,
+      "score": 8,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 7,
+        "Task Response": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 2815,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1619,
+      "completionTokens": 3277,
+      "latencyMs": 65931
+    },
+    {
+      "id": "ielts-t2-opinion-b6",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 6,
+      "score": 7.5,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 7,
+        "Task Response": 7
+      },
+      "fixes": 3,
+      "feedbackChars": 3374,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1619,
+      "completionTokens": 3843,
+      "latencyMs": 74914
+    },
+    {
+      "id": "ielts-t2-opinion-b8",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 8,
+      "score": 8,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 8,
+        "Lexical Resource": 8,
+        "Task Response": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 3388,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1655,
+      "completionTokens": 3634,
+      "latencyMs": 88161
+    },
+    {
+      "id": "ielts-t2-opinion-b8",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 2,
+      "target": 8,
+      "score": 8.5,
+      "criteria": {
+        "Coherence and Cohesion": 8,
+        "Grammatical Range and Accuracy": 9,
+        "Lexical Resource": 8,
+        "Task Response": 8
+      },
+      "fixes": 3,
+      "feedbackChars": 3681,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1655,
+      "completionTokens": 3801,
+      "latencyMs": 61805
+    },
+    {
+      "id": "pte-di-45",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 45,
+      "score": 64,
+      "criteria": {
+        "Content": 62,
+        "Oral Fluency": 68
+      },
+      "fixes": 4,
+      "feedbackChars": 2008,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1172,
+      "completionTokens": 2890,
+      "latencyMs": 55611
+    },
+    {
+      "id": "pte-di-45",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 2,
+      "target": 45,
+      "score": 69,
+      "criteria": {
+        "Content": 67,
+        "Oral Fluency": 71
+      },
+      "fixes": 4,
+      "feedbackChars": 2196,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1172,
+      "completionTokens": 2778,
+      "latencyMs": 54217
+    },
+    {
+      "id": "pte-di-75",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 75,
+      "score": 84,
+      "criteria": {
+        "Content": 85,
+        "Oral Fluency": 84
+      },
+      "fixes": 4,
+      "feedbackChars": 2368,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1192,
+      "completionTokens": 2313,
+      "latencyMs": 44241
+    },
+    {
+      "id": "pte-di-75",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 2,
+      "target": 75,
+      "score": 85,
+      "criteria": {
+        "Content": 86,
+        "Oral Fluency": 84
+      },
+      "fixes": 3,
+      "feedbackChars": 2089,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1192,
+      "completionTokens": 2268,
+      "latencyMs": 41741
+    },
+    {
+      "id": "pte-essay-40",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 1,
+      "target": 40,
+      "score": 51,
+      "criteria": {
+        "Content": 52,
+        "Development, Structure and Coherence": 50,
+        "Form": 40,
+        "General Linguistic Range": 48,
+        "Grammar": 42,
+        "Spelling": 68,
+        "Vocabulary Range": 50
+      },
+      "fixes": 5,
+      "feedbackChars": 2917,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1081,
+      "completionTokens": 2669,
+      "latencyMs": 53294
+    },
+    {
+      "id": "pte-essay-40",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 2,
+      "target": 40,
+      "score": 47,
+      "criteria": {
+        "Content": 48,
+        "Development, Structure and Coherence": 45,
+        "Form": 40,
+        "General Linguistic Range": 46,
+        "Grammar": 42,
+        "Spelling": 62,
+        "Vocabulary Range": 44
+      },
+      "fixes": 7,
+      "feedbackChars": 3260,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1081,
+      "completionTokens": 2555,
+      "latencyMs": 45415
+    },
+    {
+      "id": "pte-essay-55",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 1,
+      "target": 55,
+      "score": 72,
+      "criteria": {
+        "Content": 78,
+        "Development, Structure and Coherence": 74,
+        "Form": 90,
+        "General Linguistic Range": 68,
+        "Grammar": 62,
+        "Spelling": 88,
+        "Vocabulary Range": 70
+      },
+      "fixes": 4,
+      "feedbackChars": 2525,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1178,
+      "completionTokens": 2445,
+      "latencyMs": 42869
+    },
+    {
+      "id": "pte-essay-55",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 2,
+      "target": 55,
+      "score": 72,
+      "criteria": {
+        "Content": 78,
+        "Development, Structure and Coherence": 74,
+        "Form": 90,
+        "General Linguistic Range": 72,
+        "Grammar": 68,
+        "Spelling": 88,
+        "Vocabulary Range": 71
+      },
+      "fixes": 4,
+      "feedbackChars": 2833,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1178,
+      "completionTokens": 2826,
+      "latencyMs": 50620
+    },
+    {
+      "id": "pte-essay-70",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 1,
+      "target": 70,
+      "score": 82,
+      "criteria": {
+        "Content": 78,
+        "Development, Structure and Coherence": 84,
+        "Form": 90,
+        "General Linguistic Range": 81,
+        "Grammar": 82,
+        "Spelling": 90,
+        "Vocabulary Range": 83
+      },
+      "fixes": 3,
+      "feedbackChars": 2967,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1217,
+      "completionTokens": 2832,
+      "latencyMs": 50612
+    },
+    {
+      "id": "pte-essay-70",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 2,
+      "target": 70,
+      "score": 83,
+      "criteria": {
+        "Content": 82,
+        "Development, Structure and Coherence": 84,
+        "Form": 90,
+        "General Linguistic Range": 83,
+        "Grammar": 84,
+        "Spelling": 90,
+        "Vocabulary Range": 84
+      },
+      "fixes": 3,
+      "feedbackChars": 3084,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1217,
+      "completionTokens": 3295,
+      "latencyMs": 54610
+    },
+    {
+      "id": "pte-essay-85",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 1,
+      "target": 85,
+      "score": 84,
+      "criteria": {
+        "Content": 84,
+        "Development, Structure and Coherence": 83,
+        "Form": 90,
+        "General Linguistic Range": 84,
+        "Grammar": 84,
+        "Spelling": 90,
+        "Vocabulary Range": 85
+      },
+      "fixes": 3,
+      "feedbackChars": 2988,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1236,
+      "completionTokens": 2881,
+      "latencyMs": 39489
+    },
+    {
+      "id": "pte-essay-85",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 2,
+      "target": 85,
+      "score": 85,
+      "criteria": {
+        "Content": 84,
+        "Development, Structure and Coherence": 85,
+        "Form": 90,
+        "General Linguistic Range": 85,
+        "Grammar": 86,
+        "Spelling": 90,
+        "Vocabulary Range": 86
+      },
+      "fixes": 3,
+      "feedbackChars": 2839,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1236,
+      "completionTokens": 3073,
+      "latencyMs": 45832
+    },
+    {
+      "id": "pte-rl-40",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 40,
+      "score": 62,
+      "criteria": {
+        "Content": 58,
+        "Oral Fluency": 67
+      },
+      "fixes": 3,
+      "feedbackChars": 2470,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1226,
+      "completionTokens": 2446,
+      "latencyMs": 52740
+    },
+    {
+      "id": "pte-rl-40",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 2,
+      "target": 40,
+      "score": 62,
+      "criteria": {
+        "Content": 58,
+        "Oral Fluency": 73
+      },
+      "fixes": 3,
+      "feedbackChars": 1862,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1226,
+      "completionTokens": 2787,
+      "latencyMs": 50559
+    },
+    {
+      "id": "pte-rl-70",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 70,
+      "score": 86,
+      "criteria": {
+        "Content": 88,
+        "Oral Fluency": 84
+      },
+      "fixes": 4,
+      "feedbackChars": 2543,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1270,
+      "completionTokens": 2204,
+      "latencyMs": 37148
+    },
+    {
+      "id": "pte-rl-70",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 2,
+      "target": 70,
+      "score": 86,
+      "criteria": {
+        "Content": 88,
+        "Oral Fluency": 85
+      },
+      "fixes": 4,
+      "feedbackChars": 2358,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1270,
+      "completionTokens": 2417,
+      "latencyMs": 14727
+    },
+    {
+      "id": "pte-rts-35",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 35,
+      "score": 43,
+      "criteria": {
+        "Appropriacy": 45,
+        "Oral Fluency": 40
+      },
+      "fixes": 3,
+      "feedbackChars": 2243,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1172,
+      "completionTokens": 2191,
+      "latencyMs": 39922
+    },
+    {
+      "id": "pte-rts-35",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 2,
+      "target": 35,
+      "score": 42,
+      "criteria": {
+        "Appropriacy": 46,
+        "Oral Fluency": 38
+      },
+      "fixes": 3,
+      "feedbackChars": 1933,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1172,
+      "completionTokens": 2614,
+      "latencyMs": 17491
+    },
+    {
+      "id": "pte-rts-75",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 75,
+      "score": 84,
+      "criteria": {
+        "Appropriacy": 85,
+        "Oral Fluency": 83
+      },
+      "fixes": 3,
+      "feedbackChars": 1882,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1247,
+      "completionTokens": 2241,
+      "latencyMs": 43034
+    },
+    {
+      "id": "pte-rts-75",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 2,
+      "target": 75,
+      "score": 85,
+      "criteria": {
+        "Appropriacy": 86,
+        "Oral Fluency": 84
+      },
+      "fixes": 3,
+      "feedbackChars": 2122,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1247,
+      "completionTokens": 2773,
+      "latencyMs": 50748
+    },
+    {
+      "id": "pte-swt-35",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 1,
+      "target": 35,
+      "score": 25,
+      "criteria": {
+        "Content": 10,
+        "Form": 10,
+        "Grammar": 55,
+        "Vocabulary": 20
+      },
+      "fixes": 2,
+      "feedbackChars": 2310,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1056,
+      "completionTokens": 2332,
+      "latencyMs": 46095
+    },
+    {
+      "id": "pte-swt-35",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 2,
+      "target": 35,
+      "score": 28,
+      "criteria": {
+        "Content": 20,
+        "Form": 10,
+        "Grammar": 45,
+        "Vocabulary": 30
+      },
+      "fixes": 2,
+      "feedbackChars": 2050,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1056,
+      "completionTokens": 2345,
+      "latencyMs": 35044
+    },
+    {
+      "id": "pte-swt-60",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 1,
+      "target": 60,
+      "score": 65,
+      "criteria": {
+        "Content": 62,
+        "Form": 90,
+        "Grammar": 62,
+        "Vocabulary": 60
+      },
+      "fixes": 1,
+      "feedbackChars": 2360,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1091,
+      "completionTokens": 2627,
+      "latencyMs": 53237
+    },
+    {
+      "id": "pte-swt-60",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 2,
+      "target": 60,
+      "score": 65,
+      "criteria": {
+        "Content": 65,
+        "Form": 90,
+        "Grammar": 62,
+        "Vocabulary": 64
+      },
+      "fixes": 1,
+      "feedbackChars": 2429,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1091,
+      "completionTokens": 2385,
+      "latencyMs": 40362
+    },
+    {
+      "id": "pte-swt-85",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 1,
+      "target": 85,
+      "score": 82,
+      "criteria": {
+        "Content": 72,
+        "Form": 90,
+        "Grammar": 88,
+        "Vocabulary": 84
+      },
+      "fixes": 1,
+      "feedbackChars": 1981,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1102,
+      "completionTokens": 2619,
+      "latencyMs": 55949
+    },
+    {
+      "id": "pte-swt-85",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 2,
+      "target": 85,
+      "score": 83,
+      "criteria": {
+        "Content": 76,
+        "Form": 90,
+        "Grammar": 88,
+        "Vocabulary": 86
+      },
+      "fixes": 1,
+      "feedbackChars": 2018,
+      "model": "gpt-5.6-luna",
+      "promptTokens": 1102,
+      "completionTokens": 2424,
+      "latencyMs": 42958
+    }
+  ],
+  "validationRetries": 0
+}

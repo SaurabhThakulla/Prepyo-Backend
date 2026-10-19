@@ -56,7 +56,7 @@ func TestIELTSCriteriaValidation(t *testing.T) {
 		{"missing", `{"summary":"Brief","estimatedScore":{"value":7},"criteria":[]}`, false},
 		{"duplicate", strings.Replace(valid, "Task Response", "Lexical Resource", 1), false},
 		{"wrong scale", strings.ReplaceAll(valid, `"maxScore":9`, `"maxScore":90`), false},
-		{"wrong mean", ieltsReply(8, 7, false), false},
+		{"model's mean ignored", ieltsReply(8, 7, false), true},
 		{"null", `{"summary":"Too short to score","estimatedScore":{"value":null},"criteria":[]}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -65,6 +65,10 @@ func TestIELTSCriteriaValidation(t *testing.T) {
 				t.Fatalf("valid=%t: %v", tc.valid, err)
 			}
 		})
+	}
+	// The band is the rounded mean of the criteria, not the model's number.
+	if e, _ := parseWriting(ieltsReply(8, 7, false), req); e.EstimatedScore == nil || *e.EstimatedScore != 7 {
+		t.Errorf("estimate = %v, want 7 from the criteria", e.EstimatedScore)
 	}
 	req.TaskName = "Describe the figure"
 	if _, err := parseWriting(strings.Replace(valid, "Task Response", "Task Achievement", 1), req); err != nil {

@@ -25,14 +25,14 @@ func TestLiveWritingEvaluation(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		AIBaseURL:        firstNonEmpty(os.Getenv("AI_BASE_URL"), "https://codecraftapi.com/v1"),
-		AIAPIKey:         firstNonEmpty(os.Getenv("AI_API_KEY"), os.Getenv("CODE_CRAFT")),
-		AIModels:         config.AIModels{Writing: firstNonEmpty(os.Getenv("AI_MODEL_WRITING"), "gpt-5.6-luna")},
+		AIBaseURL:        firstNonEmpty(os.Getenv("AI_BASE_URL"), "https://openrouter.ai/api/v1"),
+		AIAPIKey:         os.Getenv("AI_API_KEY"),
+		AIModels:         config.AIModels{Writing: firstNonEmpty(os.Getenv("AI_MODEL_WRITING"), config.DefaultAIModel)},
 		AIRequestTimeout: 90 * time.Second,
 		AIMaxTokens:      8000,
 	}
 	if cfg.AIAPIKey == "" {
-		t.Fatal("AI_API_KEY (or CODE_CRAFT) must be set for the live test")
+		t.Fatal("AI_API_KEY must be set for the live test")
 	}
 
 	g := NewGateway(cfg, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))

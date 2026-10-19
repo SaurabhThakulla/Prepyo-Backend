@@ -1,0 +1,197 @@
+{
+  "model": "anthropic/claude-haiku-5.5",
+  "provider": "openrouter.ai",
+  "ranAt": "2026-10-19T13:21:49+05:45",
+  "results": [
+    {
+      "id": "ielts-sp-p1-b5-5",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 1,
+      "target": 5.5,
+      "score": 5,
+      "criteria": {
+        "Fluency and Coherence": 5,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 5
+      },
+      "fixes": 2,
+      "feedbackChars": 866,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 2526,
+      "completionTokens": 619,
+      "latencyMs": 3668
+    },
+    {
+      "id": "ielts-sp-p2-b6",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 1,
+      "target": 6,
+      "score": 5.5,
+      "criteria": {
+        "Fluency and Coherence": 6,
+        "Grammatical Range and Accuracy": 5,
+        "Lexical Resource": 6
+      },
+      "fixes": 2,
+      "feedbackChars": 1133,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 2842,
+      "completionTokens": 748,
+      "latencyMs": 4952
+    },
+    {
+      "id": "ielts-sp-p2-b8",
+      "exam": "IELTS",
+      "kind": "speaking",
+      "run": 1,
+      "target": 8,
+      "score": 7,
+      "criteria": {
+        "Fluency and Coherence": 7,
+        "Grammatical Range and Accuracy": 7,
+        "Lexical Resource": 7
+      },
+      "fixes": 2,
+      "feedbackChars": 1272,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 2928,
+      "completionTokens": 833,
+      "latencyMs": 5304
+    },
+    {
+      "id": "ielts-t2-discussion-b7-5",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 7.5,
+      "score": 7,
+      "criteria": {
+        "Coherence and Cohesion": 7,
+        "Grammatical Range and Accuracy": 6,
+        "Lexical Resource": 7,
+        "Task Response": 7
+      },
+      "fixes": 2,
+      "feedbackChars": 1614,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 3439,
+      "completionTokens": 932,
+      "latencyMs": 4485
+    },
+    {
+      "id": "ielts-t2-opinion-b4",
+      "exam": "IELTS",
+      "kind": "writing",
+      "run": 1,
+      "target": 4,
+      "score": 4.5,
+      "criteria": {
+        "Coherence and Cohesion": 5,
+        "Grammatical Range and Accuracy": 4,
+        "Lexical Resource": 4,
+        "Task Response": 4
+      },
+      "fixes": 2,
+      "feedbackChars": 1171,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 3048,
+      "completionTokens": 753,
+      "latencyMs": 4232
+    },
+    {
+      "id": "pte-di-45",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 45,
+      "score": 46,
+      "criteria": {
+        "Content": 50,
+        "Oral Fluency": 42
+      },
+      "fixes": 2,
+      "feedbackChars": 940,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 2206,
+      "completionTokens": 576,
+      "latencyMs": 4703
+    },
+    {
+      "id": "pte-di-75",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 75,
+      "score": 75,
+      "criteria": {
+        "Content": 77,
+        "Oral Fluency": 74
+      },
+      "fixes": 2,
+      "feedbackChars": 1076,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 2269,
+      "completionTokens": 681,
+      "latencyMs": 5169
+    },
+    {
+      "id": "pte-rl-40",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 40,
+      "score": 46,
+      "criteria": {
+        "Content": 50,
+        "Oral Fluency": 42
+      },
+      "fixes": 2,
+      "feedbackChars": 966,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 2351,
+      "completionTokens": 630,
+      "latencyMs": 4934
+    },
+    {
+      "id": "pte-rts-35",
+      "exam": "PTE",
+      "kind": "speaking",
+      "run": 1,
+      "target": 35,
+      "score": 39,
+      "criteria": {
+        "Appropriacy": 50,
+        "Oral Fluency": 26
+      },
+      "fixes": 2,
+      "feedbackChars": 805,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 2265,
+      "completionTokens": 524,
+      "latencyMs": 4631
+    },
+    {
+      "id": "pte-swt-60",
+      "exam": "PTE",
+      "kind": "writing",
+      "run": 1,
+      "target": 60,
+      "score": 63,
+      "criteria": {
+        "Content": 70,
+        "Form": 90,
+        "Grammar": 50,
+        "Vocabulary": 50
+      },
+      "fixes": 2,
+      "feedbackChars": 1000,
+      "model": "anthropic/claude-haiku-5.5",
+      "promptTokens": 1822,
+      "completionTokens": 665,
+      "latencyMs": 3752
+    }
+  ],
+  "validationRetries": 0
+}

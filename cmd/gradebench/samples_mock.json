@@ -1,0 +1,92 @@
+[
+  {
+    "id": "ielts-test-b5-5",
+    "kind": "speaking-test",
+    "exam": "IELTS",
+    "taskName": "Speaking test",
+    "target": 5.5,
+    "turns": [
+      {
+        "part": 1,
+        "question": "Let's talk about your home. Do you live in a house or a flat?",
+        "answer": "I live in a flat with my family. It is in the city centre, near to my office, so it is quite convenient for me.",
+        "seconds": 9
+      },
+      {
+        "part": 1,
+        "question": "What do you like most about it?",
+        "answer": "Uh, I like the balcony because I can see the street and, um, in evening it is very nice. But the kitchen is small, too small for us.",
+        "seconds": 12
+      },
+      {
+        "part": 1,
+        "question": "Do you often cook at home?",
+        "answer": "Not so often. My mother is cooking usually. Sometime on weekend I make noodles or eggs, simple food.",
+        "seconds": 9
+      },
+      {
+        "part": 2,
+        "question": "Describe a trip you enjoyed. You should say where you went, who you went with, what you did, and explain why you enjoyed it.",
+        "answer": "OK, I want to talk about trip to Pokhara. I went there last year with my friends, uh, four friends. We go by bus, it took around seven hour and the road was not good. When we reach there we stay in a hotel near the lake. Next day we did boating in Phewa Lake and it was very beautiful, we can see the mountain reflection in water. Also we went to the, um, World Peace Pagoda, we walked up and it was very tiring but view was amazing. In evening we eat local food and we talk a lot. I enjoyed this trip because I was very busy in my job before and this trip make me relax. Also my friends are very funny so we laugh all the time. I think I want to go again.",
+        "seconds": 95
+      },
+      {
+        "part": 3,
+        "question": "Why do you think people like to travel?",
+        "answer": "I think people like travel because they want to relax and, uh, see new places. In daily life we are always working so travel is good for the mind.",
+        "seconds": 14
+      },
+      {
+        "part": 3,
+        "question": "Do you think tourism always benefits local communities?",
+        "answer": "Mostly yes, because tourist give money to the local people, hotel and shop. But sometime there is, um, a lot of rubbish and the place become dirty. So government should make some rule.",
+        "seconds": 18
+      }
+    ]
+  },
+  {
+    "id": "ielts-test-b7",
+    "kind": "speaking-test",
+    "exam": "IELTS",
+    "taskName": "Speaking test",
+    "target": 7.0,
+    "turns": [
+      {
+        "part": 1,
+        "question": "Let's talk about your home. Do you live in a house or a flat?",
+        "answer": "I live in a fairly modern flat on the outskirts of the city. It's on the sixth floor, so it gets plenty of light, which I really appreciate.",
+        "seconds": 9
+      },
+      {
+        "part": 1,
+        "question": "What do you like most about it?",
+        "answer": "Probably the view, to be honest. On a clear day you can see the hills in the distance, and it makes the place feel a lot less cramped than it actually is.",
+        "seconds": 11
+      },
+      {
+        "part": 1,
+        "question": "Do you often cook at home?",
+        "answer": "Quite often, yes. I try to cook most evenings because it's cheaper and healthier than eating out, although I'll admit I rely on a handful of dishes I know well.",
+        "seconds": 11
+      },
+      {
+        "part": 2,
+        "question": "Describe a trip you enjoyed. You should say where you went, who you went with, what you did, and explain why you enjoyed it.",
+        "answer": "I'd like to talk about a trip I took to Pokhara a couple of years ago with three close friends from university. We'd been planning it for ages, but we kept postponing it because of exams, so when we finally went it felt like a real reward. We took an early bus from Kathmandu, and although the journey was long and fairly bumpy, the scenery along the river made up for it. Once we arrived, we spent most of our time around Phewa Lake. We hired a boat on the first morning, and the reflection of the mountains in the water was genuinely breathtaking. The next day we hiked up to the Peace Pagoda, which was harder than we expected, but the view from the top was worth every step. What made it so enjoyable, I think, was the combination of the setting and the company. We had no schedule and no pressure, and we ended up having long conversations about what we wanted to do after graduating, which I still remember quite vividly.",
+        "seconds": 110
+      },
+      {
+        "part": 3,
+        "question": "Why do you think people like to travel?",
+        "answer": "I think there are a few reasons. For some people it's simply a way of escaping routine and recharging, whereas for others it's more about curiosity, wanting to experience a different culture first-hand rather than just reading about it.",
+        "seconds": 16
+      },
+      {
+        "part": 3,
+        "question": "Do you think tourism always benefits local communities?",
+        "answer": "Not always. It certainly brings income and jobs, but if it isn't managed properly the benefits can go mainly to large companies from outside the area, while local people have to deal with higher prices and environmental damage. So I'd say it depends largely on how it's regulated.",
+        "seconds": 20
+      }
+    ]
+  }
+]
