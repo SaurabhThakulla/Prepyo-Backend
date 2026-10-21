@@ -130,6 +130,7 @@ func pteWritingGuidance(req WritingRequest) string {
 		b.WriteString("Form (0-2): 2 = 50 to 70 words; 1 = 40-49 or 71-100 words; 0 = fewer than 40 or more than 100 words, written in capitals, no punctuation, or only bullet points or very short sentences.\n")
 		b.WriteString(pteGrammarVocabularyLadder)
 		b.WriteString(pteSpellingLadder)
+		b.WriteString("Also add \"misspellings\" to the JSON: every misspelled or mistyped word, copied exactly as the learner wrote it ([] if none). Wrong word forms and grammar slips are not spelling errors; British and American spellings are both correct. Prepyo sets Form and Spelling from the text itself; this list is a fallback.\n")
 	case pteTaskWriteEmail:
 		b.WriteString("Task: Write Email (PTE Core).\n")
 		b.WriteString(pteEmailLadder)

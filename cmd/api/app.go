@@ -25,6 +25,7 @@ import (
 	"github.com/prepyo/backend/internal/leaderboards"
 	"github.com/prepyo/backend/internal/learn"
 	"github.com/prepyo/backend/internal/listeningmock"
+	"github.com/prepyo/backend/internal/media"
 	"github.com/prepyo/backend/internal/mistakes"
 	"github.com/prepyo/backend/internal/mockpapers"
 	"github.com/prepyo/backend/internal/mocks"
@@ -64,6 +65,8 @@ type app struct {
 	cfg  *config.Config
 	pool *pgxpool.Pool
 	log  *slog.Logger
+	// recordings is nil when neither the B2 bucket nor MEDIA_DIR is configured.
+	recordings *media.Recordings
 
 	authService *auth.Service
 	userRepo    *users.Repository
@@ -108,6 +111,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	readingRepo := reading.NewRepository(pool)
 	mistakeRepo := mistakes.NewRepository(pool)
 	evaluationRepo := evaluations.NewRepository(pool)
+	recordings := media.NewRecordings(pool, media.New(cfg), log)
 	notificationRepo := notifications.NewRepository(pool)
 	leaderboardRepo := leaderboards.NewRepository(pool)
 	planRepo := billing.NewRepository(pool)
@@ -140,6 +144,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	authHandler := auth.NewHandler(authService, cfg.SecureCookies, cfg.SessionTTL)
 
 	return &app{
+		recordings:  recordings,
 		cfg:         cfg,
 		pool:        pool,
 		log:         log,
@@ -154,7 +159,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		practiceHandler:      practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, examRepo, xpService, billingService, speakingScorable(gateway), log),
 		mockHandler:          mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, mistakeRepo, log),
 		mistakeHandler:       mistakes.NewHandler(pool, mistakeRepo, xpService, log),
-		evaluationHandler:    evaluations.NewHandler(evaluationService, evaluationRepo, log),
+		evaluationHandler:    evaluations.NewHandler(evaluationService, evaluationRepo, log).WithRecordings(recordings),
 		writingMockHandler:   writingmock.NewHandler(writingMockService, log),
 		speechHandler:        speech.NewHandler(speechService, log),
 		learnHandler:         learn.NewHandler(learn.NewRepository(pool), log),
@@ -170,7 +175,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		billingHandler:       billing.NewHandler(pool, planRepo, billingService, log),
 		referralHandler:      referrals.NewHandler(referralService, log),
 		reportHandler:        report.NewHandler(pool, log),
-		adminHandler:         admin.NewHandler(pool, log),
+		adminHandler:         admin.NewHandler(pool, log).WithQuestionCache(questionRepo.ForgetCached),
 		institutionHandler:   institution.NewHandler(pool, cfg.SessionTTL, cfg.SecureCookies, authHandler.SignInUser, log),
 		mockPapersHandler:    mockPapersHandler,
 		mockPapersBuilder:    mockPapersBuilder,

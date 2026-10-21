@@ -19,16 +19,31 @@ import (
 )
 
 type Handler struct {
-	db  *pgxpool.Pool
-	log *slog.Logger
+	db              *pgxpool.Pool
+	log             *slog.Logger
+	forgetQuestions func()
 }
 
 func NewHandler(db *pgxpool.Pool, log *slog.Logger) *Handler {
 	return &Handler{db: db, log: log}
 }
 
+// WithQuestionCache clears the learner question cache after every admin change.
+func (h *Handler) WithQuestionCache(forget func()) *Handler {
+	h.forgetQuestions = forget
+	return h
+}
+
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+			if r.Method != http.MethodGet && h.forgetQuestions != nil {
+				h.forgetQuestions()
+			}
+		})
+	})
 	r.Get("/metrics", h.metrics)
 	r.Get("/users", h.users)
 	r.Patch("/users/{id}/role", h.setUserRole)

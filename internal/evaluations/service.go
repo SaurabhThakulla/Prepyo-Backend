@@ -3,10 +3,8 @@ package evaluations
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -183,19 +181,7 @@ func (s *Service) EvaluateWriting(ctx context.Context, req Request) (Outcome, er
 		return Outcome{}, err
 	}
 
-	evaluation, usage, err := s.gateway.EvaluateWriting(ctx, ai.WritingRequest{
-		Exam:           question.Exam,
-		TypeID:         question.TypeID,
-		TaskName:       question.TypeName,
-		Prompt:         question.Prompt,
-		FigureData:     question.FigureData,
-		ContextPassage: question.ContextPassage,
-		LearnerText:    text,
-		WordCount:      wordCount,
-		MinimumWords:   minimumWords,
-		MinScore:       version.MinScore,
-		MaxScore:       version.MaxScore,
-	})
+	evaluation, usage, err := s.gateway.EvaluateWriting(ctx, writingRequest(question, version, text, wordCount, minimumWords))
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -269,15 +255,11 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 		return Outcome{}, err
 	}
 
-	material := speakingMaterialOf(question)
-
-	// Read Aloud and Repeat Sentence have one right answer, word for word, so
-	// the recording is transcribed and aligned with its text rather than sent
-	// to a model: the same marking as the mock, at the cost of the
-	// transcription alone, which is a fifth of a grading.
-	if strings.TrimSpace(material.expected) != "" {
-		// The audio rating needs two units; with only one left the answer is still marked, on assumed values.
-		rate := s.gateway.DeliveryRatingAvailable()
+	// Each route is paid for before it runs; Read Aloud's audio rating needs two units, and with only one left the answer is still marked, on assumed values.
+	rate := false
+	switch speakingRouteOf(question) {
+	case routeVerbatim:
+		rate = s.gateway.DeliveryRatingAvailable()
 		if rate {
 			_, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.DeliveryRatedUnits)
 			rate = err == nil
@@ -287,89 +269,29 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 				return Outcome{}, err
 			}
 		}
-		// Gemini rates delivery while it also transcribes; without the rating, scoring falls back to assumed values.
-		var rating *ai.DeliveryRating
-		var ratingUsage ai.Usage
-		rated := make(chan struct{})
-		go func() {
-			defer close(rated)
-			if !rate {
-				return
-			}
-			r, u, err := s.gateway.RateDelivery(ctx, req.Audio, req.AudioFormat, material.expected)
-			ratingUsage = u
-			if err != nil {
-				slog.Warn("delivery rating failed, using assumed values", "error", err)
-				return
-			}
-			rating = &r
-		}()
-		transcript, heard, usage, err := s.gateway.TranscribeMarked(ctx, req.Audio, req.AudioFormat)
-		<-rated
-		if err != nil {
+	case routeShortAnswer:
+		if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.WordMatchUnits); err != nil {
 			return Outcome{}, err
 		}
-		// Pauses come from the browser; the transcription has no timings.
-		delivery := req.Delivery
-		if heard.Measured() {
-			delivery = heard
+	default:
+		if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.UnitsPerGrading); err != nil {
+			return Outcome{}, err
 		}
-		delivery.WordsSpoken = len(strings.Fields(strings.ReplaceAll(transcript, scoring.PauseMark, " ")))
-		evaluation := verbatimEvaluation(question, version, material.expected, strings.TrimSpace(transcript), delivery, rating)
-		usage.Model, usage.PromptVersion = usage.Model+"+verbatim-alignment", verbatimScoringVersion
-		if rating != nil {
-			usage.Model += "+" + ratingUsage.Model
-			usage.PromptTokens += ratingUsage.PromptTokens
-			usage.CompletionTokens += ratingUsage.CompletionTokens
-		}
-		gradingUnits := billing.WordMatchUnits
-		if rating != nil {
-			gradingUnits = billing.DeliveryRatedUnits
-		}
-		slog.Info("read aloud scored", "deliveryModel", ratingUsage.Model, "promptTokens", ratingUsage.PromptTokens,
-			"completionTokens", ratingUsage.CompletionTokens, "deliveryCostUSD", ratingUsage.CostUSD, "rated", rating != nil)
-		return s.persist(ctx, persistParams{
-			User:          req.User,
-			Question:      question,
-			Fingerprint:   fingerprint,
-			Evaluation:    evaluation,
-			Usage:         usage,
-			XPReason:      "Speaking evaluated: " + question.TypeName,
-			GradingUnits:  gradingUnits,
-			GradingSource: "practice-read-repeat",
-		})
 	}
 
-	if _, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.UnitsPerGrading); err != nil {
-		return Outcome{}, err
-	}
-	evaluation, usage, err := s.gateway.EvaluateSpeaking(ctx, ai.SpeakingRequest{
-		Exam:            question.Exam,
-		TaskName:        question.TypeName,
-		Prompt:          question.Prompt,
-		ExpectedText:    material.expected,
-		SourceText:      material.source,
-		ReferenceAnswer: material.reference,
-		AudioBase64:     base64.StdEncoding.EncodeToString(req.Audio),
-		AudioFormat:     req.AudioFormat,
-		DurationSeconds: req.DurationSeconds,
-		Delivery:        req.Delivery,
-		MinScore:        version.MinScore,
-		MaxScore:        version.MaxScore,
-	})
+	scored, err := scoreSpeaking(ctx, s.gateway, question, version, req.Audio, req.AudioFormat, req.Delivery, req.DurationSeconds, rate)
 	if err != nil {
 		return Outcome{}, err
 	}
-
 	return s.persist(ctx, persistParams{
 		User:          req.User,
 		Question:      question,
 		Fingerprint:   fingerprint,
-		Evaluation:    evaluation,
-		Usage:         usage,
+		Evaluation:    scored.evaluation,
+		Usage:         scored.usage,
 		XPReason:      "Speaking evaluated: " + question.TypeName,
-		GradingUnits:  billing.UnitsPerGrading,
-		GradingSource: "practice-speaking",
+		GradingUnits:  scored.units,
+		GradingSource: scored.source,
 	})
 }
 
@@ -449,6 +371,18 @@ func (s *Service) EvaluateSpeakingTranscript(ctx context.Context, req Transcript
 				PromptVersion: verbatimScoringVersion,
 			},
 			XPReason: "Speaking evaluated: " + question.TypeName,
+		})
+	}
+
+	// Answer Short Question with an answer key is matched here, like the verbatim tasks, at no cost.
+	if matchesShortAnswer(question) {
+		return s.persist(ctx, persistParams{
+			User:        req.User,
+			Question:    question,
+			Fingerprint: fingerprint,
+			Evaluation:  shortAnswerEvaluation(question, version, transcript),
+			Usage:       ai.Usage{Provider: "prepyo", Model: "short-answer-match", PromptVersion: shortAnswerScoringVersion},
+			XPReason:    "Speaking evaluated: " + question.TypeName,
 		})
 	}
 
@@ -670,6 +604,15 @@ func fingerprintOf(userID, questionID, text string) []byte {
 	normalised := strings.ToLower(strings.Join(strings.Fields(text), " "))
 	sum := sha256.Sum256([]byte(userID + "\x00" + questionID + "\x00" + normalised))
 	return sum[:]
+}
+
+// gradingSource is the material the grader judges a written answer against:
+// the passage, or for Summarize Spoken Text the lecture transcript.
+func gradingSource(passage, transcript string) string {
+	if strings.TrimSpace(passage) != "" {
+		return passage
+	}
+	return transcript
 }
 
 // fingerprintOfAudio is the same idea for a recording. There is nothing to

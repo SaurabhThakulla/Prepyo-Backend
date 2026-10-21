@@ -12,7 +12,7 @@ import (
 )
 
 // WritingPromptVersion identifies the active writing evaluation prompt version.
-const WritingPromptVersion = "writing.v6" // band ladders, Pearson trait points, score worked out in code.
+const WritingPromptVersion = "writing.v8" // band ladders, Pearson trait points, score worked out in code; SST Form/Spelling and essay Form by rule.
 
 // EvaluationVersion is the evaluation schema version.
 const EvaluationVersion = "v1"
@@ -59,6 +59,7 @@ type evaluationPayload struct {
 		IssueType   string `json:"issueType"`
 		Explanation string `json:"explanation"`
 	} `json:"sentenceFeedback"`
+	Misspellings []string `json:"misspellings"` // Summarize Spoken Text only
 }
 
 const maxValidationAttempts = 2
@@ -157,10 +158,17 @@ func (u *Usage) add(other Usage) {
 func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation, error) {
 	var traits []pteTrait
 	formCap := -1
+	var fixed map[string]int
 	if req.Exam == models.ExamPTE {
 		task := pteWritingTask(req.TypeID, req.TaskName)
 		traits = pteWritingTraits(task)
 		formCap = pteFormFromLength(task, len(strings.Fields(req.LearnerText)))
+		switch task {
+		case pteTaskSummarizeSpokenText:
+			fixed = pteSSTRules(req.LearnerText, req.Prompt+"\n"+req.ContextPassage, p.Misspellings)
+		case pteTaskWriteEssay:
+			fixed = map[string]int{"Form": pteFormByRule(task, req.LearnerText)}
+		}
 	}
 	return validateFeedback(p, feedbackSpec{
 		Exam:       req.Exam,
@@ -172,6 +180,7 @@ func validateWriting(p evaluationPayload, req WritingRequest) (models.Evaluation
 		TypeID:     req.TypeID,
 		PTETraits:  traits,
 		PTEFormCap: formCap,
+		PTEFixed:   fixed,
 	})
 }
 
@@ -193,6 +202,7 @@ type feedbackSpec struct {
 	// Form can score given the response's length, or -1.
 	PTETraits  []pteTrait
 	PTEFormCap int
+	PTEFixed   map[string]int // trait points set in code, replacing the model's
 }
 
 // validateFeedback validates the parsed evaluation payload against the specification.
@@ -257,7 +267,7 @@ func validateFeedback(p evaluationPayload, spec feedbackSpec) (models.Evaluation
 		score = &band
 	}
 	if len(spec.PTETraits) > 0 && score != nil {
-		points, rated, err := ptePointsScore(criteria, spec.PTETraits, spec.PTEFormCap)
+		points, rated, err := ptePointsScore(criteria, spec.PTETraits, spec.PTEFormCap, spec.PTEFixed)
 		if err != nil {
 			return models.Evaluation{}, err
 		}

@@ -70,6 +70,20 @@ type Config struct {
 
 	// WebDistDir is the optional directory path to frontend production build assets.
 	WebDistDir string
+
+	// S3* point at the private Backblaze B2 bucket that holds learners' media.
+	S3Endpoint        string
+	S3Region          string
+	S3Bucket          string
+	S3AccessKeyID     string
+	S3SecretAccessKey string
+	// MediaDir is a local folder used instead of B2, for development.
+	MediaDir string
+}
+
+// S3Enabled reports whether an S3-compatible bucket is fully configured.
+func (c Config) S3Enabled() bool {
+	return c.S3Endpoint != "" && c.S3Bucket != "" && c.S3AccessKeyID != "" && c.S3SecretAccessKey != ""
 }
 
 // BotAPIEnabled reports whether the bot routes should be mounted at all.
@@ -87,7 +101,8 @@ const (
 	// DefaultSpeechModel transcribes recordings; Whisper is no longer used.
 	DefaultSpeechModel = "google/gemini-2.5-flash-lite"
 	// DefaultDeliveryModel hears Read Aloud / Repeat Sentence audio for Pronunciation and Oral Fluency.
-	DefaultDeliveryModel = "google/gemini-2.5-flash"
+	// Gemini 3.7 Flash separated good and weak readings best of 6 audio models (2026-10-21), at 2.5 Flash's cost.
+	DefaultDeliveryModel = "google/gemini-3.7-flash"
 )
 
 // AIModels defines model names for each AI task capability.
@@ -203,6 +218,13 @@ func Load() (*Config, error) {
 		BotAllowedCIDRs: listOr("BOT_ALLOWED_CIDRS", nil),
 
 		WebDistDir: os.Getenv("WEB_DIST_DIR"),
+
+		S3Endpoint:        strings.TrimSpace(os.Getenv("S3_ENDPOINT")),
+		S3Region:          strings.TrimSpace(os.Getenv("S3_REGION")),
+		S3Bucket:          strings.TrimSpace(os.Getenv("S3_BUCKET")),
+		S3AccessKeyID:     strings.TrimSpace(os.Getenv("S3_ACCESS_KEY_ID")),
+		S3SecretAccessKey: strings.TrimSpace(os.Getenv("S3_SECRET_ACCESS_KEY")),
+		MediaDir:          strings.TrimSpace(os.Getenv("MEDIA_DIR")),
 	}
 
 	// A short key on routes that can approve a payment is worse than no routes.

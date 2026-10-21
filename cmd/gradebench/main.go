@@ -88,6 +88,7 @@ func main() {
 	only := flag.String("only", "", "grade only sample ids containing this text")
 	out := flag.String("out", "", "write results JSON here")
 	audio := flag.String("audio", "", "comma-separated recordings to transcribe with Gemini instead of grading")
+	paired := flag.String("paired", "", "paired Alfa samples (file or glob) to grade through the app's scoring path")
 	flag.Parse()
 	loadedCfg, _ := config.Load()
 	key := os.Getenv("AI_API_KEY")
@@ -114,10 +115,18 @@ func main() {
 		AIRequestTimeout: 120 * time.Second,
 		AIMaxTokens:      8000,
 	}
+	// Paired recordings are scored like the app's: transcribed and rated for delivery.
+	cfg.AIModels.Delivery = firstNonEmpty(os.Getenv("AI_MODEL_DELIVERY"), config.DefaultDeliveryModel)
+	cfg.AIModels.Speaking = firstNonEmpty(os.Getenv("AI_MODEL_SPEAKING"), config.DefaultSpeechModel)
+	cfg.SpeakingEvaluated = true
 	log := slog.New(countingHandler{slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})})
 	g := ai.NewGateway(cfg, log)
 	if *audio != "" {
 		transcribe(g, strings.Split(*audio, ","))
+		return
+	}
+	if *paired != "" {
+		runPaired(g, *dir, *paired, *runs, *workers, *out)
 		return
 	}
 

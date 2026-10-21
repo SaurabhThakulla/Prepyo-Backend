@@ -12,9 +12,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/prepyo/backend/internal/database"
+	"github.com/prepyo/backend/internal/media"
 	"github.com/prepyo/backend/internal/models"
 )
 
@@ -28,10 +30,11 @@ func NewRepository(db database.DB) *Repository {
 	return &Repository{db: db}
 }
 
-const selectFields = `
+var selectFields = `
 	id, COALESCE(question_id, ''), exam, skill, evaluation_version, estimated_score,
 	score_confidence, summary, criteria, strengths, weaknesses, sentence_feedback,
-	COALESCE(model_rewrite, ''), transcript, word_marks, created_at`
+	COALESCE(model_rewrite, ''), transcript, word_marks, created_at,
+	recording_key IS NOT NULL AND created_at > now() - make_interval(days => ` + strconv.Itoa(media.RetentionDays) + `)`
 
 type SaveParams struct {
 	UserID      string
@@ -90,7 +93,7 @@ func (r *Repository) Save(ctx context.Context, db database.DB, p SaveParams) (mo
 		p.Usage.PromptTokens, p.Usage.CompletionTokens, p.Usage.LatencyMS, string(wordsJSON),
 	).Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion, &e.EstimatedScore,
 		&e.ScoreConfidence, &e.Summary, &e.Criteria, &e.Strengths, &e.Weaknesses,
-		&e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.Words, &e.CreatedAt)
+		&e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.Words, &e.CreatedAt, &e.HasRecording)
 	if err != nil {
 		return models.Evaluation{}, fmt.Errorf("save evaluation: %w", err)
 	}
@@ -127,7 +130,10 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Evaluatio
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT `+selectFields+` FROM ai_evaluations
+		SELECT `+selectFields+`,
+			COALESCE((SELECT q.title FROM questions q WHERE q.id = ai_evaluations.question_id), ''),
+			COALESCE((SELECT q.type_name FROM questions q WHERE q.id = ai_evaluations.question_id), '')
+		FROM ai_evaluations
 		WHERE user_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2 OFFSET $3`,
@@ -139,10 +145,12 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Evaluatio
 
 	list := []models.Evaluation{}
 	for rows.Next() {
-		e, err := scan(rows)
+		var title, typeName string
+		e, err := scan(rows, &title, &typeName)
 		if err != nil {
 			return nil, 0, err
 		}
+		e.QuestionTitle, e.TypeName = title, typeName
 		list = append(list, e)
 	}
 	return list, total, rows.Err()
@@ -157,10 +165,12 @@ func nonNilStrings(values []string) []string {
 	return values
 }
 
-func scan(row pgx.Row) (models.Evaluation, error) {
+// scan reads selectFields, then any extra columns a query appends.
+func scan(row pgx.Row, extra ...any) (models.Evaluation, error) {
 	var e models.Evaluation
-	err := row.Scan(&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion,
+	err := row.Scan(append([]any{&e.ID, &e.QuestionID, &e.Exam, &e.Skill, &e.EvaluationVersion,
 		&e.EstimatedScore, &e.ScoreConfidence, &e.Summary, &e.Criteria, &e.Strengths,
-		&e.Weaknesses, &e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.Words, &e.CreatedAt)
+		&e.Weaknesses, &e.SentenceFeedback, &e.ModelRewrite, &e.Transcript, &e.Words, &e.CreatedAt,
+		&e.HasRecording}, extra...)...)
 	return onPTEScale(e), err
 }

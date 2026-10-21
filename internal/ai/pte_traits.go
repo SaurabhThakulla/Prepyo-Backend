@@ -97,13 +97,58 @@ func lengthBand(words, lo, hi, outerLo, outerHi int) int {
 	return 0
 }
 
+// pteSSTRules scores Summarize Spoken Text Form and Spelling in code, from the
+// Score Guide's own definitions, so the model cannot drift on them.
+func pteSSTRules(text, source string, misspellings []string) map[string]int {
+	return map[string]int{"Form": pteFormByRule(pteTaskSummarizeSpokenText, text), "Spelling": pteSpellingPoints(text, source, misspellings)}
+}
+
+// pteFormByRule is Form for Summarize Spoken Text and Write Essay: the length
+// band (SST 50-70 / 40-100 words, essay 200-300 / 120-380), and 0 when written
+// in capitals, with no punctuation, or as bullet points / short lines.
+func pteFormByRule(task, text string) int {
+	form := pteFormFromLength(task, len(strings.Fields(text)))
+	if form <= 0 || allCaps(text) || !strings.ContainsAny(text, ".,;:!?") || bulletLines(text) {
+		return 0
+	}
+	return form
+}
+
+func allCaps(text string) bool {
+	return strings.ToUpper(text) == text && strings.ToLower(text) != text
+}
+
+// bulletLines is true when most of three or more lines start with a list
+// marker or end without punctuation, as notes or bullet points do.
+func bulletLines(text string) bool {
+	var lines, bare int
+	for _, l := range strings.Split(text, "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			continue
+		}
+		lines++
+		if strings.IndexAny(l, "-*•·") == 0 || !strings.ContainsAny(l[len(l)-1:], ".,;:!?") {
+			bare++
+		}
+	}
+	return lines >= 3 && bare*2 > lines
+}
+
+// pteSpellingPoints: 2 = no spelling errors, 1 = one, 0 = more (see
+// spellingErrors).
+func pteSpellingPoints(text, source string, misspellings []string) int {
+	return max(0, 2-spellingErrors(text, source, misspellings))
+}
+
 // ptePointsScore checks the reply's traits against Pearson's scales, applies
 // the Content/Form gate and returns the 10-90 estimate: 10 plus 80 times the
 // share of points earned, the same share the PTE mock adds up
 // (ptemock.FractionOfEvaluation). Pearson does not publish its points-to-scale
 // conversion, so the straight line is Prepyo's convention. formCap, when not
-// negative, is the most Form can be given the response's length.
-func ptePointsScore(criteria []models.EvaluationCriterion, traits []pteTrait, formCap int) (float64, []models.EvaluationCriterion, error) {
+// negative, is the most Form can be given the response's length; fixed sets
+// traits worked out in code, replacing the model's points.
+func ptePointsScore(criteria []models.EvaluationCriterion, traits []pteTrait, formCap int, fixed map[string]int) (float64, []models.EvaluationCriterion, error) {
 	if len(criteria) != len(traits) {
 		return 0, nil, fmt.Errorf("return exactly these %d traits: %s", len(traits), pteTraitList(traits))
 	}
@@ -123,6 +168,9 @@ func ptePointsScore(criteria []models.EvaluationCriterion, traits []pteTrait, fo
 		}
 		if t.Name == "Form" && formCap >= 0 && c.Score > float64(formCap) {
 			c.Score = float64(formCap)
+		}
+		if v, ok := fixed[t.Name]; ok {
+			c.Score = float64(v)
 		}
 		c.Name = t.Name
 		if t.Gate && c.Score == 0 {

@@ -23,12 +23,16 @@ const selectFields = `
 	supported_exams, COALESCE(audio_translation, ''), COALESCE(translation_audio_url, '')`
 
 type Repository struct {
-	db database.DB
+	db    database.DB
+	cache *cache
 }
 
 func NewRepository(db database.DB) *Repository {
-	return &Repository{db: db}
+	return &Repository{db: db, cache: newCache()}
 }
+
+// ForgetCached drops every cached question; call it after editing questions.
+func (r *Repository) ForgetCached() { r.cache.clear() }
 
 type ListParams struct {
 	Exam   models.ExamType
@@ -109,14 +113,21 @@ func (r *Repository) List(ctx context.Context, p ListParams) ([]models.Question,
 
 // ByID returns one question by ID. Callers serving learners should use PublicQuestion.
 func (r *Repository) ByID(ctx context.Context, id string) (models.Question, error) {
-	row := r.db.QueryRow(ctx, `SELECT `+selectFields+` FROM questions WHERE id = $1 AND is_published`, id)
-
-	q, err := scan(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return models.Question{}, ErrNotFound
+	q, published, ok := r.cache.get(id)
+	if !ok {
+		row := r.db.QueryRow(ctx, `SELECT is_published, `+selectFields+` FROM questions WHERE id = $1`, id)
+		var err error
+		q, err = scanWithPrefix(row, &published)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.Question{}, ErrNotFound
+		}
+		if err != nil {
+			return models.Question{}, fmt.Errorf("get question: %w", err)
+		}
+		r.cache.put(q, published)
 	}
-	if err != nil {
-		return models.Question{}, fmt.Errorf("get question: %w", err)
+	if !published {
+		return models.Question{}, ErrNotFound
 	}
 	return q, nil
 }
@@ -127,18 +138,32 @@ func (r *Repository) ByIDs(ctx context.Context, ids []string) (map[string]models
 		return map[string]models.Question{}, nil
 	}
 
-	rows, err := r.db.Query(ctx, `SELECT `+selectFields+` FROM questions WHERE id = ANY($1)`, ids)
+	found := make(map[string]models.Question, len(ids))
+	missing := []string{}
+	for _, id := range ids {
+		if q, _, ok := r.cache.get(id); ok {
+			found[id] = q
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return found, nil
+	}
+
+	rows, err := r.db.Query(ctx, `SELECT is_published, `+selectFields+` FROM questions WHERE id = ANY($1)`, missing)
 	if err != nil {
 		return nil, fmt.Errorf("get questions: %w", err)
 	}
 	defer rows.Close()
 
-	found := make(map[string]models.Question, len(ids))
 	for rows.Next() {
-		q, err := scan(rows)
+		var published bool
+		q, err := scanWithPrefix(rows, &published)
 		if err != nil {
 			return nil, err
 		}
+		r.cache.put(q, published)
 		found[q.ID] = q
 	}
 	return found, rows.Err()

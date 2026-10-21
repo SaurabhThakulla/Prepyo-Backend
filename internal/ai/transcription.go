@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -41,17 +42,39 @@ func (g *Gateway) transcribeAudio(ctx context.Context, req SpeakingRequest) (tra
 			{Type: "input_audio", Audio: &audioInput{Data: req.AudioBase64, Format: req.AudioFormat}},
 		}},
 	}
-	raw, usage, err := g.complete(ctx, g.audio, g.models.Speaking, TranscriptionPromptVersion, messages, true)
-	if err != nil {
-		return transcription{}, usage, err
+	// A looping reply hits the cap fast; the transcript it opened with is usually whole.
+	opts := callOptions{maxTokens: transcriptionMaxTokens, keepTruncated: true}
+	var total Usage
+	for attempt := 1; attempt <= 2; attempt++ {
+		raw, usage, err := g.completeWith(ctx, g.audio, g.models.Speaking, TranscriptionPromptVersion, messages, true, opts)
+		total.add(usage)
+		if err != nil && !errors.Is(err, errTruncated) {
+			return transcription{}, total, err
+		}
+		var reply struct {
+			Transcript string `json:"transcript"`
+		}
+		if decodeFirstJSON(raw, &reply) == nil {
+			return transcription{Text: strings.TrimSpace(reply.Transcript)}, total, nil
+		}
+		if err == nil {
+			return transcription{}, total, fmt.Errorf("%w: transcription was not valid JSON", ErrBadOutput)
+		}
+		// Cut off with no whole transcript: a little randomness breaks the loop.
+		opts.temperature = &loopBreakTemperature
 	}
-	var reply struct {
-		Transcript string `json:"transcript"`
-	}
-	if err := json.Unmarshal([]byte(unfence(raw)), &reply); err != nil {
-		return transcription{}, usage, fmt.Errorf("%w: transcription was not valid JSON", ErrBadOutput)
-	}
-	return transcription{Text: strings.TrimSpace(reply.Transcript)}, usage, nil
+	return transcription{}, total, fmt.Errorf("%w: transcription kept repeating itself", ErrBadOutput)
+}
+
+// transcriptionMaxTokens fits a two-minute answer (about 350 words) with room to spare.
+const transcriptionMaxTokens = 1500
+
+var loopBreakTemperature = 0.3
+
+// decodeFirstJSON reads the first JSON value in a reply; Gemini sometimes repeats
+// part of the answer after the closing brace, which is not a reason to fail.
+func decodeFirstJSON(raw string, v any) error {
+	return json.NewDecoder(strings.NewReader(unfence(raw))).Decode(v)
 }
 
 // TranscribeMarked is the transcript with no pause marks: Gemini returns no word timings.
