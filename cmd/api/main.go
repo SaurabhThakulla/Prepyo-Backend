@@ -85,6 +85,9 @@ func run() error {
 	go app.cleanExpiredSessions(ctx)
 	go app.reconcileRoles(ctx)
 	go app.startMockPapersBuilder(ctx)
+	if app.recordings != nil {
+		go app.recordings.RunSweeper(ctx)
+	}
 
 	server := &http.Server{
 		Addr:              "0.0.0.0:" + cfg.Port,

@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/prepyo/backend/internal/ai"
 	"github.com/prepyo/backend/internal/billing"
+	"github.com/prepyo/backend/internal/media"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/internal/scoring"
@@ -18,13 +19,20 @@ import (
 )
 
 type Handler struct {
-	service *Service
-	repo    *Repository
-	log     *slog.Logger
+	service    *Service
+	repo       *Repository
+	log        *slog.Logger
+	recordings *media.Recordings
 }
 
 func NewHandler(service *Service, repo *Repository, log *slog.Logger) *Handler {
 	return &Handler{service: service, repo: repo, log: log}
+}
+
+// WithRecordings keeps speaking recordings for replay; nil leaves them unstored.
+func (h *Handler) WithRecordings(rc *media.Recordings) *Handler {
+	h.recordings = rc
+	return h
 }
 
 func (h *Handler) Routes() chi.Router {
@@ -33,6 +41,9 @@ func (h *Handler) Routes() chi.Router {
 	r.Post("/writing", h.evaluateWriting)
 	r.Post("/speaking", h.evaluateSpeaking)
 	r.Post("/speaking/transcript", h.evaluateSpeakingTranscript)
+	if h.recordings != nil {
+		r.Get("/{id}/recording", h.recordings.Serve)
+	}
 	return r
 }
 
@@ -201,6 +212,9 @@ func (h *Handler) evaluateSpeaking(w http.ResponseWriter, r *http.Request) {
 			"audio": "That recording was too short to give feedback on. Speak for a few seconds and try again.",
 		})
 		return
+	}
+	if h.recordings != nil && !outcome.Reused {
+		go h.recordings.Save(user.ID, outcome.Evaluation.ID, audio, req.Format)
 	}
 
 	httpx.JSON(w, http.StatusCreated, map[string]any{

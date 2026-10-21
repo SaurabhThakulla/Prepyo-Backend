@@ -818,6 +818,11 @@ type Evaluation struct {
 	Words     []WordMark      `json:"words,omitempty"`
 	CreatedAt time.Time       `json:"createdAt"`
 	Usage     EvaluationUsage `json:"usage,omitempty"`
+	// HasRecording is true while the answer's recording can be replayed.
+	HasRecording bool `json:"hasRecording,omitempty"`
+	// QuestionTitle and TypeName are filled on the history list only.
+	QuestionTitle string `json:"questionTitle,omitempty"`
+	TypeName      string `json:"typeName,omitempty"`
 }
 
 // WordMark is one word of a given text: whether it was heard, and a pause after it.
