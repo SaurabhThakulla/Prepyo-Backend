@@ -3,21 +3,23 @@ package ai
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 )
 
 // DeliveryPromptVersion is stamped on usage for audio-rated Pronunciation and Oral Fluency.
-const DeliveryPromptVersion = "pte.delivery.v2"
+const DeliveryPromptVersion = "pte.delivery.v3"
 
-// DeliveryRating is Pronunciation and Oral Fluency on Pearson's 10-90 scale, heard from the audio.
+// DeliveryRating is Pronunciation and Oral Fluency on Pearson's 10-90 scale, heard
+// from the audio, with the given text's words (numbered from 1) the speaker said
+// less than well: Average and Bad.
 type DeliveryRating struct {
-	Pronunciation         int      `json:"pronunciation"`
-	PronunciationFeedback string   `json:"pronunciationFeedback"`
-	Fluency               int      `json:"oralFluency"`
-	FluencyFeedback       string   `json:"oralFluencyFeedback"`
-	Unclear               []string `json:"unclearWords"`
+	Pronunciation         int    `json:"pronunciation"`
+	PronunciationFeedback string `json:"pronunciationFeedback"`
+	Fluency               int    `json:"oralFluency"`
+	FluencyFeedback       string `json:"oralFluencyFeedback"`
+	Average               []int  `json:"averageWords"`
+	Bad                   []int  `json:"badWords"`
 }
 
 // DeliveryRatingAvailable reports whether an audio model is set to rate delivery.
@@ -37,7 +39,7 @@ func (g *Gateway) RateDelivery(ctx context.Context, audio []byte, format, expect
 	messages := []chatMessage{
 		{Role: "system", Content: deliverySystemPrompt},
 		{Role: "user", Content: []contentPart{
-			{Type: "text", Text: "The text the learner was asked to read aloud:\n\"\"\"\n" + strings.TrimSpace(expected) + "\n\"\"\"\nRate the recording."},
+			{Type: "text", Text: "The text the learner was asked to say, word by word:\n" + numberedWords(expected) + "\nRate the recording."},
 			{Type: "input_audio", Audio: &audioInput{Data: base64.StdEncoding.EncodeToString(audio), Format: format}},
 		}},
 	}
@@ -49,7 +51,7 @@ func (g *Gateway) RateDelivery(ctx context.Context, audio []byte, format, expect
 		if err != nil {
 			return DeliveryRating{}, usage, err
 		}
-		rating, problem := parseDeliveryRating(raw)
+		rating, problem := parseDeliveryRating(raw, len(strings.Fields(expected)))
 		if problem == nil {
 			return rating, usage, nil
 		}
@@ -61,9 +63,31 @@ func (g *Gateway) RateDelivery(ctx context.Context, audio []byte, format, expect
 	return DeliveryRating{}, usage, ErrBadOutput
 }
 
-func parseDeliveryRating(raw string) (DeliveryRating, error) {
+// numberedWords lists the text's words as "1 The 2 best ...", so the rating can name a word unambiguously.
+func numberedWords(text string) string {
+	var b strings.Builder
+	for i, w := range strings.Fields(text) {
+		fmt.Fprintf(&b, "%d %s ", i+1, w)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// wordNumbers keeps valid word numbers (1..n) once each, dropping any in skip.
+func wordNumbers(in []int, n int, skip map[int]bool) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, w := range in {
+		if w >= 1 && w <= n && !seen[w] && !skip[w] {
+			seen[w] = true
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func parseDeliveryRating(raw string, words int) (DeliveryRating, error) {
 	var r DeliveryRating
-	if err := json.Unmarshal([]byte(unfence(raw)), &r); err != nil {
+	if err := decodeFirstJSON(raw, &r); err != nil {
 		return DeliveryRating{}, fmt.Errorf("the reply was not valid JSON (%w)", err)
 	}
 	if r.Pronunciation < 10 || r.Pronunciation > 90 || r.Fluency < 10 || r.Fluency > 90 {
@@ -72,30 +96,38 @@ func parseDeliveryRating(raw string) (DeliveryRating, error) {
 	if strings.TrimSpace(r.PronunciationFeedback) == "" || strings.TrimSpace(r.FluencyFeedback) == "" {
 		return DeliveryRating{}, fmt.Errorf("pronunciationFeedback and oralFluencyFeedback must not be empty")
 	}
-	if len(r.Unclear) > 12 {
-		r.Unclear = r.Unclear[:12]
+	r.Bad = wordNumbers(r.Bad, words, nil)
+	bad := map[int]bool{}
+	for _, w := range r.Bad {
+		bad[w] = true
 	}
+	r.Average = wordNumbers(r.Average, words, bad)
 	return r, nil
 }
 
-var deliverySystemPrompt = `You are an experienced PTE Academic examiner rating one spoken response to a Read Aloud or Repeat Sentence task.
-Listen to the audio recording. Rate only HOW it was spoken (delivery), never which words were said: content accuracy is marked separately.
+var deliverySystemPrompt = `You are a strict PTE Academic examiner rating one spoken response to a Read Aloud or Repeat Sentence task, the way Pearson's automated scoring does.
+Listen to the audio recording. Rate HOW it was spoken. Which words were said is checked separately.
 
-Rate Oral Fluency (10-90) and Pronunciation (10-90) directly on Pearson's official 10-90 PTE scale.
+Judge every word of the given text against Pearson's top level: each sound produced the way an expert speaker would in connected speech, correct word stress, natural linking.
+- good: said clearly and correctly, with the right stress, as an expert speaker would.
+- average: understandable, but with a noticeable flaw: a distorted vowel or consonant, a dropped or added ending, wrong word stress, or over-separated, syllable-by-syllable delivery.
+- bad: mispronounced so a listener would hesitate or mishear it, swallowed, mumbled, or not said.
+Judge each word on its own; never mark a word good by default. A learner who has not practised usually has a quarter or more of the words average or bad. A regional accent is fine only where every sound in the word is still clear and correctly stressed.
 
-Oral Fluency (10-90):
-- 79-90: Smooth, natural exam rhythm (120-150 words per minute); appropriate phrasing; no mid-sentence hesitations or false starts.
-- 65-78: Sustained speech with consistent rhythm; natural breath pauses between clauses; minor hesitations without stopping the overall flow.
-- 50-64: Noticeable uneven rhythm or hesitations; reading word-by-word; several mid-sentence pauses.
-- 30-49: Frequent hesitations, repeated words, choppy phrasing, or long silences.
-- 10-29: Extremely slow, halting, isolated single words, or mostly silent.
+Pronunciation (10-90), on Pearson's scale:
+- 79-90: native-like; all sounds clear, stress fully appropriate, natural connected speech. Very few average words, no bad ones.
+- 65-78: advanced; most sounds correct, a few consistent errors in sounds or stress.
+- 50-64: good; clearly understandable but many words average, some bad.
+- 30-49: intermediate; frequent distortions, a listener must work to follow.
+- 10-29: mostly hard to understand.
 
-Pronunciation (10-90):
-- 79-90: Every word and sound easily understood by any listener; clear vowel and consonant articulation; standard word and sentence stress.
-- 65-78: Easily intelligible throughout; vowels and consonants are clear. Natural regional accents (e.g. South Asian, Latin American, East Asian) are completely acceptable and NOT penalized as long as words are clear.
-- 50-64: Speech is mostly intelligible, but some vowel distortions, omitted word endings, or non-standard stress make a few words unclear.
-- 30-49: Many distorted sounds; listener must strain to follow; about one third of words hard to decipher.
-- 10-29: More than half of the words unintelligible or inaudible.
+Oral Fluency (10-90), on Pearson's scale:
+- 79-90: smooth rhythm and phrasing, natural sentence stress and intonation, no hesitations, repetitions or false starts.
+- 65-78: acceptable rhythm with some uneven phrasing or one or two hesitations.
+- 50-64: uneven or flat, monotone delivery; word-by-word reading; several hesitations or self-corrections.
+- 30-49: choppy, frequent hesitations, long pauses or repeated words.
+- 10-29: halting, isolated words, mostly silence.
+Speed alone is not fluency: a fast, flat reading with no phrasing is at most 64.
 
-Reply with JSON only:
-{"pronunciation": <whole number 10-90>, "pronunciationFeedback": "<one or two sentences on sounds or word stress to polish>", "oralFluency": <whole number 10-90>, "oralFluencyFeedback": "<one or two sentences on rhythm, phrasing and pacing>", "unclearWords": ["<words from the text that were mispronounced or hard to understand>"]}`
+Reply with JSON only, giving word numbers from the numbered text:
+{"pronunciation": <whole number 10-90>, "pronunciationFeedback": "<one or two sentences on the sounds or stress to fix>", "oralFluency": <whole number 10-90>, "oralFluencyFeedback": "<one or two sentences on rhythm, phrasing and intonation>", "averageWords": [<numbers of the words said with a flaw>], "badWords": [<numbers of the words mispronounced or not said>]}`

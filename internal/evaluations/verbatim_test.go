@@ -83,9 +83,10 @@ func TestVerbatimEvaluationPhytoplanktonRecording(t *testing.T) {
 	delivery := scoring.Delivery{DurationSeconds: 23, WordsSpoken: 38, PauseCount: 2, LongestPauseSeconds: 0.9, SpeakingRatio: 0.8}
 
 	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), given, heard, delivery, nil)
-	// Content 74 (4 of 5), Pronunciation 65 (assumed), Fluency 38 (99 wpm & 2 pauses): (74 + 65 + 38)/3 = 59.
-	if *evaluation.EstimatedScore != 59 {
-		t.Errorf("scored %.0f, want 59", *evaluation.EstimatedScore)
+	// Content 79 (32 of 37 words without an error), Pronunciation 65 (assumed),
+	// Fluency 38 (99 wpm & 2 pauses) x (1 - 2 x 5/37) = 28: (79 + 65 + 28)/3 = 57.
+	if *evaluation.EstimatedScore != 57 {
+		t.Errorf("scored %.0f, want 57", *evaluation.EstimatedScore)
 	}
 	missed := 0
 	for _, w := range evaluation.Words {
@@ -99,33 +100,34 @@ func TestVerbatimEvaluationPhytoplanktonRecording(t *testing.T) {
 }
 
 func TestVerbatimEvaluationUsesTheAudioRating(t *testing.T) {
-	rating := &ai.DeliveryRating{Pronunciation: 75, PronunciationFeedback: "Stress in phytoplankton.", Fluency: 80, FluencyFeedback: "Word by word.", Unclear: []string{"flat"}}
+	rating := &ai.DeliveryRating{Pronunciation: 75, PronunciationFeedback: "Stress in phytoplankton.", Fluency: 80, FluencyFeedback: "Word by word.", Average: []int{2}}
 	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, scoring.Delivery{}, rating)
 
-	// Pronunciation from the words heard clearly: 7 of 8 said words clear is 65.
-	// Content 90 + Pronunciation 65 + Fluency 80 (the model's, nothing measured): (90 + 65 + 80)/3 = 78.
-	if *evaluation.EstimatedScore != 78 || evaluation.Criteria[1].Score != 65 {
-		t.Errorf("scored %.0f with pronunciation %.0f, want 78 and 65", *evaluation.EstimatedScore, evaluation.Criteria[1].Score)
+	// Pronunciation: grades 7 good + 1 average of 8 is 83, the rating says 75: 79.
+	// Content 90 + Pronunciation 79 + Fluency 80 (the model's, nothing measured): (90 + 79 + 80)/3 = 83.
+	if *evaluation.EstimatedScore != 83 || evaluation.Criteria[1].Score != 79 {
+		t.Errorf("scored %.0f with pronunciation %.0f, want 83 and 79", *evaluation.EstimatedScore, evaluation.Criteria[1].Score)
 	}
 	if evaluation.Criteria[1].Feedback != "Stress in phytoplankton." || evaluation.ScoreConfidence != "medium" {
 		t.Errorf("rating not used: %+v, confidence %s", evaluation.Criteria[1], evaluation.ScoreConfidence)
 	}
 	if !evaluation.Words[1].Unclear || evaluation.Words[0].Unclear {
-		t.Errorf("unclear marks = %+v", evaluation.Words[:2])
+		t.Errorf("average marks = %+v", evaluation.Words[:2])
 	}
 }
 
-func TestVerbatimEvaluationPrefersMeasuredFluency(t *testing.T) {
-	rating := &ai.DeliveryRating{Pronunciation: 58, PronunciationFeedback: "Clear.", Fluency: 58, FluencyFeedback: "Uneven.", Unclear: nil}
+func TestVerbatimEvaluationBlendsMeasuredAndRatedFluency(t *testing.T) {
+	rating := &ai.DeliveryRating{Pronunciation: 58, PronunciationFeedback: "Clear.", Fluency: 58, FluencyFeedback: "Flat."}
 	smooth := scoring.Delivery{DurationSeconds: 4, WordsSpoken: 8, SpeakingRatio: 0.9}
 	evaluation := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, smooth, rating)
 
-	// No pauses (5 of 5) beats the model's 58, and every word heard clearly is 90.
-	if evaluation.Criteria[1].Score != 90 || evaluation.Criteria[2].Score != 90 || *evaluation.EstimatedScore != 90 {
-		t.Errorf("criteria %+v, estimate %.0f, want 90 across", evaluation.Criteria, *evaluation.EstimatedScore)
+	// No pauses measures 90, the rating hears 58: fluency 74. Every word good (90) with the rating's 58: 74.
+	if evaluation.Criteria[1].Score != 74 || evaluation.Criteria[2].Score != 74 || *evaluation.EstimatedScore != 79 {
+		t.Errorf("criteria %+v, estimate %.0f, want pronunciation 74, fluency 74, overall 79", evaluation.Criteria, *evaluation.EstimatedScore)
 	}
 
 	halting := scoring.Delivery{DurationSeconds: 4, WordsSpoken: 8, SpeakingRatio: 0.9, PauseCount: 4}
+	// The rating (58) only ever lowers fluency, so four pauses keep their measured 34.
 	if got := verbatimEvaluation(pteQuestion(), pteVersion(), passage, passage, halting, rating).Criteria[2].Score; got != 34 {
 		t.Errorf("fluency with four pauses = %.0f, want 34", got)
 	}

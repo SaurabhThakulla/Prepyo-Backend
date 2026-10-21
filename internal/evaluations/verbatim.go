@@ -12,15 +12,16 @@ import (
 
 // verbatimScoringVersion is stamped on evaluations produced by alignment rather
 // than by a model, so stored feedback stays traceable to how it was made.
-const verbatimScoringVersion = "verbatim.v4"
+const verbatimScoringVersion = "verbatim.v7"
 
 // assumedScore stands in for a trait Prepyo could not measure: the competent baseline of Pearson's 10-90 scale.
 const assumedScore = 65.0
 
 // verbatimEvaluation marks Read Aloud and Repeat Sentence on Pearson's three
-// traits (Score Guide): Content from the alignment, Oral Fluency from
-// the measured pauses and pace (or audio rating), Pronunciation from the share
-// of said words the audio rating heard clearly (or its own number).
+// traits (Score Guide): Content from the alignment (a word the audio rating
+// heard as bad counts as not said), Pronunciation from the audio rating's
+// good/average/bad word grades, Oral Fluency from the measured pauses and pace
+// averaged with the rating's own fluency (which hears flat, word-by-word reading).
 func verbatimEvaluation(
 	question models.Question,
 	version models.ExamVersion,
@@ -30,6 +31,11 @@ func verbatimEvaluation(
 ) models.Evaluation {
 	alignment := scoring.ScoreVerbatim(expected, spoken)
 	scale := scoring.Scale{Min: version.MinScore, Max: version.MaxScore, Step: version.ScoreStep}
+	misheard := heardAsOther(alignment)
+	var grades wordGrades
+	if rating != nil {
+		grades = applyWordGrades(&alignment, rating)
+	}
 	content, contentMax := verbatimContentPoints(question.TypeID, alignment)
 
 	// Traits are shown on the exam's 10-90 scale.
@@ -41,6 +47,10 @@ func verbatimEvaluation(
 	}
 
 	contentScore := onScale(content, contentMax)
+	if !strings.Contains(question.TypeID, "repeat-sentence") && content > 0 {
+		// Read Aloud: the straight share of words without an error, not rounded to 0-5 first.
+		contentScore = math.Round(version.MinScore + (version.MaxScore-version.MinScore)*readAloudShare(alignment))
+	}
 
 	fluencyScore, fluencyNote := assumedScore, "Your pauses and pace could not be measured on this recording, so this counts as 65 of 90, a baseline estimate."
 	if delivery.Measured() {
@@ -49,13 +59,10 @@ func verbatimEvaluation(
 	pronunciationScore, pronunciationFeedback := assumedScore, pronunciationNote(alignment)
 	confidence := "low"
 	if rating != nil {
-		// The audio model's own 10-90 numbers barely move (58 for most readings), so
-		// they are used only where nothing better exists: fluency without browser
-		// timings, pronunciation with too few words heard to count.
-		markUnclear(alignment.Marks, rating.Unclear)
+		// Word grades and the overall rating are each noisy alone; the mean of both is steadier.
 		pronunciationScore = float64(rating.Pronunciation)
-		if score, ok := clearWordsScore(alignment.Marks); ok {
-			pronunciationScore = score
+		if score, ok := grades.score(misheard); ok {
+			pronunciationScore = math.Round((score + pronunciationScore) / 2)
 		}
 		pronunciationFeedback = rating.PronunciationFeedback
 		if !delivery.Measured() {
@@ -63,6 +70,19 @@ func verbatimEvaluation(
 			fluencyNote = rating.FluencyFeedback
 		}
 		confidence = "medium"
+	}
+	// A changed, added or badly said word is a stumble the timings cannot see;
+	// a word left out is a Content error only.
+	if stumbles := alignment.Inserted + grades.bad; stumbles > 0 && alignment.Expected > 0 {
+		kept := math.Max(fluencyKeptFloor, 1-fluencyErrorWeight*float64(stumbles)/float64(alignment.Expected))
+		cut := math.Round(fluencyScore * (1 - kept))
+		fluencyScore = math.Max(version.MinScore, fluencyScore-cut)
+		fluencyNote += fmt.Sprintf(" %d words said wrongly or unclearly broke the flow (−%.0f).", stumbles, cut)
+	}
+	// Pauses and pace cannot hear flat, word-by-word reading; the rating can, so it may only lower the mark.
+	if rating != nil && delivery.Measured() && float64(rating.Fluency) < fluencyScore {
+		fluencyScore = math.Round((fluencyScore + float64(rating.Fluency)) / 2)
+		fluencyNote += " " + rating.FluencyFeedback
 	}
 	// Pearson gives no points at all when Content is 0.
 	if content == 0 {
@@ -115,36 +135,97 @@ func verbatimContentPoints(typeID string, a scoring.VerbatimResult) (points, out
 		}
 		return 0, 3
 	}
-	// Read Aloud counts errors against the text's length; Prepyo puts that share on 0-5.
-	share := float64(a.Expected-a.Errors()) / float64(a.Expected)
-	return int(math.Round(5 * math.Max(0, share))), 5
+	// Read Aloud counts errors against the text's length; 0-5 here only decides the zero gate.
+	return int(math.Round(5 * readAloudShare(a))), 5
 }
 
-// Fewest words said for the share heard clearly to stand for Pronunciation.
+// readAloudShare is Pearson's Read Aloud content: the share of the text's
+// words left after each replaced, left-out or added word counts one error.
+func readAloudShare(a scoring.VerbatimResult) float64 {
+	return math.Max(0, float64(a.Expected-a.Errors())/float64(a.Expected))
+}
+
+// fluencyErrorWeight scales Oral Fluency down by twice the share of words in
+// error: Pearson's fluency counts hesitations, repetitions and false starts,
+// which a wrong word usually is. On the same readings Alfa gave 57 with 9 of 54
+// wrong (this gives 60) and 48 with 13 (47); APEUni 32-41 on a slow reading (28).
+const fluencyErrorWeight = 2.0
+
+// fluencyKeptFloor is the least of the fluency mark word errors leave: a
+// misread passage is a Content problem first.
+const fluencyKeptFloor = 0.4
+
+// Fewest words graded for the grades to stand for Pronunciation.
 const minWordsForClearShare = 3
 
-// Share of said words heard clearly at which Pronunciation bottoms out at 10;
-// from there it rises linearly to 90 when every said word was clear.
-const clearShareFloor = 0.6
+// Share of word points (good 1, average 1/2) at which Pronunciation bottoms out
+// at 10; from there it rises linearly to 90 when every word was good.
+const gradeShareFloor = 0.3
 
-// clearWordsScore is Pronunciation on 10-90 from the words said that the audio
-// rating did not flag as unclear. Missing words are left to Content, not counted twice.
-func clearWordsScore(marks []models.WordMark) (float64, bool) {
-	said, clear := 0, 0
-	for _, m := range marks {
+// heardAsOther counts given words recognised as a different word (a missed
+// word paired with an added one), usually a dropped ending or a blurred sound.
+func heardAsOther(a scoring.VerbatimResult) int {
+	return min(a.Expected-a.Matched, a.Inserted)
+}
+
+// maxShownAverageShare is the most of the said words shown as unclear; above it
+// the rating has marked words wholesale rather than picked the weak ones.
+const maxShownAverageShare = 0.4
+
+// wordGrades counts the audio rating's grades over the words that were said.
+type wordGrades struct{ good, average, bad int }
+
+// applyWordGrades marks average words unclear and takes bad ones out of what
+// was said, so they count against Content as Alfa-style "bad" words do.
+func applyWordGrades(a *scoring.VerbatimResult, r *ai.DeliveryRating) wordGrades {
+	var g wordGrades
+	grade := map[int]string{}
+	for _, n := range r.Average {
+		grade[n-1] = "average"
+	}
+	for _, n := range r.Bad {
+		grade[n-1] = "bad"
+	}
+	for i, m := range a.Marks {
 		if !m.Said {
 			continue
 		}
-		said++
-		if !m.Unclear {
-			clear++
+		switch grade[i] {
+		case "bad":
+			g.bad++
+			a.Marks[i].Said = false
+			a.Matched = max(0, a.Matched-1)
+			if len(a.Missed) < 8 {
+				a.Missed = append(a.Missed, strings.Trim(m.Text, ".,;:!?\"'()"))
+			}
+		case "average":
+			g.average++
+			a.Marks[i].Unclear = true
+		default:
+			g.good++
 		}
 	}
-	if said < minWordsForClearShare {
+	// Grading nearly every word average singles nothing out: keep it in the score, not the colours.
+	if said := g.good + g.average; said > 0 && float64(g.average) > maxShownAverageShare*float64(said) {
+		for i := range a.Marks {
+			a.Marks[i].Unclear = false
+		}
+	}
+	if a.Expected > 0 {
+		a.Accuracy = float64(a.Matched) / float64(a.Expected)
+	}
+	return g
+}
+
+// score is Pronunciation on 10-90 from the grades: good 1, average 1/2, bad 0,
+// and a word heard as another word 0. Words simply left out stay with Content.
+func (g wordGrades) score(misheard int) (float64, bool) {
+	words := g.good + g.average + g.bad + misheard
+	if words < minWordsForClearShare {
 		return 0, false
 	}
-	share := (float64(clear)/float64(said) - clearShareFloor) / (1 - clearShareFloor)
-	return math.Round(10 + 80*math.Min(1, math.Max(0, share))), true
+	share := (float64(g.good) + 0.5*float64(g.average)) / float64(words)
+	return math.Round(10 + 80*math.Min(1, math.Max(0, (share-gradeShareFloor)/(1-gradeShareFloor)))), true
 }
 
 func pronunciationNote(a scoring.VerbatimResult) string {
@@ -163,19 +244,6 @@ func fluencyTip(d scoring.Delivery) string {
 		return "Aim for a natural speaking pace, about 120-160 words a minute."
 	}
 	return "Keep this smooth, even rhythm."
-}
-
-// markUnclear flags the given words the audio rating found hard to understand.
-func markUnclear(marks []models.WordMark, unclear []string) {
-	want := map[string]bool{}
-	for _, w := range unclear {
-		want[strings.ToLower(strings.Trim(w, ".,;:!?\"'()"))] = true
-	}
-	for i, m := range marks {
-		if m.Said && want[strings.ToLower(strings.Trim(m.Text, ".,;:!?\"'()"))] {
-			marks[i].Unclear = true
-		}
-	}
 }
 
 func verbatimSummary(question models.Question, alignment scoring.VerbatimResult, delivery scoring.Delivery, heard bool) string {

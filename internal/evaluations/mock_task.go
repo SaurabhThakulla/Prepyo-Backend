@@ -53,7 +53,7 @@ func (s *Service) EvaluateMockTask(ctx context.Context, user models.User, questi
 			TaskName:       question.TypeName,
 			Prompt:         question.Prompt,
 			FigureData:     question.FigureData,
-			ContextPassage: question.ContextPassage,
+			ContextPassage: gradingSource(question.ContextPassage, question.AudioTranscript),
 			LearnerText:    text,
 			WordCount:      words,
 			MinimumWords:   ai.IELTSMinimumWords(question.TypeID, question.TypeName),

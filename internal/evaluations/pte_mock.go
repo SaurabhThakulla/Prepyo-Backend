@@ -37,7 +37,7 @@ func (s *Service) EvaluatePTEMockWriting(ctx context.Context, userID string, que
 		TaskName:       question.TypeName,
 		Prompt:         question.Prompt,
 		FigureData:     question.FigureData,
-		ContextPassage: question.ContextPassage,
+		ContextPassage: gradingSource(question.ContextPassage, question.AudioTranscript),
 		LearnerText:    text,
 		WordCount:      len(strings.Fields(text)),
 		MinScore:       version.MinScore,

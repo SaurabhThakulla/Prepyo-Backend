@@ -132,7 +132,14 @@ type chatRequest struct {
 
 // reasoning is OpenRouter's switch for a model's hidden thinking tokens.
 type reasoning struct {
-	Enabled bool `json:"enabled"`
+	Enabled bool   `json:"enabled"`
+	Effort  string `json:"effort,omitempty"`
+}
+
+// reasoningRequired reports a model that refuses to run with thinking switched off
+// (Gemini Pro and newer Flash): such a call is sent again at the lowest effort.
+func reasoningRequired(err error) bool {
+	return errors.Is(err, errPermanent) && strings.Contains(err.Error(), "Reasoning is mandatory")
 }
 
 type chatMessage struct {
@@ -217,10 +224,29 @@ func fallbackCandidates(primary string, isAudio bool) []string {
 	return result
 }
 
+// callOptions adjust one request: a tighter output cap, a temperature, and
+// whether a reply cut off at the cap is handed back (with errTruncated) rather
+// than retried.
+type callOptions struct {
+	maxTokens     int
+	temperature   *float64
+	keepTruncated bool
+}
+
+// reasoningTokenRoom is added to the output cap when a model insists on thinking.
+const reasoningTokenRoom = 4000
+
+// errTruncated marks a reply that stopped at the output cap.
+var errTruncated = errors.New("provider response was truncated")
+
 // complete sends one chat request and returns the assistant text plus usage.
 // If the primary model fails or is out of capacity, it automatically falls back
 // to other available models in the pool.
 func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion string, messages []chatMessage, wantJSON bool) (string, Usage, error) {
+	return g.completeWith(ctx, p, model, promptVersion, messages, wantJSON, callOptions{})
+}
+
+func (g *Gateway) completeWith(ctx context.Context, p provider, model, promptVersion string, messages []chatMessage, wantJSON bool, opts callOptions) (string, Usage, error) {
 	if !p.configured() {
 		return "", Usage{}, ErrUnavailable
 	}
@@ -271,6 +297,12 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 				payload.Messages = withCachedSystemPrompt(messages)
 			}
 		}
+		if opts.maxTokens > 0 {
+			payload.MaxTokens = opts.maxTokens
+		}
+		if opts.temperature != nil {
+			payload.Temperature = *opts.temperature
+		}
 
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -281,13 +313,24 @@ func (g *Gateway) complete(ctx context.Context, p provider, model, promptVersion
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			started := time.Now()
 			text, usage, err := g.send(ctx, p, body, candidateModel, promptVersion, started)
-			if err == nil {
-				return text, usage, nil
+			if err == nil || (opts.keepTruncated && errors.Is(err, errTruncated)) {
+				return text, usage, err
 			}
 			lastErr = err
 
 			if ctx.Err() != nil {
 				return "", Usage{}, ErrUnavailable
+			}
+			if reasoningRequired(err) && payload.Reasoning != nil && !payload.Reasoning.Enabled {
+				payload.Reasoning = &reasoning{Enabled: true, Effort: "low"}
+				if payload.MaxTokens > 0 {
+					payload.MaxTokens += reasoningTokenRoom // thinking counts against the cap
+				}
+				if body, err = json.Marshal(payload); err != nil {
+					return "", Usage{}, fmt.Errorf("encode ai request: %w", err)
+				}
+				attempt--
+				continue
 			}
 			// A host that never sends headers is down for every model on it,
 			// not just this one. Walking the candidate list costs the learner
@@ -379,10 +422,6 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 	if len(parsed.Choices) == 0 {
 		return "", Usage{}, errors.New("provider returned no choices")
 	}
-	if parsed.Choices[0].FinishReason == "length" {
-		return "", Usage{}, errors.New("provider response was truncated")
-	}
-
 	usage := Usage{
 		Provider:         p.name,
 		Model:            model,
@@ -391,6 +430,9 @@ func (g *Gateway) send(ctx context.Context, p provider, body []byte, model, prom
 		CompletionTokens: parsed.Usage.CompletionTokens,
 		CostUSD:          parsed.Usage.Cost,
 		LatencyMS:        int(time.Since(started).Milliseconds()),
+	}
+	if parsed.Choices[0].FinishReason == "length" {
+		return parsed.Choices[0].Message.Content, usage, errTruncated
 	}
 	return parsed.Choices[0].Message.Content, usage, nil
 }
