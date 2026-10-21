@@ -175,7 +175,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		billingHandler:       billing.NewHandler(pool, planRepo, billingService, log),
 		referralHandler:      referrals.NewHandler(referralService, log),
 		reportHandler:        report.NewHandler(pool, log),
-		adminHandler:         admin.NewHandler(pool, log),
+		adminHandler:         admin.NewHandler(pool, log).WithQuestionCache(questionRepo.ForgetCached),
 		institutionHandler:   institution.NewHandler(pool, cfg.SessionTTL, cfg.SecureCookies, authHandler.SignInUser, log),
 		mockPapersHandler:    mockPapersHandler,
 		mockPapersBuilder:    mockPapersBuilder,
