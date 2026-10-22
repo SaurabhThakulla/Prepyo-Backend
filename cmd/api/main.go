@@ -20,6 +20,14 @@ import (
 )
 
 func main() {
+	// `server assets ...` moves question files to the media bucket instead of serving.
+	if len(os.Args) > 1 && os.Args[1] == "assets" {
+		if err := runAssets(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "prepyo assets:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// run returns an error rather than exiting inline, so deferred cleanup
 	// such as closing the connection pool actually runs.
 	if err := run(); err != nil {
