@@ -259,7 +259,7 @@ func (s *Service) EvaluateSpeaking(ctx context.Context, req SpeakingRequest) (Ou
 	rate := false
 	switch speakingRouteOf(question) {
 	case routeVerbatim:
-		rate = s.gateway.DeliveryRatingAvailable()
+		rate = DeliveryRatingAvailable(s.gateway)
 		if rate {
 			_, err := s.billing.CheckAIGradings(ctx, s.db, req.User, billing.DeliveryRatedUnits)
 			rate = err == nil

@@ -32,6 +32,7 @@ import (
 	"github.com/prepyo/backend/internal/notifications"
 	"github.com/prepyo/backend/internal/practice"
 	"github.com/prepyo/backend/internal/progress"
+	"github.com/prepyo/backend/internal/pronounce"
 	"github.com/prepyo/backend/internal/ptemock"
 	"github.com/prepyo/backend/internal/questions"
 	"github.com/prepyo/backend/internal/reading"
@@ -111,7 +112,8 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	readingRepo := reading.NewRepository(pool)
 	mistakeRepo := mistakes.NewRepository(pool)
 	evaluationRepo := evaluations.NewRepository(pool)
-	recordings := media.NewRecordings(pool, media.New(cfg), log)
+	mediaStore := media.New(cfg)
+	recordings := media.NewRecordings(pool, mediaStore, log)
 	notificationRepo := notifications.NewRepository(pool)
 	leaderboardRepo := leaderboards.NewRepository(pool)
 	planRepo := billing.NewRepository(pool)
@@ -125,6 +127,10 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	billingService := billing.NewService(planRepo, notificationRepo)
 	progressService := progress.NewService(examRepo)
 	gateway := ai.NewGateway(cfg, log)
+	// Read Aloud and Repeat Sentence pronunciation from the self-hosted scorer, Gemini as fallback.
+	scorer := pronounce.New(cfg.PronounceURL, cfg.PronounceKey, log)
+	evaluations.UsePronunciationScorer(scorer)
+	scorer.KeepWarm(context.Background(), 4*time.Minute)
 	evaluationService := evaluations.NewService(pool, evaluationRepo, questionRepo, examRepo, billingService, gateway, xpService)
 	readingService := reading.NewService(pool, readingRepo, questionRepo, mockRepo, examRepo, xpService, billingService, mistakeRepo)
 	writingMockService := writingmock.NewService(pool, questionRepo, mockRepo, billingService, xpService, evaluationService)
@@ -154,7 +160,7 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		authHandler:          authHandler,
 		userHandler:          users.NewHandler(pool, userRepo, progressService, billingService, log),
 		examHandler:          exams.NewHandler(examRepo, log),
-		questionHandler:      questions.NewHandler(questionRepo, log).WithSpeech(speechService),
+		questionHandler:      questions.NewHandler(questionRepo, log).WithSpeech(speechService).WithStore(mediaStore),
 		readingHandler:       reading.NewHandler(readingService, readingRepo, log),
 		practiceHandler:      practice.NewHandler(pool, practiceRepo, questionRepo, mistakeRepo, examRepo, xpService, billingService, speakingScorable(gateway), log),
 		mockHandler:          mocks.NewHandler(pool, mockRepo, questionRepo, examRepo, xpService, billingService, mistakeRepo, log),

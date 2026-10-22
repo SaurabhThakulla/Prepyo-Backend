@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/prepyo/backend/internal/models"
-	"github.com/prepyo/backend/internal/scoring"
 )
 
 // A scored IELTS practice response requires evidence for all four criteria.
@@ -49,7 +48,7 @@ func validateIELTSCriteria(criteria []models.EvaluationCriterion, spec feedbackS
 		required[key] = true
 		sum += c.Score
 	}
-	// Combining the criteria with the overall-band rounding rule is Prepyo's
-	// convention for a single task; IELTS does not publish a per-task rule.
-	return scoring.RoundIELTSBand(sum / float64(wanted)), nil
+	// IELTS publishes no per-task rule, so the criteria mean is rounded down to
+	// the half band (6.75 is 6.5): the model's whole bands run generous.
+	return math.Floor(2*sum/float64(wanted)) / 2, nil
 }

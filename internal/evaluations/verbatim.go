@@ -12,7 +12,7 @@ import (
 
 // verbatimScoringVersion is stamped on evaluations produced by alignment rather
 // than by a model, so stored feedback stays traceable to how it was made.
-const verbatimScoringVersion = "verbatim.v7"
+const verbatimScoringVersion = "verbatim.v9"
 
 // assumedScore stands in for a trait Prepyo could not measure: the competent baseline of Pearson's 10-90 scale.
 const assumedScore = 65.0
@@ -61,26 +61,34 @@ func verbatimEvaluation(
 	if rating != nil {
 		// Word grades and the overall rating are each noisy alone; the mean of both is steadier.
 		pronunciationScore = float64(rating.Pronunciation)
-		if score, ok := grades.score(misheard); ok {
+		if score, ok := grades.scorerScore(misheard); ok && rating.WordScored {
+			pronunciationScore = score // the scorer's per-sound grades stand on their own
+		} else if score, ok := grades.score(misheard); ok {
 			pronunciationScore = math.Round((score + pronunciationScore) / 2)
 		}
 		pronunciationFeedback = rating.PronunciationFeedback
-		if !delivery.Measured() {
+		if !delivery.Measured() && rating.Fluency > 0 {
 			fluencyScore = float64(rating.Fluency)
 			fluencyNote = rating.FluencyFeedback
 		}
 		confidence = "medium"
 	}
 	// A changed, added or badly said word is a stumble the timings cannot see;
-	// a word left out is a Content error only.
-	if stumbles := alignment.Inserted + grades.bad; stumbles > 0 && alignment.Expected > 0 {
-		kept := math.Max(fluencyKeptFloor, 1-fluencyErrorWeight*float64(stumbles)/float64(alignment.Expected))
+	// a word left out is a Content error only. On the scorer path an unclear word counts half: nothing else hears rhythm.
+	stumbles := alignment.Inserted + grades.bad
+	weight := float64(stumbles)
+	if rating != nil && rating.WordScored {
+		stumbles += grades.average
+		weight += 0.5 * float64(grades.average)
+	}
+	if stumbles > 0 && alignment.Expected > 0 {
+		kept := math.Max(fluencyKeptFloor, 1-fluencyErrorWeight*weight/float64(alignment.Expected))
 		cut := math.Round(fluencyScore * (1 - kept))
 		fluencyScore = math.Max(version.MinScore, fluencyScore-cut)
 		fluencyNote += fmt.Sprintf(" %d words said wrongly or unclearly broke the flow (−%.0f).", stumbles, cut)
 	}
 	// Pauses and pace cannot hear flat, word-by-word reading; the rating can, so it may only lower the mark.
-	if rating != nil && delivery.Measured() && float64(rating.Fluency) < fluencyScore {
+	if rating != nil && delivery.Measured() && rating.Fluency > 0 && float64(rating.Fluency) < fluencyScore {
 		fluencyScore = math.Round((fluencyScore + float64(rating.Fluency)) / 2)
 		fluencyNote += " " + rating.FluencyFeedback
 	}
@@ -226,6 +234,21 @@ func (g wordGrades) score(misheard int) (float64, bool) {
 	}
 	share := (float64(g.good) + 0.5*float64(g.average)) / float64(words)
 	return math.Round(10 + 80*math.Min(1, math.Max(0, (share-gradeShareFloor)/(1-gradeShareFloor)))), true
+}
+
+// scorerGoodFloor is the share of good words at which the scorer's Pronunciation bottoms out at 10.
+// The scorer accepts weak forms and accented vowels, so only its "good" words earn credit: a reading
+// with 12 unclear of 67 words scored 75 by score() and 60 here (0.55 gave 50, judged too strict).
+const scorerGoodFloor = 0.4
+
+// scorerScore is Pronunciation on 10-90 from the pronunciation scorer's grades: the share of good words.
+func (g wordGrades) scorerScore(misheard int) (float64, bool) {
+	words := g.good + g.average + g.bad + misheard
+	if words < minWordsForClearShare {
+		return 0, false
+	}
+	share := float64(g.good) / float64(words)
+	return math.Round(10 + 80*math.Min(1, math.Max(0, (share-scorerGoodFloor)/(1-scorerGoodFloor)))), true
 }
 
 func pronunciationNote(a scoring.VerbatimResult) string {

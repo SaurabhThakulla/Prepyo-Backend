@@ -20,6 +20,9 @@ type DeliveryRating struct {
 	FluencyFeedback       string `json:"oralFluencyFeedback"`
 	Average               []int  `json:"averageWords"`
 	Bad                   []int  `json:"badWords"`
+	// WordScored marks a rating from the pronunciation scorer (per-word sounds,
+	// no fluency): Pronunciation then comes from the word grades alone.
+	WordScored bool `json:"-"`
 }
 
 // DeliveryRatingAvailable reports whether an audio model is set to rate delivery.
