@@ -79,6 +79,11 @@ type Config struct {
 	S3SecretAccessKey string
 	// MediaDir is a local folder used instead of B2, for development.
 	MediaDir string
+
+	// PronounceURL and PronounceKey reach the self-hosted pronunciation scorer
+	// (Lambda); when unset, Read Aloud and Repeat Sentence use the Gemini rating.
+	PronounceURL string
+	PronounceKey string
 }
 
 // S3Enabled reports whether an S3-compatible bucket is fully configured.
@@ -225,6 +230,8 @@ func Load() (*Config, error) {
 		S3AccessKeyID:     strings.TrimSpace(os.Getenv("S3_ACCESS_KEY_ID")),
 		S3SecretAccessKey: strings.TrimSpace(os.Getenv("S3_SECRET_ACCESS_KEY")),
 		MediaDir:          strings.TrimSpace(os.Getenv("MEDIA_DIR")),
+		PronounceURL:      strings.TrimSpace(os.Getenv("PRONOUNCE_URL")),
+		PronounceKey:      strings.TrimSpace(os.Getenv("PRONOUNCE_KEY")),
 	}
 
 	// A short key on routes that can approve a payment is worse than no routes.

@@ -62,9 +62,9 @@ func TestParseSpeakingCarriesTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid reply was rejected: %v", err)
 	}
-	// 13 of 16 points: 10 + 80*13/16 = 75.
-	if evaluation.EstimatedScore == nil || *evaluation.EstimatedScore != 75 {
-		t.Errorf("score = %v, want 75 from the trait points", evaluation.EstimatedScore)
+	// 13 of 16 points: 10 + 80*(13/16)^1.25 = 72.
+	if evaluation.EstimatedScore == nil || *evaluation.EstimatedScore != 72 {
+		t.Errorf("score = %v, want 72 from the trait points", evaluation.EstimatedScore)
 	}
 	if evaluation.Transcript != "The global transition toward sustainable energy." {
 		t.Errorf("transcript not carried through: %q", evaluation.Transcript)

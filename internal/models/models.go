@@ -866,18 +866,6 @@ type DailyMission struct {
 	Completed      bool      `json:"completed"`
 }
 
-type LeaderboardEntry struct {
-	Rank        int      `json:"rank"`
-	UserID      string   `json:"userId"`
-	Name        string   `json:"name"`
-	NepalRegion string   `json:"nepalRegion"`
-	Exam        ExamType `json:"exam"`
-	XP          int      `json:"xp"`
-	Level       int      `json:"level"`
-	StreakDays  int      `json:"streakDays"`
-	IsYou       bool     `json:"isYou"`
-}
-
 type Notification struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`

@@ -46,7 +46,7 @@ func swtReply(content, form, grammar, vocabulary int) string {
 }
 
 // The estimate is worked out from the trait points, whatever number the model
-// put in estimatedScore: 7 of 9 points is 10 + 80*7/9 = 72.
+// put in estimatedScore: 7 of 9 points is 10 + 80*(7/9)^1.25 = 68.
 func TestParseWritingScoresFromPearsonTraits(t *testing.T) {
 	req := WritingRequest{Exam: models.ExamPTE, TypeID: "pte-summarize-written-text", MinScore: 10, MaxScore: 90,
 		LearnerText: "Cities retain heat because concrete and asphalt absorb sunlight."}
@@ -55,8 +55,8 @@ func TestParseWritingScoresFromPearsonTraits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid reply was rejected: %v", err)
 	}
-	if evaluation.EstimatedScore == nil || *evaluation.EstimatedScore != 72 {
-		t.Errorf("score = %v, want 72 from the trait points", evaluation.EstimatedScore)
+	if evaluation.EstimatedScore == nil || *evaluation.EstimatedScore != 68 {
+		t.Errorf("score = %v, want 68 from the trait points", evaluation.EstimatedScore)
 	}
 	if len(evaluation.SentenceFeedback) != 1 {
 		t.Errorf("sentence feedback quoting real text should survive, got %d entries", len(evaluation.SentenceFeedback))

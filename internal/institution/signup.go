@@ -91,7 +91,7 @@ const (
 // Keep in step with APP_PAGES in the web app's src/institution/paths.ts.
 var reservedCodes = map[string]bool{
 	"login": true, "signup": true, "home": true, "dashboard": true, "practice": true, "me": true, "mocks": true,
-	"mistakes": true, "history": true, "evaluations": true, "leaderboard": true, "profile": true, "referrals": true,
+	"mistakes": true, "history": true, "evaluations": true, "profile": true, "referrals": true,
 	"subscription": true, "diagnostic": true, "tutorials": true, "videos": true, "learn": true, "reports": true,
 	"admin": true, "terms": true, "privacy": true, "terms-and-conditions": true, "privacy-policy": true,
 	"account": true, "progress": true,

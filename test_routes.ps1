@@ -110,7 +110,6 @@ $reads = @(
   @{ path = "/api/v1/questions?exam=PTE"; key = "questions" },
   @{ path = "/api/v1/mocks?exam=PTE";    key = "mocks" },
   @{ path = "/api/v1/mistakes";          key = "mistakes" },
-  @{ path = "/api/v1/leaderboards";      key = "leaderboard" },
   @{ path = "/api/v1/notifications";     key = "notifications" },
   @{ path = "/api/v1/referrals/me";      key = "referralCode" },
   @{ path = "/api/v1/subscriptions";     key = "subscription" }

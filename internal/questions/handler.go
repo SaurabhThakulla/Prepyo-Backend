@@ -2,11 +2,13 @@ package questions
 
 import (
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/prepyo/backend/internal/media"
 	"github.com/prepyo/backend/internal/models"
 	"github.com/prepyo/backend/internal/reqctx"
 	"github.com/prepyo/backend/internal/speech"
@@ -17,6 +19,13 @@ type Handler struct {
 	repo   *Repository
 	log    *slog.Logger
 	speech *speech.Service
+	store  media.Store
+}
+
+// WithStore lets the handler serve question files kept in the media bucket.
+func (h *Handler) WithStore(store media.Store) *Handler {
+	h.store = store
+	return h
 }
 
 // WithSpeech lets the handler serve server-spoken audio for listening scripts.
@@ -52,8 +61,27 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A file moved to the media bucket is streamed from there, same URL.
+	var body io.ReadCloser
+	if len(asset.Data) == 0 && asset.StorageKey != "" {
+		if h.store == nil {
+			httpx.Error(w, http.StatusServiceUnavailable, httpx.CodeNotConfigured, "Media storage is not configured.")
+			return
+		}
+		body, _, err = h.store.Get(r.Context(), asset.StorageKey)
+		if err != nil {
+			httpx.Internal(w, h.log, "questions.getAsset.store", err)
+			return
+		}
+		defer body.Close()
+	}
+
+	size := len(asset.Data)
+	if body != nil {
+		size = asset.ByteSize
+	}
 	w.Header().Set("Content-Type", asset.ContentType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(asset.Data)))
+	w.Header().Set("Content-Length", strconv.Itoa(size))
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// Question images may be SVG, which can carry script. An <img> never runs
@@ -61,6 +89,10 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request) {
 	// stops that without affecting how the image or audio is embedded.
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")
 	w.WriteHeader(http.StatusOK)
+	if body != nil {
+		_, _ = io.Copy(w, body)
+		return
+	}
 	_, _ = w.Write(asset.Data)
 }
 

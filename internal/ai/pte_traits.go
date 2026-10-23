@@ -142,10 +142,10 @@ func pteSpellingPoints(text, source string, misspellings []string) int {
 }
 
 // ptePointsScore checks the reply's traits against Pearson's scales, applies
-// the Content/Form gate and returns the 10-90 estimate: 10 plus 80 times the
-// share of points earned, the same share the PTE mock adds up
+// the Content/Form gate and returns the 10-90 estimate from the share of points
+// earned (pteShareScore); the PTE mock adds up the traits it shows
 // (ptemock.FractionOfEvaluation). Pearson does not publish its points-to-scale
-// conversion, so the straight line is Prepyo's convention. formCap, when not
+// conversion, so the curve is Prepyo's convention. formCap, when not
 // negative, is the most Form can be given the response's length; fixed sets
 // traits worked out in code, replacing the model's points.
 func ptePointsScore(criteria []models.EvaluationCriterion, traits []pteTrait, formCap int, fixed map[string]int) (float64, []models.EvaluationCriterion, error) {
@@ -186,14 +186,20 @@ func ptePointsScore(criteria []models.EvaluationCriterion, traits []pteTrait, fo
 		sum += out[i].Score
 		total += float64(t.Max)
 	}
-	overall := math.Round(10 + 80*sum/total)
+	overall := pteShareScore(sum / total)
 	for i, t := range traits {
 		if t.Max > 0 {
-			out[i].Score = math.Round(10 + 80*out[i].Score/float64(t.Max))
+			out[i].Score = pteShareScore(out[i].Score / float64(t.Max))
 			out[i].MaxScore = 90
 		}
 	}
 	return overall, out, nil
+}
+
+// pteShareScore is 10-90 from a share of points, curved (share^1.25) because the
+// model's points run generous: 75% of points is 66, not 70; full marks stay 90.
+func pteShareScore(share float64) float64 {
+	return math.Round(10 + 80*math.Pow(math.Max(0, math.Min(1, share)), 1.25))
 }
 
 func traitKey(name string) string {

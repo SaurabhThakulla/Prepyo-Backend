@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/prepyo/backend/internal/ai"
+	"github.com/prepyo/backend/internal/evaluations"
 	"github.com/prepyo/backend/internal/models"
+	"github.com/prepyo/backend/internal/pronounce"
 	"github.com/prepyo/backend/pkg/config"
 )
 
@@ -126,6 +128,9 @@ func main() {
 		return
 	}
 	if *paired != "" {
+		if loadedCfg != nil && os.Getenv("PRONOUNCE_OFF") == "" {
+			evaluations.UsePronunciationScorer(pronounce.New(loadedCfg.PronounceURL, loadedCfg.PronounceKey, log))
+		}
 		runPaired(g, *dir, *paired, *runs, *workers, *out)
 		return
 	}
