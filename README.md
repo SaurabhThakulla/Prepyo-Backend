@@ -54,7 +54,6 @@ internal/
   ai/             the only package that talks to a model provider
   progress/       score estimates derived from attempts
   gamification/   XP ledger, streaks, daily missions
-  leaderboards/   ranking
   notifications/  in-app messages
   billing/        plans and entitlements
   admin/          operational metrics

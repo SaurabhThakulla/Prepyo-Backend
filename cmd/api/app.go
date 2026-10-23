@@ -22,7 +22,6 @@ import (
 	"github.com/prepyo/backend/internal/fullmock"
 	"github.com/prepyo/backend/internal/gamification"
 	"github.com/prepyo/backend/internal/institution"
-	"github.com/prepyo/backend/internal/leaderboards"
 	"github.com/prepyo/backend/internal/learn"
 	"github.com/prepyo/backend/internal/listeningmock"
 	"github.com/prepyo/backend/internal/media"
@@ -90,7 +89,6 @@ type app struct {
 	aiHandler            *ai.Handler
 	progressHandler      *progress.Handler
 	gamificationHandler  *gamification.Handler
-	leaderboardHandler   *leaderboards.Handler
 	learnHandler         *learn.Handler
 	notificationHandler  *notifications.Handler
 	billingHandler       *billing.Handler
@@ -115,7 +113,6 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 	mediaStore := media.New(cfg)
 	recordings := media.NewRecordings(pool, mediaStore, log)
 	notificationRepo := notifications.NewRepository(pool)
-	leaderboardRepo := leaderboards.NewRepository(pool)
 	planRepo := billing.NewRepository(pool)
 	referralRepo := referrals.NewRepository(pool)
 
@@ -176,7 +173,6 @@ func newApp(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *app {
 		aiHandler:            ai.NewHandler(gateway, pool, log),
 		progressHandler:      progress.NewHandler(pool, progressService, log),
 		gamificationHandler:  gamification.NewHandler(pool, xpService, log),
-		leaderboardHandler:   leaderboards.NewHandler(leaderboardRepo, log),
 		notificationHandler:  notifications.NewHandler(notificationRepo, log),
 		billingHandler:       billing.NewHandler(pool, planRepo, billingService, log),
 		referralHandler:      referrals.NewHandler(referralService, log),
@@ -268,7 +264,6 @@ func (a *app) router() http.Handler {
 					Mount("/mistakes", a.mistakeHandler.Routes())
 				quick.Mount("/progress", a.progressHandler.Routes())
 				quick.Mount("/gamification", a.gamificationHandler.Routes())
-				quick.Mount("/leaderboards", a.leaderboardHandler.Routes())
 				quick.Mount("/learn", a.learnHandler.Routes())
 				quick.Mount("/notifications", a.notificationHandler.Routes())
 
