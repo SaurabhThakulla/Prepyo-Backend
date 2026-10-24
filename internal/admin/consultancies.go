@@ -30,6 +30,7 @@ type consultancy struct {
 	Phone      string  `json:"phone"`
 	Status     string  `json:"status"`
 	ValidUntil *string `json:"validUntil"`
+	Plan       string  `json:"plan"` // basic, extended, ultimate or empty
 	SeatLimit  int     `json:"seatLimit"`
 	CreatedAt  string  `json:"createdAt"`
 	AdminName  string  `json:"adminName"`
@@ -51,6 +52,7 @@ type consultancyStudent struct {
 	PlanID         string  `json:"planId"`
 	PlanValidUntil *string `json:"planValidUntil"`
 	AddedAt        string  `json:"addedAt"`
+	Disabled       bool    `json:"disabled"`
 	Usage          usage   `json:"usage"`
 }
 
@@ -75,25 +77,11 @@ func readPeriod(r *http.Request) (int, *time.Time, bool) {
 }
 
 // studentUsage is one row per student: counts since $1 (NULL = all time) and last activity.
-const studentUsage = `
-	student_usage AS (
-		SELECT s.user_id, s.institution_id,
-			p.n AS practice, m.n AS mocks, e.n AS evaluations, t.n AS tutor,
-			GREATEST(p.last, m.last, e.last, t.last) AS last_active
-		FROM institution_students s
-		CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE $1::timestamptz IS NULL OR created_at >= $1) AS n, max(created_at) AS last
-			FROM practice_attempts WHERE user_id = s.user_id) p
-		CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE $1::timestamptz IS NULL OR completed_at >= $1) AS n, max(completed_at) AS last
-			FROM mock_attempts WHERE user_id = s.user_id) m
-		CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE $1::timestamptz IS NULL OR created_at >= $1) AS n, max(created_at) AS last
-			FROM ai_evaluations WHERE user_id = s.user_id) e
-		CROSS JOIN LATERAL (SELECT count(*) FILTER (WHERE $1::timestamptz IS NULL OR created_at >= $1) AS n, max(created_at) AS last
-			FROM tutor_messages WHERE user_id = s.user_id) t
-	)`
+const studentUsage = institution.StudentUsageSQL
 
 // consultancyColumns is read by scanConsultancy; i = institutions, a = institution_admins.
 const consultancyColumns = `
-	i.id, i.name, i.code, i.phone, i.valid_until, i.seat_limit, i.created_at,
+	i.id, i.name, i.code, i.phone, i.valid_until, COALESCE(i.plan, ''), i.created_at,
 	i.exams, i.city, i.branches, i.monthly_students, i.brand_color, i.onboarded_at IS NOT NULL,
 	COALESCE(a.name, ''), COALESCE(a.email, ''),
 	count(u.user_id),
@@ -111,14 +99,16 @@ func scanConsultancy(r row) (consultancy, error) {
 	var c consultancy
 	var validUntil, lastActive *time.Time
 	var createdAt time.Time
-	err := r.Scan(&c.ID, &c.Name, &c.Code, &c.Phone, &validUntil, &c.SeatLimit, &createdAt,
+	err := r.Scan(&c.ID, &c.Name, &c.Code, &c.Phone, &validUntil, &c.Plan, &createdAt,
 		&c.Profile.Exams, &c.Profile.City, &c.Profile.Branches, &c.Profile.MonthlyStudents, &c.Profile.BrandColor, &c.Onboarded,
 		&c.AdminName, &c.AdminEmail, &c.Students, &c.ActiveStudents,
 		&c.Usage.PracticeAttempts, &c.Usage.MocksCompleted, &c.Usage.AIEvaluations, &c.Usage.TutorMessages, &lastActive)
 	if err != nil {
 		return consultancy{}, err
 	}
-	c.Status = institution.Institution{ValidUntil: validUntil}.Status(time.Now())
+	inst := institution.Institution{Plan: c.Plan, ValidUntil: validUntil}
+	c.Status = inst.Status(time.Now())
+	c.SeatLimit = inst.Seats()
 	c.ValidUntil = formatDate(validUntil, time.DateOnly)
 	c.CreatedAt = createdAt.Format(time.RFC3339)
 	c.Usage.LastActiveAt = formatDate(lastActive, time.RFC3339)
@@ -146,6 +136,67 @@ func (h *Handler) consultancies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"days": days, "consultancies": list})
+}
+
+// createConsultancyRequest is the institution's details plus the plan it bought.
+type createConsultancyRequest struct {
+	institution.SignupForm
+	institution.PlanForm
+}
+
+// createConsultancy adds an institution with its admin login, on the plan and end date given.
+func (h *Handler) createConsultancy(w http.ResponseWriter, r *http.Request) {
+	var req createConsultancyRequest
+	if !httpx.Decode(w, r, &req, h.log, "admin.createConsultancy") {
+		return
+	}
+	form := req.SignupForm
+	form.Clean()
+	problems := form.Problems()
+	validUntil, planProblems := req.PlanForm.Check(time.Now())
+	for field, message := range planProblems {
+		problems[field] = message
+	}
+	if len(problems) > 0 {
+		httpx.ValidationError(w, problems)
+		return
+	}
+
+	account, err := institution.CreateAccount(r.Context(), h.db, form, req.Plan, validUntil)
+	if errors.Is(err, institution.ErrEmailTaken) {
+		httpx.ValidationError(w, map[string]string{"email": "That email already has an institution account."})
+		return
+	}
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.createConsultancy", err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]any{
+		"id": account.Institution.ID, "name": account.Institution.Name, "code": account.Institution.Code,
+	})
+}
+
+// setConsultancyPlan changes an institution's plan or end date, e.g. to renew or upgrade it.
+func (h *Handler) setConsultancyPlan(w http.ResponseWriter, r *http.Request) {
+	var form institution.PlanForm
+	if !httpx.Decode(w, r, &form, h.log, "admin.setConsultancyPlan") {
+		return
+	}
+	validUntil, problems := form.Check(time.Now())
+	if len(problems) > 0 {
+		httpx.ValidationError(w, problems)
+		return
+	}
+	err := institution.SetPlan(r.Context(), h.db, chi.URLParam(r, "id"), form.Plan, validUntil)
+	if errors.Is(err, institution.ErrNotFound) {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That consultancy no longer exists.")
+		return
+	}
+	if err != nil {
+		httpx.Internal(w, h.log, "admin.setConsultancyPlan", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, nil)
 }
 
 func (h *Handler) listConsultancies(ctx context.Context, since *time.Time) ([]consultancy, error) {
@@ -202,7 +253,7 @@ func (h *Handler) consultancy(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) consultancyStudents(ctx context.Context, since *time.Time, institutionID string) ([]consultancyStudent, error) {
 	rows, err := h.db.Query(ctx, `WITH`+studentUsage+`
 		SELECT s.user_id, us.name, s.username, us.target_exam, us.plan_id, us.plan_valid_until, s.created_at,
-			u.practice, u.mocks, u.evaluations, u.tutor, u.last_active
+			s.disabled_at IS NOT NULL, u.practice, u.mocks, u.evaluations, u.tutor, u.last_active
 		FROM institution_students s
 		JOIN users us ON us.id = s.user_id
 		JOIN student_usage u ON u.user_id = s.user_id
@@ -219,7 +270,7 @@ func (h *Handler) consultancyStudents(ctx context.Context, since *time.Time, ins
 		var planValidUntil, lastActive *time.Time
 		var addedAt time.Time
 		if err := rows.Scan(&s.UserID, &s.Name, &s.Username, &s.TargetExam, &s.PlanID, &planValidUntil, &addedAt,
-			&s.Usage.PracticeAttempts, &s.Usage.MocksCompleted, &s.Usage.AIEvaluations, &s.Usage.TutorMessages, &lastActive); err != nil {
+			&s.Disabled, &s.Usage.PracticeAttempts, &s.Usage.MocksCompleted, &s.Usage.AIEvaluations, &s.Usage.TutorMessages, &lastActive); err != nil {
 			return nil, fmt.Errorf("scan consultancy student: %w", err)
 		}
 		s.PlanValidUntil = formatDate(planValidUntil, time.DateOnly)

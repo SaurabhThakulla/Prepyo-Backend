@@ -87,6 +87,9 @@ func (h *Handler) users(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// notInstitutionStudent leaves out institutions' students: they are shown under Consultancies instead.
+const notInstitutionStudent = `NOT EXISTS (SELECT 1 FROM institution_students st WHERE st.user_id = users.id)`
+
 // userFields is shared by the list and the update so a row means the same thing
 // whichever way it was fetched.
 const userFields = `id, COALESCE(email, ''), name, role, plan_id,
@@ -97,7 +100,8 @@ func (h *Handler) listUsers(ctx context.Context, page httpx.Page, query, role st
 	// never describe a different set than the rows.
 	const where = `
 		WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%')
-		  AND ($2 = '' OR role = $2)`
+		  AND ($2 = '' OR role = $2)
+		  AND ` + notInstitutionStudent
 
 	var total int
 	if err := h.db.QueryRow(ctx, `SELECT count(*) FROM users`+where, query, role).Scan(&total); err != nil {
@@ -126,7 +130,7 @@ func (h *Handler) listUsers(ctx context.Context, page httpx.Page, query, role st
 // countsByRole is the "how many on each plan" breakdown. Every role is listed
 // even at zero, so a tier nobody is on is shown as empty rather than missing.
 func (h *Handler) countsByRole(ctx context.Context) ([]roleCount, error) {
-	rows, err := h.db.Query(ctx, `SELECT role, count(*) FROM users GROUP BY role`)
+	rows, err := h.db.Query(ctx, `SELECT role, count(*) FROM users WHERE `+notInstitutionStudent+` GROUP BY role`)
 	if err != nil {
 		return nil, fmt.Errorf("count users by role: %w", err)
 	}

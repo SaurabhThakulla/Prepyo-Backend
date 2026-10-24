@@ -355,8 +355,21 @@ type ConfirmPaymentParams struct {
 	AmountNPR      int
 }
 
+// institutionPlan is what each student of an institution with a running plan gets, on every plan.
+var institutionPlan = models.Plan{
+	ID: "institution", Name: "Institution", Features: []string{},
+	SubTestsPerDay: 50, AIEvaluationsPerDay: 50, MockTestsIncluded: 6,
+	AIGradingsPerPeriod: 900, AIGradingsPeriod: GradingsPerMonth,
+}
+
 // effectivePlan returns the user's active plan, falling back to free if lapsed.
+// An institution's student without a paid plan of their own gets the institution allowance.
 func (s *Service) effectivePlan(ctx context.Context, user models.User) (models.Plan, error) {
+	if covered, err := institution.PlanCovers(ctx, s.repo.db, user.ID); err != nil {
+		return models.Plan{}, err
+	} else if covered {
+		return institutionPlan, nil
+	}
 	if !planIsActive(user) {
 		return s.repo.Plan(ctx, "free")
 	}

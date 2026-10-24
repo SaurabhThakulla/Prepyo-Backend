@@ -49,6 +49,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Patch("/users/{id}/role", h.setUserRole)
 	r.Patch("/users/{id}/exam", h.setUserExam)
 	r.Get("/consultancies", h.consultancies)
+	r.Post("/consultancies", h.createConsultancy)
+	r.Put("/consultancies/{id}/plan", h.setConsultancyPlan)
 	r.Get("/consultancies/{id}", h.consultancy)
 	r.Get("/reading/passages", h.passages)
 	r.Post("/reading/passages", h.createPassage)
@@ -158,9 +160,10 @@ func (h *Handler) read(ctx context.Context) (metrics, error) {
 		SELECT
 			(SELECT count(*) FROM questions WHERE is_published),
 			(SELECT count(*) FROM mocks),
-			(SELECT count(*) FROM users),
-			(SELECT count(*) FROM users WHERE role <> 'admin'),
-			(SELECT count(DISTINCT user_id) FROM practice_attempts WHERE created_at > now() - interval '7 days'),
+			(SELECT count(*) FROM users WHERE `+notInstitutionStudent+`),
+			(SELECT count(*) FROM users WHERE role <> 'admin' AND `+notInstitutionStudent+`),
+			(SELECT count(DISTINCT user_id) FROM practice_attempts p WHERE created_at > now() - interval '7 days'
+			  AND NOT EXISTS (SELECT 1 FROM institution_students st WHERE st.user_id = p.user_id)),
 			(SELECT count(*) FROM practice_attempts),
 			(SELECT count(*) FROM mock_attempts),
 			(SELECT count(*) FROM ai_evaluations),
