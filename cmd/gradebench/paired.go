@@ -1,12 +1,13 @@
 package main
 
-// Paired mode: answers you also submitted on Alfa PTE, graded here through the
-// app's own scoring path (evaluations.ScoreSpeaking / ScorePTEWriting), with
-// the gap to Alfa's overall and trait scores printed per task and trait.
+// Paired mode: evaluates PTE benchmark answers against reference scores
+// (from human examiners or benchmark rubrics) using the application's scoring engine
+// (evaluations.ScoreSpeaking / ScorePTEWriting), and reports bias and variance per trait.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -24,17 +25,20 @@ import (
 )
 
 type pairedSample struct {
-	ID     string `json:"id"`
-	AlfaID string `json:"alfaId"`
-	Audio  string `json:"audio"`  // WAV recording, for speaking tasks
-	Text   string `json:"text"`   // typed answer, for writing tasks
-	Source string `json:"source"` // lecture transcript or image description when the question has none
-	// Alfa's scores as shown: numbers on 10-90, or "2/3" for raw trait points.
-	Alfa map[string]any `json:"alfa"`
+	ID       string             `json:"id"`
+	RefID    string             `json:"refId"`
+	LegacyID string             `json:"alfaId"`
+	Audio    string             `json:"audio"`
+	Text     string             `json:"text"`
+	Source   string             `json:"source"`
+	Marks    map[string]any     `json:"alfa"`
+	Scores   map[string]any     `json:"scores"`
+	Marker   string             `json:"marker"`
+	Question *benchmarkQuestion `json:"question"`
 }
 
-type alfaQuestion struct {
-	AlfaID          string          `json:"alfaId"`
+type benchmarkQuestion struct {
+	RefID           string          `json:"alfaId"`
 	ID              string          `json:"id"`
 	Skill           string          `json:"skill"`
 	TypeID          string          `json:"typeId"`
@@ -50,9 +54,10 @@ type alfaQuestion struct {
 
 type pairedResult struct {
 	ID         string             `json:"id"`
+	Marker     string             `json:"marker"`
 	Task       string             `json:"task"`
 	Run        int                `json:"run"`
-	Alfa       map[string]float64 `json:"alfa"`
+	Ref        map[string]float64 `json:"reference"`
 	Ours       map[string]float64 `json:"ours"`
 	Delivery   string             `json:"delivery,omitempty"`
 	Transcript string             `json:"transcript,omitempty"`
@@ -64,7 +69,10 @@ type pairedResult struct {
 var pteVersion = models.ExamVersion{ID: "pte-2026-01", Exam: models.ExamPTE, MinScore: 10, MaxScore: 90, ScoreStep: 1}
 
 func runPaired(g *ai.Gateway, dir, pattern string, runs, workers int, out string) {
-	questions, err := loadAlfaQuestions(filepath.Join(dir, "paired", "alfa_questions.json"))
+	questions, err := loadBenchmarkQuestions(
+		filepath.Join(dir, "paired", "benchmark_questions.json"),
+		filepath.Join(dir, "paired", "alfa_questions.json"),
+	)
 	if err != nil {
 		fail(err)
 	}
@@ -108,8 +116,8 @@ func runPaired(g *ai.Gateway, dir, pattern string, runs, workers int, out string
 				r.Run = j.run
 				mu.Lock()
 				results = append(results, r)
-				fmt.Printf("  %-24s run %d  %-28s alfa %5s  ours %5s  %s%s\n", r.ID, r.Run, r.Task,
-					fmtNum(r.Alfa["overall"]), fmtNum(r.Ours["overall"]), r.Delivery, r.Error)
+				fmt.Printf("  %-24s run %d  %-28s %-7s %5s  ours %5s  %s%s\n", r.ID, r.Run, r.Task, r.Marker,
+					fmtNum(r.Ref["overall"]), fmtNum(r.Ours["overall"]), r.Delivery, r.Error)
 				mu.Unlock()
 			}
 		}()
@@ -132,20 +140,33 @@ func runPaired(g *ai.Gateway, dir, pattern string, runs, workers int, out string
 	}
 }
 
-func gradePaired(g *ai.Gateway, questions map[string]alfaQuestion, s pairedSample) pairedResult {
-	r := pairedResult{ID: firstNonEmpty(s.ID, s.AlfaID), Alfa: map[string]float64{}, Ours: map[string]float64{}}
-	for name, v := range s.Alfa {
-		if score, ok := alfaScore(v); ok {
-			r.Alfa[traitKey(name)] = score
+func gradePaired(g *ai.Gateway, questions map[string]benchmarkQuestion, s pairedSample) pairedResult {
+	id := firstNonEmpty(s.ID, s.RefID, s.LegacyID)
+	r := pairedResult{
+		ID:     id,
+		Marker: firstNonEmpty(s.Marker, "reference"),
+		Ref:    map[string]float64{},
+		Ours:   map[string]float64{},
+	}
+	marks := s.Scores
+	if len(marks) == 0 {
+		marks = s.Marks
+	}
+	for name, v := range marks {
+		if score, ok := parseReferenceScore(v); ok {
+			r.Ref[traitKey(name)] = score
 		}
 	}
-	aq, ok := questions[s.AlfaID]
+	bq, ok := questions[id]
+	if s.Question != nil {
+		bq, ok = *s.Question, true
+	}
 	if !ok {
-		r.Error = "unknown alfaId " + s.AlfaID
+		r.Error = "unknown question: " + id + " (provide question definition inline)"
 		return r
 	}
-	r.Task = aq.TypeName
-	q := aq.question(s.Source)
+	r.Task = bq.TypeName
+	q := bq.question(s.Source)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
@@ -191,38 +212,49 @@ func gradePaired(g *ai.Gateway, questions map[string]alfaQuestion, s pairedSampl
 	return r
 }
 
-func (aq alfaQuestion) question(source string) models.Question {
+func (bq benchmarkQuestion) question(source string) models.Question {
 	q := models.Question{
-		ID: aq.ID, ExamVersionID: pteVersion.ID, Exam: models.ExamPTE, Skill: models.SkillType(aq.Skill),
-		TypeID: aq.TypeID, TypeName: aq.TypeName, Title: aq.Title, Prompt: aq.Prompt,
-		ContextPassage: aq.ContextPassage, AudioTranscript: aq.AudioTranscript,
-		ModelAnswer: aq.ModelAnswer, FigureData: aq.FigureData,
+		ID: bq.ID, ExamVersionID: pteVersion.ID, Exam: models.ExamPTE, Skill: models.SkillType(bq.Skill),
+		TypeID: bq.TypeID, TypeName: bq.TypeName, Title: bq.Title, Prompt: bq.Prompt,
+		ContextPassage: bq.ContextPassage, AudioTranscript: bq.AudioTranscript,
+		ModelAnswer: bq.ModelAnswer, FigureData: bq.FigureData,
 	}
-	_ = json.Unmarshal(aq.CorrectAnswers, &q.CorrectAnswers)
+	_ = json.Unmarshal(bq.CorrectAnswers, &q.CorrectAnswers)
 	if source != "" {
 		q.AudioTranscript = source
 	}
 	return q
 }
 
-func loadAlfaQuestions(path string) (map[string]alfaQuestion, error) {
-	data, err := os.ReadFile(path)
+func loadBenchmarkQuestions(paths ...string) (map[string]benchmarkQuestion, error) {
+	var data []byte
+	var err error
+	for _, p := range paths {
+		data, err = os.ReadFile(p)
+		if err == nil {
+			break
+		}
+	}
+	if errors.Is(err, os.ErrNotExist) || len(data) == 0 {
+		return map[string]benchmarkQuestion{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	var list []alfaQuestion
+	var list []benchmarkQuestion
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("load benchmark questions: %w", err)
 	}
-	byID := map[string]alfaQuestion{}
+	byID := map[string]benchmarkQuestion{}
 	for _, q := range list {
-		byID[q.AlfaID] = q
+		key := firstNonEmpty(q.ID, q.RefID)
+		byID[key] = q
 	}
 	return byID, nil
 }
 
-// alfaScore reads a 10-90 number, or "a/b" trait points put on 10-90.
-func alfaScore(v any) (float64, bool) {
+// parseReferenceScore parses a 10-90 score or a fractional "a/b" score scaled to 10-90.
+func parseReferenceScore(v any) (float64, bool) {
 	switch x := v.(type) {
 	case float64:
 		return x, true
@@ -245,7 +277,7 @@ func alfaScore(v any) (float64, bool) {
 
 var nonLetters = regexp.MustCompile(`[^a-z]+`)
 
-// traitKey puts Alfa's and Prepyo's trait names on one spelling.
+// traitKey normalizes trait names across scoring rubrics.
 func traitKey(name string) string {
 	k := strings.TrimSpace(nonLetters.ReplaceAllString(strings.ToLower(name), " "))
 	switch k {
@@ -261,21 +293,21 @@ func traitKey(name string) string {
 	return k
 }
 
-// reportPaired prints, per task and trait, Alfa's mean, ours, the bias
-// (ours minus Alfa) and the mean distance, over every run.
+// reportPaired prints mean reference scores, engine scores, bias, and mean absolute error per task and trait.
 func reportPaired(results []pairedResult) {
-	type agg struct{ n, alfa, ours, abs float64 }
+	type agg struct{ n, ref, ours, abs float64 }
 	byTask := map[string]map[string]*agg{}
 	for _, r := range results {
 		if r.Error != "" {
 			continue
 		}
-		traits := byTask[r.Task]
+		key := r.Marker + " | " + r.Task
+		traits := byTask[key]
 		if traits == nil {
 			traits = map[string]*agg{}
-			byTask[r.Task] = traits
+			byTask[key] = traits
 		}
-		for name, a := range r.Alfa {
+		for name, a := range r.Ref {
 			o, ok := r.Ours[name]
 			if !ok {
 				continue
@@ -286,12 +318,12 @@ func reportPaired(results []pairedResult) {
 				traits[name] = t
 			}
 			t.n++
-			t.alfa += a
+			t.ref += a
 			t.ours += o
 			t.abs += math.Abs(o - a)
 		}
 	}
-	fmt.Println("\ntask                          trait                                  n   alfa   ours   bias  mean|gap|")
+	fmt.Println("\nmarker | task                         trait                                  n  theirs  ours   bias  mean|gap|")
 	tasks := make([]string, 0, len(byTask))
 	for t := range byTask {
 		tasks = append(tasks, t)
@@ -305,19 +337,19 @@ func reportPaired(results []pairedResult) {
 		sort.Slice(names, func(i, j int) bool { return names[i] == "overall" || (names[j] != "overall" && names[i] < names[j]) })
 		for _, name := range names {
 			a := byTask[task][name]
-			fmt.Printf("%-29s %-36s %4.0f  %5.1f  %5.1f  %+5.1f  %7.1f\n", task, name, a.n, a.alfa/a.n, a.ours/a.n, (a.ours-a.alfa)/a.n, a.abs/a.n)
+			fmt.Printf("%-36s %-36s %4.0f  %5.1f  %5.1f  %+5.1f  %7.1f\n", task, name, a.n, a.ref/a.n, a.ours/a.n, (a.ours-a.ref)/a.n, a.abs/a.n)
 		}
 	}
 	unmatched := map[string]bool{}
 	for _, r := range results {
-		for name := range r.Alfa {
+		for name := range r.Ref {
 			if _, ok := r.Ours[name]; !ok && r.Error == "" {
 				unmatched[r.Task+": "+name] = true
 			}
 		}
 	}
 	for k := range unmatched {
-		fmt.Printf("  no matching trait of ours for Alfa's %s\n", k)
+		fmt.Printf("  no matching trait for %s\n", k)
 	}
 }
 

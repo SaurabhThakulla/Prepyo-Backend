@@ -90,7 +90,7 @@ func main() {
 	only := flag.String("only", "", "grade only sample ids containing this text")
 	out := flag.String("out", "", "write results JSON here")
 	audio := flag.String("audio", "", "comma-separated recordings to transcribe with Gemini instead of grading")
-	paired := flag.String("paired", "", "paired Alfa samples (file or glob) to grade through the app's scoring path")
+	paired := flag.String("paired", "", "paired benchmark samples with reference or teacher marks (file or glob), graded through the app's scoring path")
 	flag.Parse()
 	loadedCfg, _ := config.Load()
 	key := os.Getenv("AI_API_KEY")
