@@ -72,6 +72,16 @@ func tutorAllowance(user models.User) int {
 // returns the reservation id, or 0 when the allowance is used up.
 func (h *Handler) reserveTutorMessage(ctx context.Context, user models.User) (int64, error) {
 	limit := tutorAllowance(user)
+	// A student of an institution with a running plan gets Taiyari's allowance.
+	if limit == freeTutorMessagesPerDay {
+		covered, err := institution.PlanCovers(ctx, h.db, user.ID)
+		if err != nil {
+			return 0, err
+		}
+		if covered {
+			limit = taiyariTutorMessagesPerDay
+		}
+	}
 	if limit < 0 {
 		limit = 1 << 30
 	}
@@ -165,7 +175,7 @@ func (h *Handler) tutor(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if blocked {
 		httpx.Error(w, http.StatusForbidden, httpx.CodeLimitReached,
-			"The AI tutor is not included in your institution's free plan.")
+			"The AI tutor needs your institution's plan to be active. Ask your institution to renew.")
 		return
 	}
 
@@ -176,7 +186,9 @@ func (h *Handler) tutor(w http.ResponseWriter, r *http.Request) {
 	}
 	if reservation == 0 {
 		msg := "You have used all of today's tutor messages. They reset at midnight."
-		if user.Role != models.RoleUdaan || !user.HasActivePaidPlan() {
+		// An institution's student cannot upgrade; their institution's plan sets the limit.
+		if covered, _ := institution.PlanCovers(r.Context(), h.db, user.ID); !covered &&
+			(user.Role != models.RoleUdaan || !user.HasActivePaidPlan()) {
 			msg += " Upgrade your plan for more."
 		}
 		if err := notifications.NewRepository(h.db).Notify(context.WithoutCancel(r.Context()), notifications.CreateParams{
