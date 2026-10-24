@@ -93,7 +93,7 @@ func (h *Handler) saveProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // A logo is shown small; anything bigger is a print file nobody needs here.
-const maxLogoBytes = 512 << 10
+const maxLogoBytes = 2 << 20
 
 // The bytes decide the type, never the request header. SVG is left out: it can carry script.
 var logoTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true}
@@ -104,7 +104,7 @@ func (h *Handler) putLogo(w http.ResponseWriter, r *http.Request) {
 	var tooLarge *http.MaxBytesError
 	switch {
 	case errors.As(err, &tooLarge):
-		httpx.Error(w, http.StatusRequestEntityTooLarge, httpx.CodeBadRequest, "That logo is larger than 512 KB. Please choose a smaller one.")
+		httpx.Error(w, http.StatusRequestEntityTooLarge, httpx.CodeBadRequest, "That logo is larger than 2 MB. Please choose a smaller one.")
 		return
 	case err != nil:
 		httpx.Error(w, http.StatusBadRequest, httpx.CodeBadRequest, "We could not read that upload.")

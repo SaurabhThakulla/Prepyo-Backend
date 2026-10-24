@@ -10,9 +10,10 @@ type Institution struct {
 	Name  string
 	Code  string // the institution's address on the site: /<code>
 	Phone string
-	// ValidUntil is the end of the paid period; nil on the free plan.
+	// Plan is basic, extended or ultimate; empty until Prepyo sets one.
+	Plan string
+	// ValidUntil is the end of the paid period; nil until Prepyo sets one.
 	ValidUntil *time.Time
-	SeatLimit  int // how many students it may add; 2 on the free plan
 	Profile    Profile
 	// OnboardedAt is when the setup was finished; nil keeps the dashboard locked.
 	OnboardedAt *time.Time
@@ -33,17 +34,32 @@ type Account struct {
 	Institution Institution
 }
 
+// The plans an institution can buy. Only the seats differ; every student gets the same allowance.
 const (
-	StatusFree    = "free"    // no paid plan: 2 students, reading and listening only
+	PlanBasic    = "basic"
+	PlanExtended = "extended"
+	PlanUltimate = "ultimate"
+)
+
+var planSeats = map[string]int{PlanBasic: 10, PlanExtended: 25, PlanUltimate: 50}
+
+// ValidPlan reports whether plan is one of the three plans.
+func ValidPlan(plan string) bool { return planSeats[plan] > 0 }
+
+// Seats is how many students the plan allows; 0 with no plan.
+func (i Institution) Seats() int { return planSeats[i.Plan] }
+
+const (
+	StatusNone    = "none"    // no plan yet: no students can be added
 	StatusActive  = "active"  // inside a paid period
-	StatusExpired = "expired" // the paid period has ended, so back to the free limits
+	StatusExpired = "expired" // the paid period has ended: students get reading and listening only
 )
 
 // Status works out the institution's state at the given moment.
 func (i Institution) Status(now time.Time) string {
 	switch {
-	case i.ValidUntil == nil:
-		return StatusFree
+	case i.Plan == "" || i.ValidUntil == nil:
+		return StatusNone
 	case i.ValidUntil.After(now):
 		return StatusActive
 	default:

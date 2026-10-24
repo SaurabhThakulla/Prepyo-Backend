@@ -1,13 +1,32 @@
 package institution
 
 import (
+	"context"
 	"fmt"
 	"net/mail"
 	"strings"
+	"time"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// SignupForm is what a new institution fills in.
+// ErrEmailTaken means the email already has an institution account; ErrNotFound that it does not exist.
+var (
+	ErrEmailTaken = errEmailTaken
+	ErrNotFound   = errNotFound
+)
+
+// CreateAccount stores a cleaned, checked form as a new institution and its admin, on the given plan; Prepyo admins use it.
+func CreateAccount(ctx context.Context, pool *pgxpool.Pool, form SignupForm, plan string, validUntil time.Time) (Account, error) {
+	hash, err := hashPassword(form.Password)
+	if err != nil {
+		return Account{}, err
+	}
+	return (&store{pool: pool}).createAccount(ctx, form, hash, strings.ToLower(plan), validUntil)
+}
+
+// SignupForm is what a Prepyo admin fills in for a new institution.
 type SignupForm struct {
 	InstitutionName string `json:"institutionName"`
 	Name            string `json:"name"` // the admin's own name
