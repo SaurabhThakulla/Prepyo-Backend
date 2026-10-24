@@ -38,10 +38,9 @@ func NewHandler(pool *pgxpool.Pool, sessionTTL time.Duration, secureCookies bool
 	}
 }
 
-// Routes are mounted at /api/v1/institution. signupLimit is an extra rate limit for /signup.
-func (h *Handler) Routes(signupLimit ...func(http.Handler) http.Handler) chi.Router {
+// Routes are mounted at /api/v1/institution. There is no public sign-up: institutions register by email.
+func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.With(signupLimit...).Post("/signup", h.signUp)
 	r.Post("/login", h.logIn)
 	r.Post("/logout", h.logOut)
 
@@ -59,46 +58,10 @@ func (h *Handler) Routes(signupLimit ...func(http.Handler) http.Handler) chi.Rou
 		admin.Post("/students", h.addStudent)
 		admin.Post("/students/{id}/reset-password", h.resetStudentPassword)
 		admin.Delete("/students/{id}", h.removeStudent)
+		admin.Put("/students/{id}/disabled", h.setStudentDisabled)
+		admin.Get("/students/{id}/activity", h.studentActivity)
 	})
 	return r
-}
-
-func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
-	var form SignupForm
-	if !httpx.Decode(w, r, &form, h.log, "institution.signUp") {
-		return
-	}
-
-	form.Clean()
-	if problems := form.Problems(); len(problems) > 0 {
-		httpx.ValidationError(w, problems)
-		return
-	}
-
-	passwordHash, err := hashPassword(form.Password)
-	if err != nil {
-		httpx.Internal(w, h.log, "institution.signUp", err)
-		return
-	}
-
-	account, err := h.store.createAccount(r.Context(), form, passwordHash)
-	if errors.Is(err, errEmailTaken) {
-		httpx.ValidationError(w, map[string]string{
-			"email": "That email already has an institution account. Sign in instead.",
-		})
-		return
-	}
-	if err != nil {
-		httpx.Internal(w, h.log, "institution.signUp", err)
-		return
-	}
-	h.log.Info("institution signed up", "institution", account.Institution.Name, "code", account.Institution.Code)
-
-	if err := h.startSession(r.Context(), w, account.Admin.ID); err != nil {
-		httpx.Internal(w, h.log, "institution.signUp", err)
-		return
-	}
-	httpx.JSON(w, http.StatusCreated, accountBody(account))
 }
 
 type loginRequest struct {
@@ -166,7 +129,8 @@ func accountBody(account Account) map[string]any {
 		"name":      account.Institution.Name,
 		"code":      account.Institution.Code,
 		"status":    account.Institution.Status(time.Now()),
-		"seatLimit": account.Institution.SeatLimit,
+		"plan":      account.Institution.Plan,
+		"seatLimit": account.Institution.Seats(),
 	}
 	if account.Institution.ValidUntil != nil {
 		institution["validUntil"] = account.Institution.ValidUntil.Format(time.DateOnly)
