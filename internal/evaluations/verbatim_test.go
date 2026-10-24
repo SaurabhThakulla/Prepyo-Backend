@@ -76,7 +76,7 @@ func TestVerbatimEvaluationNothingSaidScoresTheFloor(t *testing.T) {
 	}
 }
 
-// The recording behind the 81 that APEUni-style marking should bring down.
+// Verbatim evaluation with low fluency and misheard words.
 func TestVerbatimEvaluationPhytoplanktonRecording(t *testing.T) {
 	given := "Marine phytoplankton play an essential role in regulating Earth's climate by absorbing carbon dioxide through photosynthesis. When these microscopic organisms die, a significant portion of the organic carbon sinks into the deep ocean, sequestering greenhouse gases for centuries."
 	heard := "Marine psychopathians play an essential role in regulating Earth's climate by absorbing carbon dioxide through photosynthesis. When this microscopic organism dies, a significant portion of the organic carbon sinks into the deep ocean, squirting greenhouse gases for centuries."

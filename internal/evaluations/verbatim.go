@@ -155,8 +155,7 @@ func readAloudShare(a scoring.VerbatimResult) float64 {
 
 // fluencyErrorWeight scales Oral Fluency down by twice the share of words in
 // error: Pearson's fluency counts hesitations, repetitions and false starts,
-// which a wrong word usually is. On the same readings Alfa gave 57 with 9 of 54
-// wrong (this gives 60) and 48 with 13 (47); APEUni 32-41 on a slow reading (28).
+// which a wrong word usually is.
 const fluencyErrorWeight = 2.0
 
 // fluencyKeptFloor is the least of the fluency mark word errors leave: a
@@ -183,8 +182,8 @@ const maxShownAverageShare = 0.4
 // wordGrades counts the audio rating's grades over the words that were said.
 type wordGrades struct{ good, average, bad int }
 
-// applyWordGrades marks average words unclear and takes bad ones out of what
-// was said, so they count against Content as Alfa-style "bad" words do.
+// applyWordGrades marks average words unclear and excludes severely mispronounced
+// words from what was said, so they count against Content.
 func applyWordGrades(a *scoring.VerbatimResult, r *ai.DeliveryRating) wordGrades {
 	var g wordGrades
 	grade := map[int]string{}
@@ -237,8 +236,7 @@ func (g wordGrades) score(misheard int) (float64, bool) {
 }
 
 // scorerGoodFloor is the share of good words at which the scorer's Pronunciation bottoms out at 10.
-// The scorer accepts weak forms and accented vowels, so only its "good" words earn credit: a reading
-// with 12 unclear of 67 words scored 75 by score() and 60 here (0.55 gave 50, judged too strict).
+// The scorer accepts weak forms and accented vowels, so only "good" words earn credit.
 const scorerGoodFloor = 0.4
 
 // scorerScore is Pronunciation on 10-90 from the pronunciation scorer's grades: the share of good words.

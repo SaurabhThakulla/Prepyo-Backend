@@ -84,11 +84,8 @@ func (d Delivery) FluencyPoints() int {
 	return max(points, 0)
 }
 
-// FluencyScore is Oral Fluency on 10-90, graded rather than stepped so one more
-// pause or a slower pace always shows: each hesitation costs 8 points in a
-// 35-word reading (more in a shorter answer), a long silence 12, each word a
-// minute under a natural 130 (or over 180) and a mostly silent recording cost
-// in proportion. A 100 wpm reading with two pauses lands near 40, as APEUni does.
+// FluencyScore calculates Oral Fluency on the 10-90 scale based on pause count,
+// duration of pauses, speaking rate (wpm), and speaking ratio.
 func (d Delivery) FluencyScore() float64 {
 	score := 90.0
 	words := math.Max(float64(d.WordsSpoken), 20)
