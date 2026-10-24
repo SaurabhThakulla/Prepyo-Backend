@@ -230,9 +230,9 @@ func (a *app) router() http.Handler {
 				Mount("/auth", a.authHandler.Routes())
 			public.Mount("/exams", a.examHandler.Routes())
 
-			// Institution sign-up, login, dashboard and students; it checks its own sessions.
+			// Institution login, dashboard and students; it checks its own sessions.
 			public.With(rateLimit(600, time.Minute), rateLimitByDevice(60, time.Minute)).
-				Mount("/institution", a.institutionHandler.Routes(rateLimit(20, time.Hour), rateLimitByDevice(5, time.Hour)))
+				Mount("/institution", a.institutionHandler.Routes())
 
 			// Plans are public; everything else here needs a session, and is
 			// limited per device once the session is known.

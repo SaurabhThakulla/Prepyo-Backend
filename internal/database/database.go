@@ -4,6 +4,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -32,7 +33,10 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 
 	// Modest limits. Postgres itself allows ~100 connections by default and
 	// the API is not the only client.
-	cfg.MaxConns = 10
+	// A pool_max_conns=N in DATABASE_URL overrides the default of 10.
+	if !strings.Contains(databaseURL, "pool_max_conns=") {
+		cfg.MaxConns = 10
+	}
 	cfg.MinConns = 2
 	cfg.MaxConnLifetime = time.Hour
 	cfg.MaxConnIdleTime = 5 * time.Minute

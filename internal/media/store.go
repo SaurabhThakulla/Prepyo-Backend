@@ -73,7 +73,12 @@ func (d Dir) Get(_ context.Context, key string) (io.ReadCloser, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	return f, mime.TypeByExtension(path.Ext(key)), nil
+	contentType := mime.TypeByExtension(path.Ext(key))
+	if contentType == "" {
+		// The production image has no /etc/mime.types, so .wav and .mp3 need our own table.
+		contentType = audioTypes[strings.TrimPrefix(path.Ext(key), ".")]
+	}
+	return f, contentType, nil
 }
 
 func (d Dir) Delete(_ context.Context, key string) error {
