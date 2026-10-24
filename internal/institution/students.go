@@ -98,7 +98,7 @@ func (h *Handler) studentLogIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, passwordHash, err := h.store.studentForLogin(r.Context(), code, username)
+	userID, passwordHash, disabled, err := h.store.studentForLogin(r.Context(), code, username)
 	if err != nil && !errors.Is(err, errNotFound) {
 		httpx.Internal(w, h.log, "institution.studentLogIn", err)
 		return
@@ -114,6 +114,13 @@ func (h *Handler) studentLogIn(w http.ResponseWriter, r *http.Request) {
 	h.failuresByNetwork.clear(networkKey)
 	h.failuresByEmail.clear(studentKey)
 
+	// Only someone who knows the password learns that the account is turned off.
+	if disabled {
+		httpx.Error(w, http.StatusForbidden, httpx.CodeForbidden,
+			"Your institution has turned off this account. Please contact them.")
+		return
+	}
+
 	if err := h.signInLearner(w, r, userID); err != nil {
 		httpx.Internal(w, h.log, "institution.studentLogIn", err)
 		return
@@ -122,7 +129,12 @@ func (h *Handler) studentLogIn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listStudents(w http.ResponseWriter, r *http.Request) {
-	students, err := h.store.students(r.Context(), signedInAccount(r).Institution.ID)
+	days, since, ok := readPeriod(r)
+	if !ok {
+		httpx.ValidationError(w, map[string]string{"days": "Choose 7, 30, 90 or 0 (all time)."})
+		return
+	}
+	students, err := h.store.students(r.Context(), signedInAccount(r).Institution.ID, since)
 	if err != nil {
 		httpx.Internal(w, h.log, "institution.listStudents", err)
 		return
@@ -132,7 +144,7 @@ func (h *Handler) listStudents(w http.ResponseWriter, r *http.Request) {
 	for _, student := range students {
 		list = append(list, studentBody(student))
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"students": list})
+	httpx.JSON(w, http.StatusOK, map[string]any{"days": days, "students": list})
 }
 
 type addStudentRequest struct {
@@ -160,7 +172,12 @@ func (h *Handler) addStudent(w http.ResponseWriter, r *http.Request) {
 	student, err := h.store.addStudent(r.Context(), signedInAccount(r).Institution.ID, name, passwordHash)
 	if errors.Is(err, errSeatsFull) {
 		httpx.Error(w, http.StatusConflict, httpx.CodeConflict,
-			"All your student seats are in use. Remove a student or contact Prepyo for more seats.")
+			"All your student seats are in use. Remove a student or contact Prepyo for a bigger plan.")
+		return
+	}
+	if errors.Is(err, errNoPlan) {
+		httpx.Error(w, http.StatusConflict, httpx.CodeConflict,
+			"Your institution has no plan yet. Contact Prepyo to choose Basic, Extended or Ultimate.")
 		return
 	}
 	if err != nil {
@@ -218,5 +235,29 @@ func studentBody(student Student) map[string]any {
 		"name":      student.Name,
 		"username":  student.Username,
 		"createdAt": student.CreatedAt.Format(time.RFC3339),
+		"disabled":  student.Disabled,
+		"usage":     student.Usage,
 	}
+}
+
+type disableRequest struct {
+	Disabled bool `json:"disabled"`
+}
+
+// setStudentDisabled turns a student's account off or back on; history and seat are kept.
+func (h *Handler) setStudentDisabled(w http.ResponseWriter, r *http.Request) {
+	var req disableRequest
+	if !httpx.Decode(w, r, &req, h.log, "institution.setStudentDisabled") {
+		return
+	}
+	err := h.store.setStudentDisabled(r.Context(), signedInAccount(r).Institution.ID, chi.URLParam(r, "id"), req.Disabled)
+	if errors.Is(err, errNotFound) {
+		httpx.Error(w, http.StatusNotFound, httpx.CodeNotFound, "That student is not in your institution.")
+		return
+	}
+	if err != nil {
+		httpx.Internal(w, h.log, "institution.setStudentDisabled", err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"disabled": req.Disabled})
 }

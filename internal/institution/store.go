@@ -23,7 +23,7 @@ type store struct {
 }
 
 // accountColumns is read by scanAccount; a = institution_admins, i = institutions, l = institution_logos.
-const accountColumns = `a.id, a.name, a.email, i.id, i.name, i.code, i.phone, i.valid_until, i.seat_limit,
+const accountColumns = `a.id, a.name, a.email, i.id, i.name, i.code, i.phone, COALESCE(i.plan, ''), i.valid_until,
 	i.exams, i.city, i.branches, i.monthly_students, i.brand_color, i.onboarded_at, l.updated_at`
 
 func scanAccount(row pgx.Row, extra ...any) (Account, error) {
@@ -31,7 +31,7 @@ func scanAccount(row pgx.Row, extra ...any) (Account, error) {
 	fields := []any{
 		&account.Admin.ID, &account.Admin.Name, &account.Admin.Email,
 		&account.Institution.ID, &account.Institution.Name, &account.Institution.Code,
-		&account.Institution.Phone, &account.Institution.ValidUntil, &account.Institution.SeatLimit,
+		&account.Institution.Phone, &account.Institution.Plan, &account.Institution.ValidUntil,
 		&account.Institution.Profile.Exams, &account.Institution.Profile.City, &account.Institution.Profile.Branches,
 		&account.Institution.Profile.MonthlyStudents, &account.Institution.Profile.BrandColor,
 		&account.Institution.OnboardedAt, &account.Institution.LogoUpdatedAt,
@@ -44,14 +44,14 @@ func scanAccount(row pgx.Row, extra ...any) (Account, error) {
 }
 
 // createAccount stores an institution with its admin and notifies the Prepyo admins, all or nothing.
-func (s *store) createAccount(ctx context.Context, form SignupForm, passwordHash string) (Account, error) {
+func (s *store) createAccount(ctx context.Context, form SignupForm, passwordHash, plan string, validUntil time.Time) (Account, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Account{}, fmt.Errorf("begin institution signup: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	institution, err := insertInstitution(ctx, tx, form)
+	institution, err := insertInstitution(ctx, tx, form, plan, validUntil)
 	if err != nil {
 		return Account{}, err
 	}
@@ -71,8 +71,8 @@ func (s *store) createAccount(ctx context.Context, form SignupForm, passwordHash
 
 	err = notifications.SendToAdmins(ctx, tx, notifications.CreateParams{
 		Type:      notifications.TypeSystem,
-		Title:     "New institution signed up",
-		Message:   fmt.Sprintf("%s (%s, %s) signed up on the free plan.", institution.Name, admin.Name, institution.Phone),
+		Title:     "New institution added",
+		Message:   fmt.Sprintf("%s (%s, %s) was added on the %s plan.", institution.Name, admin.Name, institution.Phone, plan),
 		ActionURL: "/admin",
 	})
 	if err != nil {
@@ -86,8 +86,9 @@ func (s *store) createAccount(ctx context.Context, form SignupForm, passwordHash
 }
 
 // insertInstitution stores the institution; when its code is taken it tries name-2, name-3...
-func insertInstitution(ctx context.Context, tx pgx.Tx, form SignupForm) (Institution, error) {
-	institution := Institution{Name: form.InstitutionName, Phone: form.Phone, Profile: Profile{Exams: []string{}, Branches: 1}}
+func insertInstitution(ctx context.Context, tx pgx.Tx, form SignupForm, plan string, validUntil time.Time) (Institution, error) {
+	institution := Institution{Name: form.InstitutionName, Phone: form.Phone, Plan: plan, ValidUntil: &validUntil,
+		Profile: Profile{Exams: []string{}, Branches: 1}}
 	base := CodeFromName(form.InstitutionName)
 
 	for attempt := 1; attempt <= 50; attempt++ {
@@ -97,10 +98,10 @@ func insertInstitution(ctx context.Context, tx pgx.Tx, form SignupForm) (Institu
 		}
 
 		err := tx.QueryRow(ctx, `
-			INSERT INTO institutions (name, code, phone) VALUES ($1, $2, $3)
+			INSERT INTO institutions (name, code, phone, plan, valid_until) VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (code) DO NOTHING
-			RETURNING id, seat_limit`,
-			institution.Name, code, institution.Phone).Scan(&institution.ID, &institution.SeatLimit)
+			RETURNING id`,
+			institution.Name, code, institution.Phone, plan, validUntil).Scan(&institution.ID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue // code taken, try the next one
 		}

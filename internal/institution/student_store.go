@@ -11,7 +11,10 @@ import (
 	"github.com/prepyo/backend/internal/referrals"
 )
 
-var errSeatsFull = errors.New("institution has no free seats")
+var (
+	errSeatsFull = errors.New("institution has no free seats")
+	errNoPlan    = errors.New("institution has no plan")
+)
 
 // Student is a learner an institution added.
 type Student struct {
@@ -19,16 +22,22 @@ type Student struct {
 	Name      string
 	Username  string
 	CreatedAt time.Time
+	Disabled  bool
+	Usage     Usage
 }
 
-// students lists an institution's students, oldest first.
-func (s *store) students(ctx context.Context, institutionID string) ([]Student, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT u.id, u.name, st.username, st.created_at
+// students lists an institution's students, oldest first, with what each did since `since` (nil = all time).
+func (s *store) students(ctx context.Context, institutionID string, since *time.Time) ([]Student, error) {
+	rows, err := s.pool.Query(ctx, `WITH`+StudentUsageSQL+`
+		SELECT u.id, u.name, st.username, st.created_at, st.disabled_at IS NOT NULL,
+			su.practice, su.mocks, su.evaluations, su.tutor, su.last_active,
+			(SELECT COALESCE(SUM(g.units), 0) FROM ai_grading_usage g
+			  WHERE g.user_id = st.user_id AND g.created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
 		FROM institution_students st
 		JOIN users u ON u.id = st.user_id
-		WHERE st.institution_id = $1
-		ORDER BY st.created_at`, institutionID)
+		JOIN student_usage su ON su.user_id = st.user_id
+		WHERE st.institution_id = $2
+		ORDER BY st.created_at`, since, institutionID)
 	if err != nil {
 		return nil, fmt.Errorf("list institution students: %w", err)
 	}
@@ -37,9 +46,13 @@ func (s *store) students(ctx context.Context, institutionID string) ([]Student, 
 	list := []Student{}
 	for rows.Next() {
 		var student Student
-		if err := rows.Scan(&student.ID, &student.Name, &student.Username, &student.CreatedAt); err != nil {
+		var units int
+		u := &student.Usage
+		if err := rows.Scan(&student.ID, &student.Name, &student.Username, &student.CreatedAt, &student.Disabled,
+			&u.PracticeAttempts, &u.MocksCompleted, &u.AIEvaluations, &u.TutorMessages, &u.LastActiveAt, &units); err != nil {
 			return nil, fmt.Errorf("scan institution student: %w", err)
 		}
+		u.AIGradingsThisMonth = float64(units) / unitsPerGrading
 		list = append(list, student)
 	}
 	return list, rows.Err()
@@ -54,18 +67,21 @@ func (s *store) addStudent(ctx context.Context, institutionID, name, passwordHas
 	defer tx.Rollback(ctx)
 
 	// Locking the institution makes two adds at once take turns, so neither slips past the seat limit.
-	var seatLimit int
-	var exam string
-	if err := tx.QueryRow(ctx, `SELECT seat_limit, COALESCE(exams[1], 'PTE') FROM institutions WHERE id = $1 FOR UPDATE`, institutionID).
-		Scan(&seatLimit, &exam); err != nil {
+	var plan, exam string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(plan, ''), COALESCE(exams[1], 'PTE') FROM institutions WHERE id = $1 FOR UPDATE`, institutionID).
+		Scan(&plan, &exam); err != nil {
 		return Student{}, fmt.Errorf("lock institution: %w", err)
+	}
+	seats := Institution{Plan: plan}.Seats()
+	if seats == 0 {
+		return Student{}, errNoPlan
 	}
 
 	taken, err := takenUsernames(ctx, tx, institutionID)
 	if err != nil {
 		return Student{}, err
 	}
-	if len(taken) >= seatLimit {
+	if len(taken) >= seats {
 		return Student{}, errSeatsFull
 	}
 
@@ -134,20 +150,48 @@ func insertLearner(ctx context.Context, tx pgx.Tx, name, exam string) (string, e
 }
 
 // studentForLogin finds a student by institution code and username, with the password hash.
-func (s *store) studentForLogin(ctx context.Context, code, username string) (userID, passwordHash string, err error) {
+func (s *store) studentForLogin(ctx context.Context, code, username string) (userID, passwordHash string, disabled bool, err error) {
 	err = s.pool.QueryRow(ctx, `
-		SELECT st.user_id, st.password_hash
+		SELECT st.user_id, st.password_hash, st.disabled_at IS NOT NULL
 		FROM institution_students st
 		JOIN institutions i ON i.id = st.institution_id
 		WHERE i.code = $1 AND lower(st.username) = $2`,
-		code, strings.ToLower(username)).Scan(&userID, &passwordHash)
+		code, strings.ToLower(username)).Scan(&userID, &passwordHash, &disabled)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", errNotFound
+		return "", "", false, errNotFound
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("find institution student: %w", err)
+		return "", "", false, fmt.Errorf("find institution student: %w", err)
 	}
-	return userID, passwordHash, nil
+	return userID, passwordHash, disabled, nil
+}
+
+// setStudentDisabled turns a student's account off (signing them out everywhere) or back on.
+func (s *store) setStudentDisabled(ctx context.Context, institutionID, userID string, disabled bool) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin disable student: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE institution_students SET disabled_at = CASE WHEN $3 THEN COALESCE(disabled_at, now()) END
+		WHERE institution_id = $1 AND user_id::text = $2`, institutionID, userID, disabled)
+	if err != nil {
+		return fmt.Errorf("disable student: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errNotFound
+	}
+	if disabled {
+		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id::text = $1`, userID); err != nil {
+			return fmt.Errorf("end student sessions: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit disable student: %w", err)
+	}
+	return nil
 }
 
 // setStudentPassword changes a student's password and signs them out everywhere.
